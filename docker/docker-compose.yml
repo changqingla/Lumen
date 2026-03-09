@@ -1,6 +1,8 @@
 version: '3.8'
 
 services:
+  # ==================== 基础设施 ====================
+
   reader_postgres:
     image: crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/postgres:16-alpine
     container_name: reader_postgres
@@ -21,6 +23,52 @@ services:
       retries: 5
     networks:
       - reader_network
+    restart: unless-stopped
+
+  elasticsearch:
+    image: crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/elasticsearch:8.11.3
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - /root/data/es:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - reader_network
+    restart: unless-stopped
+
+  redis:
+    image: crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/valkey:8
+    container_name: redis
+    ports:
+      - "6378:6378"
+    volumes:
+      - /root/data/redis:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6378", "-a", "agent123", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - reader_network
+    restart: unless-stopped
 
   reader_minio:
     image: crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/minio:RELEASE.2023-12-20T01-00-02Z
@@ -29,6 +77,7 @@ services:
     environment:
       MINIO_ROOT_USER: reader
       MINIO_ROOT_PASSWORD: reader_dev_password
+      MINIO_DOMAIN: reader_minio
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -42,26 +91,24 @@ services:
       retries: 3
     networks:
       - reader_network
+    restart: unless-stopped
+
+  # ==================== 应用服务 ====================
 
   reader_nginx:
-    image:nginx:latest
+    image: harbor.image-derivative.com:2443/sany/nginx:latest
     container_name: reader_nginx
     ports:
-      - "80:80"      # HTTP 端口
-      - "443:443"    # HTTPS 端口
+      - "80:80"
+      - "443:443"
     volumes:
-      # Nginx 配置文件
       - ../nginx/reader_qaq.conf:/etc/nginx/conf.d/default.conf:ro
-      # 前端构建产物（在项目根目录的 dist）
       - ../dist:/usr/share/nginx/html:ro
-      # SSL 证书目录（用于 Let's Encrypt）
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
     depends_on:
       - reader_minio
-    extra_hosts:
-      # 允许 Nginx 访问宿主机上的后端服务（端口 13000）
-      - "host.docker.internal:host-gateway"
+      - reader_src
     networks:
       - reader_network
     restart: unless-stopped
@@ -75,18 +122,13 @@ services:
       - "13000:13000"
     volumes:
       - ../src:/app
+      - ../recall_lib:/workspace/recall_lib
+      - ../rag/rag:/workspace/rag/rag
     working_dir: /app
-    # command: >
-    #   sh -c "pip uninstall jose -y 2>/dev/null;
-    #          pip install python-jose[cryptography]==3.3.0 -q;
-    #          uvicorn main:app --host 0.0.0.0 --port 13000 --reload"
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "13000"]
     depends_on:
       - reader_postgres
       - reader_minio
-    extra_hosts:
-      # 允许访问宿主机上的 rag-agent Redis 服务
-      - "host.docker.internal:host-gateway"
     networks:
       - reader_network
     restart: unless-stopped
@@ -97,24 +139,55 @@ services:
     ports:
       - "8009:8009"
     volumes:
-      - ../agent_system:/app
+      - ../agent:/app
+      - ../recall_lib:/workspace/recall_lib
+      - ../rag/rag:/workspace/rag/rag
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "999"
     working_dir: /app
-    #command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8009", "--reload"]
     command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8009"]
     depends_on:
       - reader_postgres
-    extra_hosts:
-      # 允许访问宿主机上的 rag-agent Redis 服务
-      - "host.docker.internal:host-gateway"
+    networks:
+      - reader_network
+    restart: unless-stopped
+
+  rag:
+    image: crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/knowledge-retrieval:v1.2
+    container_name: rag
+    working_dir: /workspace/rag/api
+    environment:
+      - PORT=7791
+      - HOST=0.0.0.0
+      - TZ=Asia/Shanghai
+      - REDIS_HOST=redis
+      - REDIS_PORT=6378
+      - REDIS_USERNAME=reader
+      - REDIS_PASSWORD=agent123
+      - REDIS_DB=1
+      - MAX_CONCURRENT_TASKS=10
+    command: ["python", "api.py"]
+    volumes:
+      - ../rag:/workspace/rag
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    ports:
+      - "7791:7791"
+    depends_on:
+      - elasticsearch
+      - redis
     networks:
       - reader_network
     restart: unless-stopped
 
 volumes:
-  postgres_data:
   minio_data:
 
 networks:
   reader_network:
     driver: bridge
 
+# ==================== 构建说明 ====================
+# pptx-sandbox 镜像需要预先构建:
+#   docker build -t pptx-sandbox:latest -f docker/Dockerfile.pptx-sandbox docker/

@@ -2,24 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Sidebar from '@/components/Sidebar/Sidebar';
 import OptimizedMarkdown from '@/components/OptimizedMarkdown';
-import { ArrowLeft, Menu, Copy, RefreshCw, ThumbsUp, ThumbsDown, Sparkles, ChevronDown, ChevronUp, FileText, Target } from 'lucide-react';
+import { ArrowLeft, Menu, Copy, RefreshCw, ThumbsUp, ThumbsDown, Sparkles, ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useRAGChat } from '@/hooks/useRAGChat';
 import { useToast } from '@/hooks/useToast';
 import { saveConversationToNoteById } from '@/utils/noteUtils';
-import DocumentProgress from '@/components/DocumentProgress/DocumentProgress';
-import DualColumnLayout, { shouldUseDualLayout } from '@/components/DualColumnLayout/DualColumnLayout';
 import SendStopButton from '@/components/SendStopButton';
+import QuotaExceededModal from '@/components/QuotaExceededModal/QuotaExceededModal';
 import styles from './ChatDetail.module.css';
-
-// 任务类型选项配置
-const MODE_TYPE_OPTIONS = [
-  { value: undefined, label: '🤖 自动识别', icon: Sparkles },
-  { value: 'SIMPLE_INTERACTION', label: '💬 简单互动', icon: Target },
-  { value: 'LITERATURE_SUMMARY', label: '📄 文献总结', icon: FileText },
-  { value: 'REVIEW_GENERATION', label: '📚 综述生成', icon: FileText },
-  { value: 'DOCUMENT_COMPARISON', label: '🔍 文章对比', icon: Target },
-  { value: 'LITERATURE_QA', label: '❓ 文献问答', icon: Target },
-];
 
 export default function ChatDetail() {
   const { chatId } = useParams();
@@ -27,9 +16,14 @@ export default function ChatDetail() {
   const toast = useToast();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
   const [inputMessage, setInputMessage] = useState('');
   const [chatMode, setChatMode] = useState<'deep' | 'search'>('deep');
-  const [selectedModeType, setSelectedModeType] = useState<string | undefined>(undefined);
   
   // 消息反馈状态
   const [likedMessages, setLikedMessages] = useState<Set<string>>(new Set());
@@ -37,6 +31,22 @@ export default function ChatDetail() {
   const [collapsedThinking, setCollapsedThinking] = useState<Set<string>>(new Set());
   const [savedToNotes, setSavedToNotes] = useState<Set<string>>(new Set()); // 已保存到笔记的消息ID
   const [showRegenerateMenu, setShowRegenerateMenu] = useState<string | null>(null); // 显示重新生成菜单的消息ID
+  
+  // 配额超限弹窗状态
+  const [quotaExceededModal, setQuotaExceededModal] = useState<{
+    isOpen: boolean;
+    userLevel: string;
+    usedTokens: number;
+    quotaLimit: number;
+    resetDate: string;
+  }>({
+    isOpen: false,
+    userLevel: 'basic',
+    usedTokens: 0,
+    quotaLimit: 0,
+    resetDate: '',
+  });
+  
   const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -53,9 +63,54 @@ export default function ChatDetail() {
   }, []);
   
   // RAG Chat Hook
-  const { messages, isStreaming, sendMessage, regenerateLastMessage, stopGeneration, documentProgress, totalDocCount } = useRAGChat({
+  const { messages, isStreaming, sendMessage, regenerateLastMessage, stopGeneration } = useRAGChat({
+    sessionId: chatId,
     mode: chatMode,
-    onError: (error) => toast.error(`对话错误: ${error}`),
+    onError: (error) => {
+      // 检查是否为配额超限错误
+      if (typeof error === 'object' && (error as any).code === 'QUOTA_EXCEEDED') {
+        const details = (error as any).details || {};
+        // 显示配额超限弹窗
+        setQuotaExceededModal({
+          isOpen: true,
+          userLevel: details.user_level || 'basic',
+          usedTokens: details.used_tokens || 0,
+          quotaLimit: details.quota_limit || 0,
+          resetDate: details.reset_date || '',
+        });
+      } else {
+        // 检查错误消息是否包含配额相关信息
+        const errorStr = String(error);
+        if (errorStr.includes('QUOTA_EXCEEDED') || errorStr.includes('配额')) {
+          // 尝试解析错误详情
+          try {
+            const match = errorStr.match(/\{.*\}/);
+            if (match) {
+              const details = JSON.parse(match[0]);
+              setQuotaExceededModal({
+                isOpen: true,
+                userLevel: details.user_level || 'basic',
+                usedTokens: details.used_tokens || 0,
+                quotaLimit: details.quota_limit || 0,
+                resetDate: details.reset_date || '',
+              });
+              return;
+            }
+          } catch {
+            // 解析失败，显示弹窗提示
+          }
+          setQuotaExceededModal({
+            isOpen: true,
+            userLevel: 'basic',
+            usedTokens: 0,
+            quotaLimit: 0,
+            resetDate: '',
+          });
+        } else {
+          toast.error(`对话错误: ${errorStr}`);
+        }
+      }
+    },
     onFirstContentToken: (messageId) => {
       // 当第一个 content token 到达时，自动折叠 thinking
       setCollapsedThinking(prev => {
@@ -121,8 +176,12 @@ export default function ChatDetail() {
   const handleSendMessage = () => {
     if (!inputMessage.trim() || isStreaming) return;
     shouldAutoScrollRef.current = true; // 发送新消息时强制滚动
-    sendMessage(inputMessage, selectedModeType);
+    sendMessage(inputMessage);
     setInputMessage('');
+    // 清除配额超限弹窗（如果有的话）
+    if (quotaExceededModal.isOpen) {
+      setQuotaExceededModal({ ...quotaExceededModal, isOpen: false });
+    }
   };
 
   const handleCopyMessage = async (content: string) => {
@@ -271,100 +330,54 @@ export default function ChatDetail() {
               key={msg.id}
               className={msg.role === 'user' ? styles.userMessage : styles.aiMessage}
             >
-              {/* 双栏布局：多文档任务时使用 */}
-              {msg.role === 'assistant' && index === messages.length - 1 && shouldUseDualLayout(documentProgress, msg, isStreaming, totalDocCount) ? (
-                <DualColumnLayout
-                  message={msg}
-                  isStreaming={isStreaming}
-                  documentProgress={documentProgress}
-                  isLastMessage={index === messages.length - 1}
-                />
-              ) : (
-                <>
-                  {/* 单栏布局：普通消息 */}
-                  {/* 思考过程（仅AI消息且有思考内容时显示） */}
-                  {msg.role === 'assistant' && msg.thinking && (
-                    <div className={styles.thinkingProcess}>
-                      <div 
-                        className={styles.thinkingHeader}
-                        onClick={() => toggleThinkingCollapse(msg.id)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <Sparkles size={14} />
-                          <span>思考过程</span>
-                        </div>
-                        {collapsedThinking.has(msg.id) ? (
-                          <ChevronDown size={16} />
-                        ) : (
-                          <ChevronUp size={16} />
-                        )}
-                      </div>
-                      {!collapsedThinking.has(msg.id) && (
-                        <div className={styles.thinkingContent}>
-                          <OptimizedMarkdown>
-                            {msg.thinking}
-                          </OptimizedMarkdown>
-                          {/* 文档处理进度（仅在多文档任务且是最后一条消息时显示） */}
-                          {index === messages.length - 1 && documentProgress.size > 0 && (
-                            <DocumentProgress 
-                              documents={Array.from(documentProgress.values())}
-                              isStreaming={isStreaming}
-                            />
-                          )}
-                        </div>
-                      )}
+              {/* 思考过程（仅AI消息且有思考内容时显示） */}
+              {msg.role === 'assistant' && msg.thinking && (
+                <div className={styles.thinkingProcess}>
+                  <div 
+                    className={styles.thinkingHeader}
+                    onClick={() => toggleThinkingCollapse(msg.id)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Sparkles size={14} />
+                      <span>思考过程</span>
+                    </div>
+                    {collapsedThinking.has(msg.id) ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronUp size={16} />
+                    )}
+                  </div>
+                  {!collapsedThinking.has(msg.id) && (
+                    <div className={styles.thinkingContent}>
+                      <OptimizedMarkdown>
+                        {msg.thinking}
+                      </OptimizedMarkdown>
                     </div>
                   )}
-                  
-                  {/* 如果思考完成但答案未到达，显示生成提示 */}
-                  {msg.role === 'assistant' && msg.thinking && !msg.content && isStreaming && (
-                    <div className={styles.generatingAnswer}>
-                      <div className={styles.thinkingDots}>
-                        <span className={styles.dot}></span>
-                        <span className={styles.dot}></span>
-                        <span className={styles.dot}></span>
-                      </div>
-                      <span className={styles.thinkingText}>正在生成答案...</span>
-                    </div>
-                  )}
-                  
-                  {/* 最终回答 */}
-                  {msg.content && (
-                    <div className={styles.messageContent}>
-                      {msg.role === 'user' ? (
-                        msg.content
-                      ) : (
-                        <OptimizedMarkdown>{msg.content}</OptimizedMarkdown>
-                      )}
-                    </div>
-                  )}
-                </>
+                </div>
               )}
-
-              {/* 后续问题（仅AI消息且有后续问题时显示） */}
-              {msg.role === 'assistant' && msg.followUpQuestions && msg.followUpQuestions.length > 0 && (
-                <div className={styles.followUpQuestions}>
-                  <div className={styles.followUpTitle}>
-                    <Sparkles size={13} />
-                    <span>猜你想问</span>
+              
+              {/* 如果思考完成但答案未到达，显示生成提示 */}
+              {msg.role === 'assistant' && msg.thinking && !msg.content && isStreaming && (
+                <div className={styles.generatingAnswer}>
+                  <div className={styles.thinkingDots}>
+                    <span className={styles.dot}></span>
+                    <span className={styles.dot}></span>
+                    <span className={styles.dot}></span>
                   </div>
-                  <div className={styles.questionList}>
-                    {msg.followUpQuestions.map((question, qIndex) => (
-                      <button
-                        key={qIndex}
-                        className={styles.questionButton}
-                        onClick={() => {
-                          if (!isStreaming) {
-                            setInputMessage(question);
-                          }
-                        }}
-                        disabled={isStreaming}
-                      >
-                        {question}
-                      </button>
-                    ))}
-                  </div>
+                  <span className={styles.thinkingText}>正在生成答案...</span>
+                </div>
+              )}
+              
+              {/* 最终回答 */}
+              {msg.content && (
+                <div className={styles.messageContent}>
+                  {msg.role === 'user' ? (
+                    msg.content
+                  ) : (
+                    <OptimizedMarkdown>{msg.content}</OptimizedMarkdown>
+                  )}
                 </div>
               )}
 
@@ -422,16 +435,6 @@ export default function ChatDetail() {
                         >
                           🔄 重新生成
                         </button>
-                        <button
-                          className={styles.regenerateMenuItem}
-                          onClick={() => {
-                            regenerateLastMessage(true);
-                            setShowRegenerateMenu(null);
-                          }}
-                          title="重新生成文档总结并刷新缓存"
-                        >
-                          🔃 重新生成（刷新缓存）
-                        </button>
                       </div>
                     )}
                   </div>
@@ -469,26 +472,6 @@ export default function ChatDetail() {
             </button>
           </div>
 
-          {/* 任务类型选择器 */}
-          <div className={styles.modeTypeSelector}>
-            <div className={styles.modeTypeLabel}>
-              <Target size={14} />
-              <span>任务类型</span>
-            </div>
-            <div className={styles.modeTypeOptions}>
-              {MODE_TYPE_OPTIONS.map((option) => (
-                <button
-                  key={option.value || 'auto'}
-                  className={`${styles.modeTypeOption} ${selectedModeType === option.value ? styles.active : ''}`}
-                  onClick={() => setSelectedModeType(option.value)}
-                  disabled={isStreaming}
-                >
-                  <span className={styles.modeTypeText}>{option.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className={styles.inputRow}>
             <input
               value={inputMessage}
@@ -512,6 +495,20 @@ export default function ChatDetail() {
           </div>
         </div>
       </div>
+
+      {/* 配额超限弹窗 */}
+      <QuotaExceededModal
+        isOpen={quotaExceededModal.isOpen}
+        onClose={() => setQuotaExceededModal({ ...quotaExceededModal, isOpen: false })}
+        onUpgrade={() => {
+          // 触发全局事件，通知 Sidebar 打开 ProfileModal
+          window.dispatchEvent(new Event('openProfileModal'));
+        }}
+        userLevel={quotaExceededModal.userLevel}
+        usedTokens={quotaExceededModal.usedTokens}
+        quotaLimit={quotaExceededModal.quotaLimit}
+        resetDate={quotaExceededModal.resetDate}
+      />
     </div>
   );
 }

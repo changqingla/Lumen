@@ -8,36 +8,6 @@ interface ChatRequest {
   mode: 'deep' | 'search';
   enable_web_search?: boolean;
   show_thinking?: boolean;  // 是否显示思考过程（深度思考模式）
-  mode_type?: string;  // 任务类型（可选）
-  refresh_summary_cache?: boolean;  // 是否强制刷新文档总结缓存（多文档总结模式）
-}
-
-// 文档总结进度数据结构
-interface DocSummaryInitData {
-  total: number;
-  cached: number;
-  to_generate: number;
-}
-
-interface DocSummaryStartData {
-  doc_id: string;
-  doc_name: string;
-  index: number;
-  total: number;
-}
-
-interface DocSummaryChunkData {
-  doc_id: string;
-  content: string;
-}
-
-interface DocSummaryCompleteData {
-  doc_id: string;
-  doc_name: string;
-  summary: string;
-  from_cache: boolean;
-  index: number;
-  total: number;
 }
 
 interface StreamChatOptions extends ChatRequest {
@@ -45,18 +15,10 @@ interface StreamChatOptions extends ChatRequest {
   onThinking: (thinking: string) => void;
   onError: (error: string) => void;
   onDone: () => void;
-  onFollowUpQuestion?: (question: string, index: number) => void;
   onFinalAnswer?: (data: {
     answer: string;
     session_id: string;
-    follow_up_questions: string[];
-    detected_intent: string;
   }) => void;
-  // 文档总结进度回调
-  onDocSummaryInit?: (data: DocSummaryInitData) => void;
-  onDocSummaryStart?: (data: DocSummaryStartData) => void;
-  onDocSummaryChunk?: (data: DocSummaryChunkData) => void;
-  onDocSummaryComplete?: (data: DocSummaryCompleteData) => void;
   // 中止信号
   signal?: AbortSignal;
 }
@@ -77,12 +39,7 @@ class RAGAPIClient {
       onThinking, 
       onError, 
       onDone, 
-      onFollowUpQuestion, 
       onFinalAnswer,
-      onDocSummaryInit,
-      onDocSummaryStart,
-      onDocSummaryChunk,
-      onDocSummaryComplete,
       signal,
       ...request 
     } = options;
@@ -109,6 +66,25 @@ class RAGAPIClient {
           }, 1500);
           throw new Error('当前登录已过期，请重新登录');
         }
+        
+        // 处理429 配额超限错误
+        if (response.status === 429) {
+          try {
+            const errorData = await response.json();
+            const error = errorData.detail?.error || errorData.error || errorData;
+            if (error.code === 'QUOTA_EXCEEDED') {
+              // 抛出包含详细信息的错误
+              const quotaError = new Error(error.message || '配额已用尽');
+              (quotaError as any).code = 'QUOTA_EXCEEDED';
+              (quotaError as any).details = error.details;
+              throw quotaError;
+            }
+          } catch (e) {
+            if ((e as any).code === 'QUOTA_EXCEEDED') throw e;
+          }
+          throw new Error('请求过于频繁，请稍后再试');
+        }
+        
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
@@ -149,46 +125,31 @@ class RAGAPIClient {
               case 'thinking':
                 onThinking(chunk.content);
                 break;
-              case 'follow_up_question':
-                if (onFollowUpQuestion) {
-                  const fqData = JSON.parse(chunk.content);
-                  onFollowUpQuestion(fqData.question, fqData.index);
-                }
-                break;
               case 'final_answer':
                 if (onFinalAnswer) {
                   const faData = JSON.parse(chunk.content);
                   onFinalAnswer(faData);
                 }
                 break;
-              // 文档总结进度事件
-              case 'doc_summary_init':
-                if (onDocSummaryInit) {
-                  const initData = JSON.parse(chunk.content);
-                  onDocSummaryInit(initData);
-                }
-                break;
-              case 'doc_summary_start':
-                if (onDocSummaryStart) {
-                  const startData = JSON.parse(chunk.content);
-                  onDocSummaryStart(startData);
-                }
-                break;
-              case 'doc_summary_chunk':
-                if (onDocSummaryChunk) {
-                  const chunkData = JSON.parse(chunk.content);
-                  onDocSummaryChunk(chunkData);
-                }
-                break;
-              case 'doc_summary_complete':
-                if (onDocSummaryComplete) {
-                  const completeData = JSON.parse(chunk.content);
-                  onDocSummaryComplete(completeData);
-                }
-                break;
               case 'error':
-                onError(chunk.content);
+                // 尝试解析 JSON 格式的错误信息
+                try {
+                  const errorData = JSON.parse(chunk.content);
+                  // 如果是结构化错误（配额超限等），传递完整对象
+                  if (errorData.code && errorData.details) {
+                    onError(errorData as any);
+                  } else {
+                    // 否则传递原始字符串
+                    onError(chunk.content);
+                  }
+                } catch {
+                  // 解析失败，传递原始字符串
+                  onError(chunk.content);
+                }
                 return;
+              default:
+                console.warn(`Unknown SSE event type: ${chunk.type}`, chunk);
+                break;
             }
           } catch (e) {
             console.warn('Failed to parse chunk:', data, e);
@@ -239,9 +200,6 @@ class RAGAPIClient {
 
   /**
    * Cancel an ongoing stream for a session
-   * 
-   * @param sessionId - The session ID to cancel
-   * @returns Promise with cancellation result
    */
   async cancelStream(sessionId: string): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
@@ -276,4 +234,3 @@ class RAGAPIClient {
 }
 
 export const ragAPI = new RAGAPIClient();
-

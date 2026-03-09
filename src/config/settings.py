@@ -29,12 +29,12 @@ class Settings(BaseSettings):
     # ============================================================================
     # Redis 配置
     # ============================================================================
-    REDIS_URL: str = "redis://reader:agent123@host.docker.internal:6378/2"
+    REDIS_URL: str = "redis://reader:agent123@redis:6378/2"
     
     # ============================================================================
     # MinIO/S3 对象存储配置
     # ============================================================================
-    MINIO_ENDPOINT: str = "host.docker.internal:9000"
+    MINIO_ENDPOINT: str = "reader_minio:9000"
     MINIO_PUBLIC_ENDPOINT: str = "nginx"
     MINIO_ACCESS_KEY: str = "reader"
     MINIO_SECRET_KEY: str = "reader_dev_password"
@@ -70,8 +70,8 @@ class Settings(BaseSettings):
     # ============================================================================
     # RAG Agent 文档处理服务配置
     # ============================================================================
-    DOC_PROCESS_BASE_URL: str = "http://host.docker.internal:7791"
-    AGENT_SYSTEM_URL: str = "http://host.docker.internal:8009"
+    DOC_PROCESS_BASE_URL: str = "http://rag:7791/api"
+    AGENT_SYSTEM_URL: str = "http://reader_agent:8009"
     
     # ============================================================================
     # Elasticsearch 配置
@@ -129,7 +129,6 @@ class Settings(BaseSettings):
     # ============================================================================
     # Recall 配置
     # ============================================================================
-    RECALL_API_URL: str = "http://host.docker.internal:7791/recall"
     RECALL_TOP_N: int = 10
     RECALL_SIMILARITY_THRESHOLD: float = 0.01
     RECALL_VECTOR_SIMILARITY_WEIGHT: float = 0.3
@@ -175,6 +174,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()

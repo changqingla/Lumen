@@ -4,10 +4,16 @@
  */
 import { useState, useCallback, useRef } from 'react';
 import { PdfLoader, PdfHighlighter } from 'react-pdf-highlighter';
+import pdfjsPkg from 'react-pdf-highlighter/node_modules/pdfjs-dist/package.json';
 import { FileText, Star, X } from 'lucide-react';
 import { getFileIcon } from '@/utils/fileIcons';
 import styles from './PDFViewer.module.css';
-import 'react-pdf-highlighter/dist/style.css';
+import 'react-pdf-highlighter/dist/style/PdfHighlighter.css';
+import 'react-pdf-highlighter/dist/style/Highlight.css';
+import 'react-pdf-highlighter/dist/style/AreaHighlight.css';
+import 'react-pdf-highlighter/dist/style/MouseSelection.css';
+import 'react-pdf-highlighter/dist/style/Tip.css';
+import 'react-pdf-highlighter/dist/style/pdf_viewer.css';
 
 interface PDFViewerProps {
   url: string;
@@ -133,6 +139,7 @@ export default function PDFViewer({
         ) : (
           <PdfLoader
             url={absoluteUrl}
+            workerSrc={`https://unpkg.com/pdfjs-dist@${pdfjsPkg.version}/build/pdf.worker.min.mjs`}
             cMapUrl="/cmaps/"
             cMapPacked={true}
             beforeLoad={

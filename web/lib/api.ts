@@ -994,8 +994,6 @@ export const chatAPI = {
         thinking?: string;
         mode?: string;
         createdAt: string;
-        detected_intent?: string;  // 任务类型（可能不存在于旧消息）
-        detectedIntent?: string;   // 兼容驼峰命名
         documentSummaries?: Array<{  // 文档总结信息
           doc_id: string;
           doc_name: string;
@@ -1268,6 +1266,115 @@ export const adminAPI = {
   },
 };
 
+// ==================== Token 用量统计 API ====================
+
+// Token Usage API Response Types
+interface UsageDataPoint {
+  time: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+interface UsageTotal {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  request_count: number;
+}
+
+export interface HourlyUsageResponse {
+  period: 'hourly';
+  start_time: string;
+  end_time: string;
+  data: UsageDataPoint[];
+  total: UsageTotal;
+}
+
+export interface DailyUsageResponse {
+  period: 'daily';
+  start_time: string;
+  end_time: string;
+  data: UsageDataPoint[];
+  total: UsageTotal;
+}
+
+export interface TotalUsageResponse {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  request_count: number;
+}
+
+export interface QuotaStatusResponse {
+  user_level: 'basic' | 'member' | 'premium';
+  quota_limit: number;
+  used_tokens: number;
+  remaining_tokens: number;
+  is_exceeded: boolean;
+  billing_cycle_start: string;
+  billing_cycle_end: string;
+  reset_date: string;
+}
+
+export const tokenUsageAPI = {
+  /**
+   * 获取按小时聚合的 Token 使用量
+   * @param hours 回溯小时数 (1-168，默认24)
+   * @param startTime 可选的开始时间 (ISO 格式)
+   * @param endTime 可选的结束时间 (ISO 格式)
+   */
+  async getHourlyUsage(
+    hours: number = 24,
+    startTime?: string,
+    endTime?: string
+  ): Promise<HourlyUsageResponse> {
+    const params = new URLSearchParams({ hours: hours.toString() });
+    if (startTime) params.append('start_time', startTime);
+    if (endTime) params.append('end_time', endTime);
+    return request<HourlyUsageResponse>(`/token-usage/hourly?${params}`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * 获取按天聚合的 Token 使用量
+   * @param days 回溯天数 (1-365，默认30)
+   * @param startTime 可选的开始时间 (ISO 格式)
+   * @param endTime 可选的结束时间 (ISO 格式)
+   */
+  async getDailyUsage(
+    days: number = 30,
+    startTime?: string,
+    endTime?: string
+  ): Promise<DailyUsageResponse> {
+    const params = new URLSearchParams({ days: days.toString() });
+    if (startTime) params.append('start_time', startTime);
+    if (endTime) params.append('end_time', endTime);
+    return request<DailyUsageResponse>(`/token-usage/daily?${params}`, {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * 获取用户总 Token 使用量
+   */
+  async getTotalUsage(): Promise<TotalUsageResponse> {
+    return request<TotalUsageResponse>('/token-usage/total', {
+      method: 'GET',
+    });
+  },
+
+  /**
+   * 获取用户配额状态
+   * 返回当前计费周期内的配额使用情况
+   */
+  async getQuotaStatus(): Promise<QuotaStatusResponse> {
+    return request<QuotaStatusResponse>('/token-usage/quota-status', {
+      method: 'GET',
+    });
+  },
+};
+
 // ==================== 统一导出所有 API ====================
 export const api = {
   ...authAPI,
@@ -1277,4 +1384,5 @@ export const api = {
   ...chatAPI,
   ...organizationAPI,
   ...adminAPI,
+  ...tokenUsageAPI,
 };

@@ -13,9 +13,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-from config.database import engine, Base
+from config.database import engine, Base, AsyncSessionLocal
 from config.redis import get_redis_client, close_redis
 from utils.external_services import close_http_client
+from utils.token_usage_queue import init_token_usage_queue, shutdown_token_usage_queue
 
 # Import controllers
 from controllers import (
@@ -23,12 +24,13 @@ from controllers import (
     note_controller,
     favorite_controller,
     kb_controller,
-    hub_controller,
     chat_controller,
     organization_controller,
     admin_controller,
+    token_usage_controller,
+    chunk_controller,
 )
-from rag import rag_router
+from rag_chat import rag_router
 
 
 @asynccontextmanager
@@ -42,7 +44,10 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     
     # Initialize Redis
-    await get_redis_client()
+    redis_client = await get_redis_client()
+    
+    # Initialize token usage queue (async background worker)
+    await init_token_usage_queue(redis_client, AsyncSessionLocal)
     
     print("✅ Application started successfully")
     
@@ -50,6 +55,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     print("🛑 Shutting down...")
+    await shutdown_token_usage_queue()
     await close_http_client()
     await close_redis()
     await engine.dispose()
@@ -106,9 +112,10 @@ app.include_router(admin_controller.router, prefix=settings.API_PREFIX)
 app.include_router(note_controller.router, prefix=settings.API_PREFIX)
 app.include_router(favorite_controller.router, prefix=settings.API_PREFIX)
 app.include_router(kb_controller.router, prefix=settings.API_PREFIX)
-app.include_router(hub_controller.router, prefix=settings.API_PREFIX)
 app.include_router(chat_controller.router, prefix=settings.API_PREFIX)
+app.include_router(token_usage_controller.router, prefix=settings.API_PREFIX)
 app.include_router(rag_router, prefix=settings.API_PREFIX)
+app.include_router(chunk_controller.router, prefix=settings.API_PREFIX)
 
 
 if __name__ == "__main__":

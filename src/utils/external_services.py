@@ -353,71 +353,6 @@ class DocumentProcessService:
             raise
     
     @staticmethod
-    async def search_chunks(
-        question: str,
-        index_names: List[str],
-        doc_ids: List[str],
-        top_n: int = None,
-        use_rerank: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Search chunks using vector similarity.
-        
-        Args:
-            question: User question
-            index_names: List of ES index names
-            doc_ids: List of document IDs to search in
-            top_n: Number of results to return
-            use_rerank: Whether to use reranking
-        
-        Returns:
-            Search results with chunks
-        """
-        try:
-            top_n = top_n or settings.DEFAULT_TOP_N
-            
-            payload = {
-                "question": question,
-                "index_names": index_names,
-                "doc_ids": doc_ids,
-                "es_host": settings.ES_HOST,
-                "top_n": top_n,
-                "similarity_threshold": settings.SIMILARITY_THRESHOLD,
-                "vector_similarity_weight": settings.VECTOR_SIMILARITY_WEIGHT,
-                "model_factory": settings.EMBEDDING_MODEL_FACTORY,
-                "model_name": settings.EMBEDDING_MODEL_NAME,
-                "model_base_url": settings.EMBEDDING_BASE_URL,
-            }
-            
-            if settings.EMBEDDING_API_KEY:
-                payload["api_key"] = settings.EMBEDDING_API_KEY
-            
-            if use_rerank:
-                payload.update({
-                    "rerank_factory": settings.RERANK_FACTORY,
-                    "rerank_model_name": settings.RERANK_MODEL_NAME,
-                    "rerank_base_url": settings.RERANK_BASE_URL,
-                })
-                if settings.RERANK_API_KEY:
-                    payload["rerank_api_key"] = settings.RERANK_API_KEY
-            
-            response = await http_client.post(
-                f"{settings.DOC_PROCESS_BASE_URL}/recall",
-                json=payload
-            )
-            response.raise_for_status()
-            result = response.json()
-            
-            if not result.get("success"):
-                raise Exception(f"Search failed: {result.get('message')}")
-            
-            return result["data"]
-        
-        except Exception as e:
-            logger.error(f"Search chunks error: {e}")
-            raise
-    
-    @staticmethod
     async def delete_document_from_es(document_id: str, index_name: str) -> Dict[str, Any]:
         """
         Delete document chunks from Elasticsearch.
@@ -452,51 +387,6 @@ class DocumentProcessService:
             logger.error(f"Delete from ES error: {e}")
             raise
     
-    @staticmethod
-    async def list_chunks(
-        document_id: str,
-        index_name: str,
-        page: int = 1,
-        page_size: int = 20
-    ) -> Dict[str, Any]:
-        """
-        List document chunks.
-        
-        Args:
-            document_id: Document ID
-            index_name: ES index name
-            page: Page number
-            page_size: Items per page
-        
-        Returns:
-            Chunks list
-        """
-        try:
-            payload = {
-                "document_id": document_id,
-                "es_host": settings.ES_HOST,
-                "index_name": index_name,
-                "page": page,
-                "page_size": page_size
-            }
-            
-            response = await http_client.post(
-                f"{settings.DOC_PROCESS_BASE_URL}/chunk-list",
-                json=payload
-            )
-            response.raise_for_status()
-            result = response.json()
-            
-            if not result.get("success"):
-                raise Exception(f"List chunks failed: {result.get('message')}")
-            
-            return result["data"]
-        
-        except Exception as e:
-            logger.error(f"List chunks error: {e}")
-            raise
-
-
 async def close_http_client():
     """Close HTTP client on shutdown."""
     await http_client.aclose()

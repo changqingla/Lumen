@@ -402,3 +402,29 @@ class InvalidOperation(BaseAPIException):
             message=message
         )
 
+
+# ============ Token Quota Related Exceptions ============
+
+class QuotaExceeded(BaseAPIException):
+    """Token 配额超限"""
+    
+    def __init__(
+        self,
+        message: str,
+        used_tokens: int,
+        quota_limit: int,
+        reset_date: str,
+        user_level: str
+    ):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            error_code="QUOTA_EXCEEDED",
+            message=message,
+            details={
+                "used_tokens": used_tokens,
+                "quota_limit": quota_limit,
+                "reset_date": reset_date,
+                "user_level": user_level
+            }
+        )
+

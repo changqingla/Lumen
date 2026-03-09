@@ -445,7 +445,7 @@ class DocumentService:
                 # Step 2: Parse document (chunk + embed + store to ES)
                 await doc_repo.update_status(doc, Document.STATUS_CHUNKING)
                 
-                # Always send extracted text content to rag-agent for chunking
+                # Always send extracted text content to rag for chunking
                 # This ensures consistent processing and avoids issues with problematic files
                 temp_file_path = f"/tmp/{doc_id}.md"
                 with open(temp_file_path, 'w', encoding='utf-8') as f:

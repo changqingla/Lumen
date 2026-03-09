@@ -8,13 +8,12 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import { api, kbAPI } from '@/lib/api';
 import { saveConversationToNoteById } from '@/utils/noteUtils';
 import { getFileIcon } from '@/utils/fileIcons';
-import { Menu, User, Sparkles, Search, Database, X, Check, Copy, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, FileText, MessageSquare, Target, BookOpen, Paperclip, RefreshCw } from 'lucide-react';
+import { Menu, User, Sparkles, Search, Database, X, Check, Copy, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, FileText, Paperclip, RefreshCw } from 'lucide-react';
 import aiAvatarUrl from '@/assets/ai.jpg';
 import Tooltip from '@/components/Tooltip';
-import DocumentProgress from '@/components/DocumentProgress/DocumentProgress';
-import DualColumnLayout, { shouldUseDualLayout } from '@/components/DualColumnLayout/DualColumnLayout';
 import { KnowledgeBaseSelector, SelectionState } from '@/components/KnowledgeBaseSelector';
 import SendStopButton from '@/components/SendStopButton';
+import QuotaExceededModal from '@/components/QuotaExceededModal/QuotaExceededModal';
 import styles from './Home.module.css';
 
 // 附件类型定义
@@ -38,38 +37,6 @@ const formatFileSize = (bytes: number) => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
-
-// 任务类型选项配置
-const TASK_TYPE_OPTIONS = [
-  { 
-    value: 'LITERATURE_SUMMARY', 
-    label: '文献总结', 
-    icon: FileText,
-    desc: '快速提炼核心观点',
-    color: 'cyan' 
-  },
-  { 
-    value: 'REVIEW_GENERATION', 
-    label: '综述生成', 
-    icon: BookOpen,
-    desc: '多篇文献深度综合',
-    color: 'violet'
-  },
-  { 
-    value: 'LITERATURE_QA', 
-    label: '文献问答', 
-    icon: MessageSquare,
-    desc: '精准回答细节问题',
-    color: 'amber'
-  },
-  { 
-    value: 'DOCUMENT_COMPARISON', 
-    label: '文章对比', 
-    icon: Target,
-    desc: '多篇文献异同分析',
-    color: 'rose'
-  },
-];
 
 export default function Home() {
   const toast = useToast();
@@ -98,6 +65,21 @@ export default function Home() {
   const [chatSessions, setChatSessions] = useState<any[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [hasRestoredSession, setHasRestoredSession] = useState(false);
+  
+  // 配额超限弹窗状态
+  const [quotaExceededModal, setQuotaExceededModal] = useState<{
+    isOpen: boolean;
+    userLevel: string;
+    usedTokens: number;
+    quotaLimit: number;
+    resetDate: string;
+  }>({
+    isOpen: false,
+    userLevel: 'basic',
+    usedTokens: 0,
+    quotaLimit: 0,
+    resetDate: '',
+  });
   
   // 轮询附件解析状态
   useEffect(() => {
@@ -276,7 +258,6 @@ export default function Home() {
   const [isTogglingThinking, setIsTogglingThinking] = useState(false);
   const [savedToNotes, setSavedToNotes] = useState<Set<string>>(new Set()); // 已保存到笔记的消息ID
   const [copiedMessages, setCopiedMessages] = useState<Set<string>>(new Set()); // 已复制的消息ID
-  const [selectedModeType, setSelectedModeType] = useState<string | undefined>(undefined); // 任务类型
   const [showRegenerateMenu, setShowRegenerateMenu] = useState<string | null>(null); // 显示重新生成菜单的消息ID
   
   // 知识库选择相关状态
@@ -338,9 +319,51 @@ export default function Home() {
   }, []);
 
   // ✅ 使用 useCallback 包装回调函数，避免不必要的重新渲染
-  const handleError = useCallback((error: string) => {
-    toast.error(`对话错误: ${error}`);
-  }, [toast]);
+  const handleError = useCallback((error: string | Error) => {
+    // 检查是否为配额超限错误
+    if (typeof error === 'object' && (error as any).code === 'QUOTA_EXCEEDED') {
+      const details = (error as any).details || {};
+      // 显示配额超限弹窗
+      setQuotaExceededModal({
+        isOpen: true,
+        userLevel: details.user_level || 'basic',
+        usedTokens: details.used_tokens || 0,
+        quotaLimit: details.quota_limit || 0,
+        resetDate: details.reset_date || '',
+      });
+    } else {
+      // 检查错误消息是否包含配额相关信息
+      const errorStr = String(error);
+      if (errorStr.includes('QUOTA_EXCEEDED') || errorStr.includes('配额')) {
+        // 尝试解析错误详情
+        try {
+          const match = errorStr.match(/\{.*\}/);
+          if (match) {
+            const details = JSON.parse(match[0]);
+            setQuotaExceededModal({
+              isOpen: true,
+              userLevel: details.user_level || 'basic',
+              usedTokens: details.used_tokens || 0,
+              quotaLimit: details.quota_limit || 0,
+              resetDate: details.reset_date || '',
+            });
+            return;
+          }
+        } catch {
+          // 解析失败，显示弹窗提示
+        }
+        setQuotaExceededModal({
+          isOpen: true,
+          userLevel: 'basic',
+          usedTokens: 0,
+          quotaLimit: 0,
+          resetDate: '',
+        });
+      } else {
+        toast.error(`对话错误: ${errorStr}`);
+      }
+    }
+  }, []);
 
   const handleSessionCreated = useCallback((newSessionId: string) => {
     setCurrentSessionId(newSessionId);
@@ -362,7 +385,7 @@ export default function Home() {
     });
   }, []);
 
-  const { messages, isStreaming, isLoading, sendMessage, clearMessages, regenerateLastMessage, stopGeneration, documentProgress, totalDocCount } = useRAGChat({
+  const { messages, isStreaming, isLoading, sendMessage, clearMessages, regenerateLastMessage, stopGeneration } = useRAGChat({
     sessionId: currentSessionId,
     kbId: kbIdToPass,                                   // 智能传递kb_id
     docIds: hasSelectedKB ? selectedDocIds : undefined, // 选择了知识库时传所有doc_ids
@@ -700,8 +723,13 @@ export default function Home() {
       }
     }
     
-    sendMessage(inputMessage, selectedModeType);
+    sendMessage(inputMessage);
     setInputMessage('');
+    
+    // 清除配额超限弹窗（如果有的话）
+    if (quotaExceededModal.isOpen) {
+      setQuotaExceededModal({ ...quotaExceededModal, isOpen: false });
+    }
     
     // 发送后清除附件状态
     if (attachedFiles.length > 0) {
@@ -743,7 +771,6 @@ export default function Home() {
     setDocToKbMap({});
     setWebSearch(false);
     setDeepThinking(true);  // 深度思考始终开启
-    setSelectedModeType(undefined);
 
     // ✅ 重置消息反馈状态
     setLikedMessages(new Set());
@@ -974,29 +1001,6 @@ export default function Home() {
 
               <div className={styles.inputSection}>
                 <div className={styles.inputWrapper}>
-                  {/* 任务类型卡片 - 居中网格 */}
-                  <div className={styles.taskTypeGrid}>
-                    {TASK_TYPE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value || 'auto'}
-                        className={`${styles.taskTypeCard} ${selectedModeType === option.value ? styles.active : ''} ${styles[option.color]}`}
-                        onClick={() => setSelectedModeType(selectedModeType === option.value ? undefined : option.value)}
-                        disabled={isStreaming}
-                      >
-                        <div className={styles.cardGlow} />
-                        <div className={styles.cardContent}>
-                          <div className={styles.iconBox}>
-                          <option.icon size={24} strokeWidth={1.5} />
-                        </div>
-                          <div className={styles.cardText}>
-                            <span className={styles.cardTitle}>{option.label}</span>
-                            <span className={styles.cardDesc}>{option.desc}</span>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
                   <div className={styles.inputBox}>
                     {/* 文件附件卡片 */}
                     {attachedFiles.length > 0 && (
@@ -1037,14 +1041,6 @@ export default function Home() {
                     )}
 
                     <div className={styles.inputRow}>
-                      {selectedModeType && (() => {
-                        const option = TASK_TYPE_OPTIONS.find(opt => opt.value === selectedModeType);
-                        return option ? (
-                          <div className={`${styles.modeBadge} ${styles[option.color]}`}>
-                            {option.label}
-                          </div>
-                        ) : null;
-                      })()}
                       <textarea
                         className={styles.input}
                         placeholder="输入您的问题..."
@@ -1140,20 +1136,15 @@ export default function Home() {
             // 对话界面
             <>
               {/* 计算是否有双栏布局激活（最后一条AI消息使用双栏） */}
-              {(() => {
-                const lastAIMessage = messages.filter(m => m.role === 'assistant').slice(-1)[0];
-                const isDualLayoutActive = lastAIMessage && shouldUseDualLayout(documentProgress, lastAIMessage, isStreaming, totalDocCount);
-                return (
               <div 
-                className={`${styles.messagesArea} ${isDualLayoutActive ? styles.dualLayoutActive : ''}`}
+                className={styles.messagesArea}
                 ref={chatContainerRef}
                 onScroll={handleScroll}
               >
                 <div className={styles.messageGroup}>
                   {messages.map((msg, index) => {
-                    const isThisMessageDualLayout = msg.role === 'assistant' && index === messages.length - 1 && shouldUseDualLayout(documentProgress, msg, isStreaming, totalDocCount);
                     return (
-                    <div key={msg.id} className={`${styles.messageItem} ${msg.role === 'user' ? styles.userMessageItem : styles.aiMessageItem} ${isThisMessageDualLayout ? styles.dualLayoutMessage : ''}`}>
+                    <div key={msg.id} className={`${styles.messageItem} ${msg.role === 'user' ? styles.userMessageItem : styles.aiMessageItem}`}>
                       <div className={msg.role === 'user' ? styles.userAvatar : styles.aiAvatar}>
                         {msg.role === 'user' ? (
                           profile?.avatar ? (
@@ -1166,8 +1157,8 @@ export default function Home() {
                         )}
                       </div>
                       <div className={styles.messageContent}>
-                        {/* 如果是 AI 消息且内容和思考都为空且正在流式传输（最后一条消息），显示思考动画（排除多文档任务和文档总结阶段） */}
-                        {msg.role === 'assistant' && !msg.content && !msg.thinking && isStreaming && index === messages.length - 1 && !shouldUseDualLayout(documentProgress, msg, isStreaming, totalDocCount) && documentProgress.size === 0 ? (
+                        {/* 如果是 AI 消息且内容和思考都为空且正在流式传输（最后一条消息），显示思考动画 */}
+                        {msg.role === 'assistant' && !msg.content && !msg.thinking && isStreaming && index === messages.length - 1 ? (
                           <div className={styles.thinking}>
                             <div className={styles.thinkingDots}>
                               <span className={styles.dot}></span>
@@ -1176,112 +1167,8 @@ export default function Home() {
                             </div>
                             <span className={styles.thinkingText}>正在思考...</span>
                           </div>
-                        ) : msg.role === 'assistant' && index === messages.length - 1 && shouldUseDualLayout(documentProgress, msg, isStreaming, totalDocCount) ? (
-                          /* 双栏布局：多文档任务时使用 */
-                          (() => {
-                            console.log(`[Home] Rendering DualColumnLayout, hasContent=${!!msg.content}, hasThinking=${!!msg.thinking}, docProgress=${documentProgress.size}`);
-                            return (
-                          <>
-                            <DualColumnLayout
-                              message={msg}
-                              isStreaming={isStreaming}
-                              documentProgress={documentProgress}
-                              isLastMessage={index === messages.length - 1}
-                            />
-                            {/* AI 消息操作按钮 - 只在流式输出完成后显示 */}
-                            {msg.content && !isStreaming && (
-                              <div className={styles.messageActions}>
-                                <Tooltip content={copiedMessages.has(msg.id) ? "已复制" : "复制"} position="top">
-                                  <button
-                                    className={`${styles.actionButton} ${copiedMessages.has(msg.id) ? styles.copied : ''}`}
-                                    onClick={() => handleCopyMessage(msg.content, msg.id)}
-                                  >
-                                    {copiedMessages.has(msg.id) ? <Check size={16} /> : <Copy size={16} />}
-                                  </button>
-                                </Tooltip>
-                                <Tooltip content={likedMessages.has(msg.id) ? "取消点赞" : "点赞"} position="top">
-                                  <button
-                                    className={`${styles.actionButton} ${likedMessages.has(msg.id) ? styles.liked : ''}`}
-                                    onClick={() => handleLikeMessage(msg.id)}
-                                  >
-                                    <ThumbsUp size={16} />
-                                  </button>
-                                </Tooltip>
-                                <Tooltip content={dislikedMessages.has(msg.id) ? "取消点踩" : "点踩"} position="top">
-                                  <button
-                                    className={`${styles.actionButton} ${dislikedMessages.has(msg.id) ? styles.disliked : ''}`}
-                                    onClick={() => handleDislikeMessage(msg.id)}
-                                  >
-                                    <ThumbsDown size={16} />
-                                  </button>
-                                </Tooltip>
-                                <Tooltip content={savedToNotes.has(msg.id) ? "已保存到笔记" : "保存到笔记"} position="top">
-                                  <button
-                                    className={`${styles.actionButton} ${savedToNotes.has(msg.id) ? styles.saved : ''}`}
-                                    onClick={() => handleSaveToNotes(msg.id)}
-                                  >
-                                    <FileText size={16} />
-                                  </button>
-                                </Tooltip>
-                                <div className={styles.regenerateWrapper}>
-                                  <Tooltip content="重新生成" position="top">
-                                    <button
-                                      className={styles.actionButton}
-                                      onClick={() => regenerateLastMessage()}
-                                      onContextMenu={(e) => {
-                                        e.preventDefault();
-                                        setShowRegenerateMenu(showRegenerateMenu === msg.id ? null : msg.id);
-                                      }}
-                                    >
-                                      <RefreshCw size={16} />
-                                    </button>
-                                  </Tooltip>
-                                  {showRegenerateMenu === msg.id && (
-                                    <div className={styles.regenerateMenu} ref={regenerateMenuRef}>
-                                      <button
-                                        className={styles.regenerateMenuItem}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          regenerateLastMessage();
-                                          setShowRegenerateMenu(null);
-                                        }}
-                                      >
-                                        <RefreshCw size={14} />
-                                        <span>重新生成</span>
-                                      </button>
-                                      <button
-                                        className={styles.regenerateMenuItem}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          regenerateLastMessage(true);
-                                          setShowRegenerateMenu(null);
-                                        }}
-                                        title="重新生成文档总结并刷新缓存"
-                                      >
-                                        <Database size={14} />
-                                        <span>刷新缓存重新生成</span>
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </>
-                            );
-                          })()
                         ) : (
                           <>
-                            {/* 单栏布局：普通消息 */}
-                            {/* 文档总结进度（多文档任务且最后一条消息） */}
-                            {msg.role === 'assistant' && index === messages.length - 1 && documentProgress.size > 0 && (
-                              <div style={{ marginBottom: '16px' }}>
-                                <DocumentProgress 
-                                  documents={Array.from(documentProgress.values())}
-                                  isStreaming={isStreaming}
-                                />
-                              </div>
-                            )}
-                            
                             {/* 思考过程（仅AI消息且有思考内容时显示） */}
                             {msg.role === 'assistant' && msg.thinking && (
                               <div className={styles.thinkingProcess}>
@@ -1395,18 +1282,6 @@ export default function Home() {
                                         <RefreshCw size={14} />
                                         <span>重新生成</span>
                                       </button>
-                                      <button
-                                        className={styles.regenerateMenuItem}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          regenerateLastMessage(true);
-                                          setShowRegenerateMenu(null);
-                                        }}
-                                        title="重新生成文档总结并刷新缓存"
-                                      >
-                                        <Database size={14} />
-                                        <span>刷新缓存重新生成</span>
-                                      </button>
                                     </div>
                                   )}
                                 </div>
@@ -1421,8 +1296,6 @@ export default function Home() {
                   <div ref={messagesEndRef} />
                 </div>
               </div>
-                );
-              })()}
 
               <div className={styles.inputSection}>
                 <div className={styles.inputWrapper}>
@@ -1466,14 +1339,6 @@ export default function Home() {
                     )}
 
                     <div className={styles.inputRow}>
-                      {selectedModeType && (() => {
-                        const option = TASK_TYPE_OPTIONS.find(opt => opt.value === selectedModeType);
-                        return option ? (
-                          <div className={`${styles.modeBadge} ${styles[option.color]}`}>
-                            {option.label}
-                          </div>
-                        ) : null;
-                      })()}
                       <textarea
                         className={styles.input}
                         placeholder="继续对话..."
@@ -1572,6 +1437,20 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* 配额超限弹窗 */}
+      <QuotaExceededModal
+        isOpen={quotaExceededModal.isOpen}
+        onClose={() => setQuotaExceededModal({ ...quotaExceededModal, isOpen: false })}
+        onUpgrade={() => {
+          // 触发全局事件，通知 Sidebar 打开 ProfileModal
+          window.dispatchEvent(new Event('openProfileModal'));
+        }}
+        userLevel={quotaExceededModal.userLevel}
+        usedTokens={quotaExceededModal.usedTokens}
+        quotaLimit={quotaExceededModal.quotaLimit}
+        resetDate={quotaExceededModal.resetDate}
+      />
     </div>
   );
 }

@@ -1,14 +1,58 @@
-"""Search service for knowledge base retrieval."""
+"""Search service for knowledge base retrieval.
+
+Uses recall_lib directly for vector search instead of HTTP proxy to rag service.
+"""
+import sys
+
+# recall_lib is mounted at /workspace/recall_lib in Docker
+sys.path.insert(0, "/workspace")
+sys.path.insert(0, "/workspace/rag")
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 from repositories.kb_repository import KnowledgeBaseRepository
 from repositories.document_repository import DocumentRepository
-from utils.external_services import DocumentProcessService
 from utils.es_utils import get_user_es_index
-from typing import List, Dict
+from config.settings import settings
+from typing import List, Dict, Optional
 import logging
 
+from recall_lib import (
+    DeepRagPureRetriever,
+    DeepRagRetrievalConfig,
+    create_embedding_model,
+    create_rerank_model,
+)
+
 logger = logging.getLogger(__name__)
+
+# Lazy-initialized shared instances
+_embedding_model = None
+_rerank_model = None
+
+
+def _get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = create_embedding_model(
+            model_factory=settings.EMBEDDING_MODEL_FACTORY,
+            model_name=settings.EMBEDDING_MODEL_NAME,
+            model_base_url=settings.EMBEDDING_BASE_URL,
+            api_key=settings.EMBEDDING_API_KEY,
+        )
+    return _embedding_model
+
+
+def _get_rerank_model():
+    global _rerank_model
+    if _rerank_model is None and settings.RERANK_FACTORY:
+        _rerank_model = create_rerank_model(
+            rerank_factory=settings.RERANK_FACTORY,
+            rerank_model_name=settings.RERANK_MODEL_NAME,
+            rerank_base_url=settings.RERANK_BASE_URL,
+            rerank_api_key=settings.RERANK_API_KEY,
+        )
+    return _rerank_model
 
 
 class SearchService:
@@ -28,7 +72,7 @@ class SearchService:
         use_rerank: bool = False
     ) -> Dict:
         """
-        Search in knowledge base using vector similarity.
+        Search in knowledge base using recall_lib directly.
         
         Args:
             kb_id: Knowledge base ID
@@ -61,14 +105,32 @@ class SearchService:
                 "message": "No documents in knowledge base"
             }
         
-        # Call external search service (using user-level index)
+        retriever = None
         try:
-            search_result = await DocumentProcessService.search_chunks(
-                question=question,
+            # Create retriever with recall_lib (direct ES access)
+            retrieval_config = DeepRagRetrievalConfig(
                 index_names=[user_es_index],
+                page_size=top_n,
+                similarity_threshold=settings.SIMILARITY_THRESHOLD,
+                vector_similarity_weight=settings.VECTOR_SIMILARITY_WEIGHT,
+                top_k=1024,
+                es_config={"hosts": settings.ES_HOST, "timeout": 600},
+            )
+            retriever = DeepRagPureRetriever(retrieval_config)
+
+            emb_mdl = _get_embedding_model()
+            rerank_mdl = _get_rerank_model() if use_rerank else None
+
+            search_result = await retriever.retrieval(
+                question=question,
+                embd_mdl=emb_mdl,
+                page=1,
+                page_size=top_n,
+                similarity_threshold=settings.SIMILARITY_THRESHOLD,
+                vector_similarity_weight=settings.VECTOR_SIMILARITY_WEIGHT,
+                top=1024,
                 doc_ids=doc_ids,
-                top_n=top_n,
-                use_rerank=use_rerank
+                rerank_mdl=rerank_mdl,
             )
             
             # Format results
@@ -97,4 +159,10 @@ class SearchService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": {"code": "INTERNAL_ERROR", "message": f"Search failed: {e}"}}
             )
+        finally:
+            if retriever:
+                try:
+                    await retriever.close()
+                except Exception:
+                    pass
 

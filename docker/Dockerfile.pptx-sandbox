@@ -1,0 +1,38 @@
+# PPTX Skill 沙盒镜像
+# 基于 knowledge-retrieval:v1.2（已有 Python 3.11 + Node.js 20），
+# 添加 Anthropic pptx skill 所需的额外依赖
+#
+# 构建: docker build -t pptx-sandbox:latest -f Dockerfile.pptx-sandbox .
+# 验证: docker run --rm pptx-sandbox:latest sh -c "node -v && python3 -c 'import defusedxml; print(\"OK\")'"
+
+FROM crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/knowledge-retrieval:v1.2
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # LibreOffice Impress — PPTX → PDF 转换（thumbnail.py, 视觉 QA）
+    libreoffice-impress \
+    # Poppler — PDF → 图片转换（视觉 QA）
+    poppler-utils \
+    # GCC — soffice.py 中的 LD_PRELOAD shim 编译（沙盒环境 AF_UNIX 被阻止时需要）
+    gcc \
+    libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 包（Pillow 已预装，只需补装缺失的）
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    defusedxml \
+    "markitdown[pptx]"
+
+# 全局安装 pptxgenjs（从零创建 PPT 时使用）
+# 使用淘宝镜像加速（国内环境）
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install -g pptxgenjs
+
+# 让 require() 能找到全局安装的 npm 包
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+# 可选：图标生成依赖（react-icons 需要 react + react-dom + sharp）
+# 取消注释以启用图标功能，会增加约 80MB 镜像体积
+# RUN npm install -g react react-dom react-icons sharp
+
+WORKDIR /workspace

@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Database, FileText, Trash2, ExternalLink, Loader2, Star, MessageCircle, Send, User, Sparkles, Copy, Check, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, PlusCircle } from 'lucide-react';
+import QuotaExceededModal from '@/components/QuotaExceededModal/QuotaExceededModal';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Sidebar from '@/components/Sidebar/Sidebar';
 import OptimizedMarkdown from '@/components/OptimizedMarkdown';
@@ -46,10 +47,67 @@ export default function Favorites() {
   // Chat Session State
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
 
+  // 配额超限内联消息状态（显示在聊天区域内，不保存到历史）
+  const [quotaExceededModal, setQuotaExceededModal] = useState<{
+    isOpen: boolean;
+    userLevel: string;
+    usedTokens: number;
+    quotaLimit: number;
+    resetDate: string;
+  }>({
+    isOpen: false,
+    userLevel: 'basic',
+    usedTokens: 0,
+    quotaLimit: 0,
+    resetDate: '',
+  });
+
   // ✅ 使用 useCallback 包装回调函数，避免不必要的重新渲染
-  const handleError = useCallback((error: string) => {
-    toast.error(`对话错误: ${error}`);
-  }, [toast]);
+  const handleError = useCallback((error: string | Error) => {
+    // 检查是否为配额超限错误
+    if (typeof error === 'object' && (error as any).code === 'QUOTA_EXCEEDED') {
+      const details = (error as any).details || {};
+      // 显示配额超限弹窗
+      setQuotaExceededModal({
+        isOpen: true,
+        userLevel: details.user_level || 'basic',
+        usedTokens: details.used_tokens || 0,
+        quotaLimit: details.quota_limit || 0,
+        resetDate: details.reset_date || '',
+      });
+    } else {
+      // 检查错误消息是否包含配额相关信息
+      const errorStr = String(error);
+      if (errorStr.includes('QUOTA_EXCEEDED') || errorStr.includes('配额')) {
+        // 尝试解析错误详情
+        try {
+          const match = errorStr.match(/\{.*\}/);
+          if (match) {
+            const details = JSON.parse(match[0]);
+            setQuotaExceededModal({
+              isOpen: true,
+              userLevel: details.user_level || 'basic',
+              usedTokens: details.used_tokens || 0,
+              quotaLimit: details.quota_limit || 0,
+              resetDate: details.reset_date || '',
+            });
+            return;
+          }
+        } catch {
+          // 解析失败，显示弹窗提示
+        }
+        setQuotaExceededModal({
+          isOpen: true,
+          userLevel: 'basic',
+          usedTokens: 0,
+          quotaLimit: 0,
+          resetDate: '',
+        });
+      } else {
+        toast.error(`对话错误: ${errorStr}`);
+      }
+    }
+  }, []);
 
   const handleSessionCreated = useCallback((newSessionId: string) => {
     setCurrentSessionId(newSessionId);
@@ -270,6 +328,10 @@ export default function Favorites() {
     shouldAutoScrollRef.current = true; // 发送消息时强制开启自动滚动
     sendMessage(inputMessage);
     setInputMessage('');
+    // 清除配额超限弹窗（如果有的话）
+    if (quotaExceededModal.isOpen) {
+      setQuotaExceededModal({ ...quotaExceededModal, isOpen: false });
+    }
     // 重置输入框高度
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -645,7 +707,7 @@ export default function Favorites() {
                   />
                 </div>
                 <div className={styles.chatFooter}>
-                  答案由AI生成仅供参考，。
+                  答案由AI生成，仅供参考
                 </div>
               </div>
             </div>
@@ -805,6 +867,20 @@ export default function Favorites() {
           </div>
         )}
       </div>
+
+      {/* 配额超限弹窗 */}
+      <QuotaExceededModal
+        isOpen={quotaExceededModal.isOpen}
+        onClose={() => setQuotaExceededModal({ ...quotaExceededModal, isOpen: false })}
+        onUpgrade={() => {
+          // 触发全局事件，通知 Sidebar 打开 ProfileModal
+          window.dispatchEvent(new Event('openProfileModal'));
+        }}
+        userLevel={quotaExceededModal.userLevel}
+        usedTokens={quotaExceededModal.usedTokens}
+        quotaLimit={quotaExceededModal.quotaLimit}
+        resetDate={quotaExceededModal.resetDate}
+      />
     </div>
   );
 }

@@ -440,7 +440,7 @@ export default function Auth() {
 
           {/* Footer */}
           <div className="absolute bottom-6 left-0 w-full px-8 md:px-24 text-xs text-gray-400 flex justify-between items-center font-mono">
-            <span>V 1.0.0</span>
+            <span>V 1.0.1</span>
             <span className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-ping"></span>
               服务状态: 正常

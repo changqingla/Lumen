@@ -8,8 +8,6 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   thinking?: string; // 思考过程
-  followUpQuestions?: string[]; // 后续问题列表
-  detectedIntent?: string; // 检测到的任务类型
   documentSummaries?: Array<{  // 文档总结信息（用于历史消息恢复）
     doc_id: string;
     doc_name: string;
@@ -19,16 +17,6 @@ interface Message {
   // 截断元数据（用户中止生成时）
   wasTruncated?: boolean;  // 是否被用户中止
   truncatedAt?: string;    // 中止时间戳
-}
-
-// 文档总结进度状态
-export interface DocumentSummaryProgress {
-  docId: string;
-  docName: string;
-  status: 'pending' | 'processing' | 'completed' | 'cached' | 'error';
-  summary: string;
-  index: number;
-  total: number;
 }
 
 interface UseRAGChatOptions {
@@ -42,7 +30,6 @@ interface UseRAGChatOptions {
   onError?: (error: string) => void;
   onSessionCreated?: (sessionId: string) => void; // 新会话创建时的回调
   onFirstContentToken?: (messageId: string) => void; // 第一个content token到达时的回调
-  onDocProgressChange?: (progress: Map<string, DocumentSummaryProgress>) => void; // 文档进度变化回调
   onStopComplete?: () => void; // 用户停止生成完成时的回调
 }
 
@@ -106,7 +93,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
     onError,
     onSessionCreated,
     onFirstContentToken,
-    onDocProgressChange,
     onStopComplete
   } = options;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -114,20 +100,11 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
   const [isStopping, setIsStopping] = useState(false); // 是否正在停止
   const [isLoading, setIsLoading] = useState(false);
   
-  // 文档总结进度状态
-  const [documentProgress, setDocumentProgress] = useState<Map<string, DocumentSummaryProgress>>(new Map<string, DocumentSummaryProgress>());
-  const [totalDocCount, setTotalDocCount] = useState<number>(0); // 总文档数量（用于提前判断是否需要双栏布局）
-  const documentProgressRef = useRef<Map<string, DocumentSummaryProgress>>(new Map<string, DocumentSummaryProgress>());
-  const totalDocCountRef = useRef<number>(0);
-  const onDocProgressChangeRef = useRef(onDocProgressChange);
-  const pendingProgressUpdateRef = useRef<boolean>(false);
-
   // 统一的会话ID管理
   const currentSessionId = externalSessionId || null;
   const currentMessageRef = useRef<Message | null>(null);
   const firstContentTokenFiredRef = useRef<boolean>(false);
   const isSendingRef = useRef<boolean>(false);
-  const followUpQuestionsRef = useRef<string[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const wasStoppedByUserRef = useRef<boolean>(false); // 是否由用户主动停止
 
@@ -146,32 +123,8 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
     onErrorRef.current = onError;
     onSessionCreatedRef.current = onSessionCreated;
     onFirstContentTokenRef.current = onFirstContentToken;
-    onDocProgressChangeRef.current = onDocProgressChange;
     onStopCompleteRef.current = onStopComplete;
-  }, [currentSessionId, isStreaming, onError, onSessionCreated, onFirstContentToken, onDocProgressChange, onStopComplete]);
-
-  // 问题4修复：批量更新文档进度的辅助函数
-  const scheduleProgressUpdate = useCallback((immediate = false) => {
-    const performUpdate = () => {
-      pendingProgressUpdateRef.current = false;
-      // 深拷贝每个文档对象
-      const newProgress = new Map<string, DocumentSummaryProgress>();
-      documentProgressRef.current.forEach((doc, key) => {
-        newProgress.set(key, { ...doc });
-      });
-      console.log(`[DEBUG] scheduleProgressUpdate: setting documentProgress with ${newProgress.size} docs:`, Array.from(newProgress.values()).map(d => ({ id: d.docId.slice(0, 8), status: d.status, len: d.summary.length })));
-      setDocumentProgress(newProgress);
-      onDocProgressChangeRef.current?.(documentProgressRef.current);
-    };
-    
-    if (immediate) {
-      console.log(`[DEBUG] scheduleProgressUpdate: immediate mode`);
-      performUpdate();
-    } else if (!pendingProgressUpdateRef.current) {
-      pendingProgressUpdateRef.current = true;
-      requestAnimationFrame(() => performUpdate());
-    }
-  }, []);
+  }, [currentSessionId, isStreaming, onError, onSessionCreated, onFirstContentToken, onStopComplete]);
 
   // 定义加载消息的函数
   const loadMessages = useCallback(async (sessionId: string) => {
@@ -183,8 +136,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
         thinking: msg.thinking || '',
-        detectedIntent: msg.detected_intent || msg.detectedIntent, // 支持两种命名格式
-        documentSummaries: msg.documentSummaries // 文档总结信息
+        documentSummaries: msg.documentSummaries
       }));
       setMessages(loadedMessages);
     } catch (error) {
@@ -205,8 +157,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
         thinking: msg.thinking || '',
-        detectedIntent: msg.detected_intent || msg.detectedIntent, // 支持两种命名格式
-        documentSummaries: msg.documentSummaries // 文档总结信息
+        documentSummaries: msg.documentSummaries
       }));
       // 检查是否已经有相同的助手消息（避免重复）
       const lastMessage = loadedMessages[loadedMessages.length - 1];
@@ -268,22 +219,12 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
           currentMessageRef.current = null;
           setIsStreaming(false);
           firstContentTokenFiredRef.current = false;
-          // 🔑 关键修复：切换会话时清空文档进度，防止流式输出跑到错误的会话
-          documentProgressRef.current = new Map();
-          totalDocCountRef.current = 0;
-          setDocumentProgress(new Map());
-          setTotalDocCount(0);
           loadMessages(currentSessionId);
         }
       } else {
         // 清空会话
         currentMessageRef.current = null;
         firstContentTokenFiredRef.current = false;
-        // 🔑 关键修复：清空会话时也清空文档进度
-        documentProgressRef.current = new Map();
-        totalDocCountRef.current = 0;
-        setDocumentProgress(new Map());
-        setTotalDocCount(0);
         setMessages([]);
         setIsStreaming(false);
       }
@@ -291,9 +232,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
   }, [currentSessionId, loadMessages, loadMessagesWithActiveStream]);
 
   const sendMessage = useCallback(async (
-    content: string,
-    modeType?: string,
-    refreshSummaryCache?: boolean
+    content: string
   ) => {
     // 使用 ref 检查 isStreaming，避免依赖数组包含它
     if (!content.trim() || isStreamingRef.current) return;
@@ -349,11 +288,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
       };
       currentMessageRef.current = assistantMessage;
       firstContentTokenFiredRef.current = false;
-      followUpQuestionsRef.current = [];
-      documentProgressRef.current = new Map();
-      totalDocCountRef.current = 0;
-      setDocumentProgress(new Map());
-      setTotalDocCount(0);
       setMessages(prev => [...prev, assistantMessage]);
 
       setIsStreaming(true);
@@ -370,8 +304,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
         mode,
         enable_web_search: enableWebSearch,
         show_thinking: showThinking,  // 传递深度思考模式开关
-        mode_type: modeType,
-        refresh_summary_cache: refreshSummaryCache,
         signal: abortControllerRef.current.signal,
         onThinking: (thinking) => {
           if (isSendingRef.current) {
@@ -407,88 +339,8 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
             setMessages(prev => [...prev.slice(0, -1), { ...assistantMessage }]);
           }
         },
-        onFollowUpQuestion: (question, index) => {
-          followUpQuestionsRef.current[index] = question;
-
-          if (currentSessionIdRef.current === targetSessionId) {
-            assistantMessage.followUpQuestions = [...followUpQuestionsRef.current];
-            if (currentMessageRef.current) {
-              currentMessageRef.current.followUpQuestions = assistantMessage.followUpQuestions;
-            }
-            setMessages(prev => [...prev.slice(0, -1), { ...assistantMessage }]);
-          }
-        },
-        onFinalAnswer: (data) => {
-          assistantMessage.followUpQuestions = data.follow_up_questions;
-          assistantMessage.detectedIntent = data.detected_intent;
-
-          if (currentSessionIdRef.current === targetSessionId) {
-            if (currentMessageRef.current) {
-              currentMessageRef.current.followUpQuestions = assistantMessage.followUpQuestions;
-              currentMessageRef.current.detectedIntent = assistantMessage.detectedIntent;
-            }
-            setMessages(prev => [...prev.slice(0, -1), { ...assistantMessage }]);
-          }
-        },
-        // 文档总结进度事件处理（问题4修复：使用批量更新）
-        onDocSummaryInit: (data) => {
-          console.log(`📚 文档总结初始化: 总计 ${data.total} 篇，缓存 ${data.cached} 篇，需生成 ${data.to_generate} 篇`);
-          // 保存总文档数量，用于提前判断是否需要双栏布局
-          if (currentSessionIdRef.current === targetSessionId) {
-            totalDocCountRef.current = data.total;
-            setTotalDocCount(data.total);
-            console.log(`[DEBUG] setTotalDocCount(${data.total}) called`);
-          }
-        },
-        onDocSummaryStart: (data) => {
-          console.log(`[DEBUG] onDocSummaryStart: doc_id=${data.doc_id}, doc_name=${data.doc_name}`);
-          if (currentSessionIdRef.current === targetSessionId) {
-            documentProgressRef.current.set(data.doc_id, {
-              docId: data.doc_id,
-              docName: data.doc_name,
-              status: 'processing',
-              summary: '',
-              index: data.index,
-              total: data.total
-            });
-            scheduleProgressUpdate();
-          }
-        },
-        onDocSummaryChunk: (data) => {
-          if (currentSessionIdRef.current === targetSessionId) {
-            const doc = documentProgressRef.current.get(data.doc_id);
-            console.log(`[DEBUG] onDocSummaryChunk: doc_id=${data.doc_id}, chunk_len=${data.content.length}, current_summary_len=${doc?.summary.length || 0}`);
-            if (doc) {
-              documentProgressRef.current.set(data.doc_id, {
-                ...doc,
-                summary: doc.summary + data.content
-              });
-            } else {
-              documentProgressRef.current.set(data.doc_id, {
-                docId: data.doc_id,
-                docName: data.doc_id,
-                status: 'processing',
-                summary: data.content,
-                index: documentProgressRef.current.size,
-                total: 0
-              });
-            }
-            scheduleProgressUpdate(true);
-          }
-        },
-        onDocSummaryComplete: (data) => {
-          if (currentSessionIdRef.current === targetSessionId) {
-            documentProgressRef.current.set(data.doc_id, {
-              docId: data.doc_id,
-              docName: data.doc_name,
-              status: data.from_cache ? 'cached' : 'completed',
-              summary: data.summary,
-              index: data.index,
-              total: data.total
-            });
-            // 🔑 使用立即更新模式，确保状态及时反映到 UI
-            scheduleProgressUpdate(true);
-          }
+        onFinalAnswer: () => {
+          // final_answer 事件仅包含 answer + session_id，无需额外处理
         },
         onError: (error) => {
           if (currentSessionIdRef.current === targetSessionId) {
@@ -511,13 +363,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
             thinking: assistantMessage.thinking
           };
 
-          const docSummaries = Array.from(documentProgressRef.current.values()).map(doc => ({
-            doc_id: doc.docId,
-            doc_name: doc.docName,
-            summary: doc.summary,
-            from_cache: doc.status === 'cached'
-          }));
-
           // 只有在有内容时才保存消息
           if (messageToSave.content || messageToSave.thinking) {
             try {
@@ -527,7 +372,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
                 messageToSave.content,
                 messageToSave.thinking,
                 mode,
-                docSummaries.length > 0 ? docSummaries : undefined,
+                undefined,
                 wasTruncated ? { wasTruncated, truncatedAt } : undefined
               );
               
@@ -569,9 +414,9 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
       abortControllerRef.current = null;
       isSendingRef.current = false;
     }
-  }, [kbId, docIds, mode, enableWebSearch, showThinking, sourceType, scheduleProgressUpdate]);
+  }, [kbId, docIds, mode, enableWebSearch, showThinking, sourceType]);
 
-  const regenerateLastMessage = useCallback(async (refreshSummaryCache?: boolean) => {
+  const regenerateLastMessage = useCallback(async () => {
     if (messages.length < 2) return;
 
     if (isStreamingRef.current) {
@@ -620,11 +465,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
       };
       currentMessageRef.current = assistantMessage;
       firstContentTokenFiredRef.current = false;
-      followUpQuestionsRef.current = [];
-      documentProgressRef.current = new Map();
-      totalDocCountRef.current = 0;
-      setDocumentProgress(new Map());
-      setTotalDocCount(0);
       setMessages(prev => [...prev, assistantMessage]);
 
       setIsStreaming(true);
@@ -640,7 +480,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
         mode,
         enable_web_search: enableWebSearch,
         show_thinking: showThinking,
-        refresh_summary_cache: refreshSummaryCache,
         signal: abortControllerRef.current.signal,
         onThinking: (thinking) => {
           if (isSendingRef.current) isSendingRef.current = false;
@@ -666,83 +505,8 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
             setMessages(prev => [...prev.slice(0, -1), { ...assistantMessage }]);
           }
         },
-        onFollowUpQuestion: (question, index) => {
-          followUpQuestionsRef.current[index] = question;
-          if (currentSessionIdRef.current === targetSessionId) {
-            assistantMessage.followUpQuestions = [...followUpQuestionsRef.current];
-            if (currentMessageRef.current) {
-              currentMessageRef.current.followUpQuestions = assistantMessage.followUpQuestions;
-            }
-            setMessages(prev => [...prev.slice(0, -1), { ...assistantMessage }]);
-          }
-        },
-        onFinalAnswer: (data) => {
-          assistantMessage.followUpQuestions = data.follow_up_questions;
-          assistantMessage.detectedIntent = data.detected_intent;
-          if (currentSessionIdRef.current === targetSessionId) {
-            if (currentMessageRef.current) {
-              currentMessageRef.current.followUpQuestions = assistantMessage.followUpQuestions;
-              currentMessageRef.current.detectedIntent = assistantMessage.detectedIntent;
-            }
-            setMessages(prev => [...prev.slice(0, -1), { ...assistantMessage }]);
-          }
-        },
-        // 文档总结进度事件处理
-        onDocSummaryInit: (data) => {
-          console.log(`📚 [重新生成] 文档总结初始化: 总计 ${data.total} 篇`);
-          // 保存总文档数量，用于提前判断是否需要双栏布局
-          if (currentSessionIdRef.current === targetSessionId) {
-            totalDocCountRef.current = data.total;
-            setTotalDocCount(data.total);
-          }
-        },
-        onDocSummaryStart: (data) => {
-          if (currentSessionIdRef.current === targetSessionId) {
-            documentProgressRef.current.set(data.doc_id, {
-              docId: data.doc_id,
-              docName: data.doc_name,
-              status: 'processing',
-              summary: '',
-              index: data.index,
-              total: data.total
-            });
-            scheduleProgressUpdate();
-          }
-        },
-        onDocSummaryChunk: (data) => {
-          if (currentSessionIdRef.current === targetSessionId) {
-            const doc = documentProgressRef.current.get(data.doc_id);
-            if (doc) {
-              documentProgressRef.current.set(data.doc_id, {
-                ...doc,
-                summary: doc.summary + data.content
-              });
-            } else {
-              documentProgressRef.current.set(data.doc_id, {
-                docId: data.doc_id,
-                docName: data.doc_id,
-                status: 'processing',
-                summary: data.content,
-                index: documentProgressRef.current.size,
-                total: 0
-              });
-            }
-            scheduleProgressUpdate(true);
-          }
-        },
-        onDocSummaryComplete: (data) => {
-          if (currentSessionIdRef.current === targetSessionId) {
-            documentProgressRef.current.set(data.doc_id, {
-              docId: data.doc_id,
-              docName: data.doc_name,
-              status: data.from_cache ? 'cached' : 'completed',
-              summary: data.summary,
-              index: data.index,
-              total: data.total
-            });
-            // 🔑 使用立即更新模式，确保状态及时反映到 UI
-            scheduleProgressUpdate(true);
-          }
+        onFinalAnswer: () => {
+          // final_answer 事件仅包含 answer + session_id，无需额外处理
         },
         onError: (error) => {
           if (currentSessionIdRef.current === targetSessionId) {
@@ -760,14 +524,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
           // 重置用户停止标记
           wasStoppedByUserRef.current = false;
           
-          // 构建文档总结数据（用于历史消息恢复）
-          const docSummaries = Array.from(documentProgressRef.current.values()).map(doc => ({
-            doc_id: doc.docId,
-            doc_name: doc.docName,
-            summary: doc.summary,
-            from_cache: doc.status === 'cached'
-          }));
-
           // 只有在有内容时才保存消息
           if (assistantMessage.content || assistantMessage.thinking) {
             try {
@@ -777,7 +533,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
                 assistantMessage.content,
                 assistantMessage.thinking,
                 mode,
-                docSummaries.length > 0 ? docSummaries : undefined,
+                undefined,
                 wasTruncated ? { wasTruncated, truncatedAt } : undefined
               );
               
@@ -816,7 +572,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
       abortControllerRef.current = null;
       isSendingRef.current = false;
     }
-  }, [messages, kbId, docIds, mode, enableWebSearch, showThinking, scheduleProgressUpdate]);
+  }, [messages, kbId, docIds, mode, enableWebSearch, showThinking]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
@@ -824,11 +580,6 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
     setIsStreaming(false);
     isSendingRef.current = false;
     firstContentTokenFiredRef.current = false;
-    // 清理文档进度状态
-    documentProgressRef.current = new Map();
-    totalDocCountRef.current = 0;
-    setDocumentProgress(new Map());
-    setTotalDocCount(0);
   }, []);
 
   // 停止生成（中止流式输出）
@@ -877,9 +628,7 @@ export function useRAGChat(options: UseRAGChatOptions = {}) {
     regenerateLastMessage,
     clearMessages,
     stopGeneration, // 停止生成
-    sessionId: currentSessionId, // ✅ 返回统一的会话ID
-    documentProgress, // 文档总结进度
-    totalDocCount // 总文档数量（用于提前判断是否需要双栏布局）
+    sessionId: currentSessionId // ✅ 返回统一的会话ID
   };
 }
 

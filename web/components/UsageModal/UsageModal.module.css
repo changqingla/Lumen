@@ -1,0 +1,510 @@
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal {
+  background-color: var(--bg-elev-1); 
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 95%;
+  max-width: 700px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 
+    0 20px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.header {
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.filtersRow {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.dateRangeBtn {
+    background-color: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 140px;
+    justify-content: space-between;
+}
+
+.dateRangeBtn:hover, .dateRangeBtn.active {
+    background-color: var(--bg);
+    border-color: var(--text-muted);
+}
+
+.chevronIcon {
+    color: var(--text-muted);
+}
+
+.datePickerDropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 8px;
+    background-color: var(--bg-elev-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    padding: 16px;
+    z-index: 100;
+    min-width: 280px;
+}
+
+.calendarMock {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.calendarHeader {
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text);
+}
+
+.calendarNavBtn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.calendarNavBtn:hover {
+    background-color: var(--bg-elev-2);
+    color: var(--text);
+}
+
+.calendarGrid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+}
+
+.calendarDay {
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    color: var(--text-muted);
+}
+
+.calendarDay:hover {
+    background-color: var(--bg-elev-2);
+    color: var(--text);
+}
+
+.selectedDay {
+    background-color: var(--primary) !important;
+    color: white !important;
+}
+
+.periodTabs {
+    display: flex;
+    background-color: var(--bg-elev-2);
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.periodTab {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.periodTab:hover {
+    color: var(--text);
+}
+
+.periodTab.active {
+    background-color: var(--bg-elev-1); 
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.closeBtn:hover {
+  background-color: var(--bg-elev-2);
+  color: var(--text);
+}
+
+.content {
+  padding: 0 32px 32px 32px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.titleSection {
+    margin-bottom: 20px;
+}
+
+.sectionTitle {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin: 0;
+}
+
+.statsRow {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 0;
+}
+
+.statCard {
+  background-color: var(--bg-elev-2);
+  padding: 16px 20px;
+  border-radius: 12px;
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.statHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.statLabel {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.helpIcon {
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+
+.statMainValue {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.5px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-feature-settings: "tnum";
+}
+
+.statSubValue {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.descriptionRow {
+    margin-bottom: 32px;
+}
+
+.descriptionText {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0;
+    max-width: 600px;
+}
+
+.link {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+.link:hover {
+    text-decoration: underline;
+}
+
+.chartContainer {
+  height: 280px;
+  width: 100%;
+  margin-top: 20px;
+  padding: 16px 20px;
+  background-color: var(--bg-elev-2);
+  border-radius: 12px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Dark Mode Specific Tweaks */
+@media (prefers-color-scheme: dark) {
+    .modal {
+        background-color: #121212; 
+        border: 1px solid #262626;
+    }
+    .statCard {
+        background-color: #1a1a1a;
+    }
+    .dateRangeBtn {
+        background-color: #1a1a1a;
+        border-color: #262626;
+    }
+    .datePickerDropdown {
+        background-color: #1a1a1a;
+        border-color: #262626;
+    }
+    .periodTabs {
+        background-color: #1a1a1a;
+    }
+    .periodTab.active {
+        background-color: #262626;
+    }
+}
+
+
+/* Loading State */
+.loadingContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: var(--text-muted);
+  gap: 12px;
+}
+
+.loadingContainer p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  color: var(--primary);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Error State */
+.errorContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: var(--text-muted);
+  gap: 12px;
+}
+
+.errorContainer p {
+  margin: 0;
+  font-size: 14px;
+  text-align: center;
+  max-width: 300px;
+}
+
+.errorIcon {
+  color: #ef4444;
+}
+
+/* Empty State */
+.emptyContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.emptyContainer p {
+  margin: 0;
+  font-size: 14px;
+}
+
+
+/* Quota Section Styles */
+.quotaSection {
+  background-color: var(--bg-elev-2);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.quotaHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.quotaTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quotaLevel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  background-color: rgba(8, 145, 178, 0.1);
+  padding: 4px 10px;
+  border-radius: 100px;
+}
+
+.quotaStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Light mode border adjustment */
+@media (prefers-color-scheme: light) {
+  .quotaStats {
+    border-color: rgba(0, 0, 0, 0.05);
+  }
+}
+
+.quotaStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quotaStatLabel {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.quotaStatValue {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  font-feature-settings: "tnum";
+}
+
+.quotaProgressContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quotaProgressBar {
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg);
+  border-radius: 100px;
+  overflow: hidden;
+}
+
+.quotaProgressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #0891b2, #06b6d4);
+  border-radius: 100px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.quotaProgressFill.warning {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.quotaProgressInfo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.quotaProgressText {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.quotaProgressText.warning {
+  color: #ef4444;
+}
+
+.chartContainer {
+  height: 280px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 16px 20px;
+  background-color: var(--bg-elev-2);
+  border-radius: 12px;
+}

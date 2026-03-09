@@ -39,6 +39,8 @@ from .custom_exceptions import (
     # Validation exceptions
     ValidationError,
     InvalidOperation,
+    # Token quota exceptions
+    QuotaExceeded,
 )
 
 __all__ = [
@@ -73,5 +75,6 @@ __all__ = [
     "OrganizationNotFound",
     "ValidationError",
     "InvalidOperation",
+    "QuotaExceeded",
 ]
 

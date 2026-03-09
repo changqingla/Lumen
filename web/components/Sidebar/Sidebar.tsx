@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Sun, Moon, Headphones, LogOut, Book, Star, Notebook, ChevronsLeft, ChevronsRight, MoreVertical, Trash2, User, Building2, CreditCard, Settings as SettingsIcon, MessageSquareX } from 'lucide-react';
+import { Plus, Sun, Moon, Headphones, LogOut, Book, Star, Notebook, ChevronsLeft, ChevronsRight, MoreVertical, Trash2, User, Building2, CreditCard, Settings as SettingsIcon, MessageSquareX, Activity } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { useTheme } from '@/hooks/useTheme';
 import { useToast } from '@/hooks/useToast';
@@ -8,6 +8,7 @@ import ContactModal from '@/components/ContactModal/ContactModal';
 import UserBadge from '@/components/UserBadge/UserBadge';
 import ProfileModal from '@/components/ProfileModal/ProfileModal';
 import OrganizationManagerModal from '@/components/OrganizationManagerModal/OrganizationManagerModal';
+import UsageModal from '@/components/UsageModal/UsageModal';
 import ConfirmModal from '@/components/ConfirmModal/ConfirmModal';
 import { api } from '@/lib/api';
 import defaultAvatar from '@/assets/avator.png';
@@ -42,6 +43,7 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
   const collapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isUsageModalOpen, setIsUsageModalOpen] = useState(false);
   const [profileInitialTab, setProfileInitialTab] = useState<'profile' | 'organization'>('profile');
   const [isOrgManagerOpen, setIsOrgManagerOpen] = useState(false);
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
@@ -100,6 +102,20 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // 监听全局事件：从其他组件（如 QuotaExceededModal）打开 ProfileModal
+  useEffect(() => {
+    const handleOpenProfileModal = () => {
+      setProfileInitialTab('profile');
+      setIsProfileModalOpen(true);
+      setIsProfileOpen(false); // 关闭头像弹出菜单
+    };
+
+    window.addEventListener('openProfileModal', handleOpenProfileModal);
+    return () => {
+      window.removeEventListener('openProfileModal', handleOpenProfileModal);
+    };
   }, []);
 
   const handleOrgManagerClick = () => {
@@ -385,6 +401,16 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
                 <span className={styles.menuIcon}><Building2 size={16} /></span>
                 <span>组织管理</span>
               </button>
+              <button 
+                className={styles.menuItem} 
+                onClick={() => {
+                  setIsUsageModalOpen(true);
+                  setIsProfileOpen(false);
+                }}
+              >
+                <span className={styles.menuIcon}><Activity size={16} /></span>
+                <span>模型用量</span>
+              </button>
               {!profile.is_admin && profile.user_level === 'basic' && (
                 <button 
                   className={styles.menuItem} 
@@ -468,6 +494,11 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
         isOpen={isOrgManagerOpen}
         onClose={() => setIsOrgManagerOpen(false)}
         userLevel={profile.user_level || 'basic'}
+      />
+
+      <UsageModal
+        isOpen={isUsageModalOpen}
+        onClose={() => setIsUsageModalOpen(false)}
       />
 
       {/* 清除对话确认弹窗 */}
