@@ -5,6 +5,7 @@ import {
   AssistantArtifactList,
   AssistantMessageFlow,
   AssistantMessageInterruption,
+  ChatArtifactPreviewPane,
   ChatUIModeSwitch,
   SendStopButton,
   ChatModelSelector,
@@ -16,8 +17,13 @@ import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/
 import { useToast } from '@/shared/hooks/useToast';
 import { getAssistantRenderableText, hasAssistantActionBar, hasAssistantVisiblePayload } from '@/features/chat/lib/assistant-message';
 import { assertChatUIMode, type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
+import {
+  getArtifactPreviewType,
+  resolveArtifactName,
+  type ChatArtifactPreviewTarget,
+} from '@/features/chat/lib/artifact-preview';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
-import { api } from '@/shared/api/client';
+import { api, type ChatArtifact } from '@/shared/api/client';
 import styles from './ChatDetailPage.module.css';
 
 interface QuotaExceededLikeErrorDetails {
@@ -78,6 +84,7 @@ export default function ChatDetail() {
     quotaLimit: 0,
     resetDate: '',
   });
+  const [activeArtifactPreview, setActiveArtifactPreview] = useState<ChatArtifactPreviewTarget | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -401,6 +408,41 @@ export default function ChatDetail() {
     }
   };
 
+  useEffect(() => {
+    setActiveArtifactPreview((current) => (
+      current && current.sessionId === chatId ? current : null
+    ));
+  }, [chatId]);
+
+  const handlePreviewArtifact = React.useCallback(async (artifact: ChatArtifact) => {
+    const objectPath = (artifact.object_path || '').trim();
+    if (!objectPath) {
+      toast.error('文件路径无效，无法预览');
+      return;
+    }
+
+    const targetSessionId = (artifact.session_id || chatId || '').trim();
+    if (!targetSessionId) {
+      toast.error('当前会话不存在，无法预览文件');
+      return;
+    }
+
+    const fileName = resolveArtifactName(artifact);
+    try {
+      const response = await api.getSessionArtifactUrl(targetSessionId, objectPath);
+      setActiveArtifactPreview({
+        sessionId: targetSessionId,
+        objectPath,
+        fileName,
+        url: response.url,
+        previewType: getArtifactPreviewType(fileName),
+      });
+    } catch (error) {
+      console.error('Failed to preview artifact:', error);
+      toast.error(error instanceof Error ? error.message : '打开预览失败，请稍后重试');
+    }
+  }, [chatId, toast]);
+
   return (
     <div className={styles.chatDetail}>
       {/* Mobile Sidebar Overlay */}
@@ -433,12 +475,13 @@ export default function ChatDetail() {
         </div>
 
         {/* Messages Area */}
-        <div 
-          className={styles.messagesContainer}
-          ref={chatContainerRef}
-          onScroll={handleScroll}
-        >
-	          {messages.map((msg, index) => {
+        <div className={`${styles.chatWorkspace} ${activeArtifactPreview ? styles.chatWorkspaceSplit : ''}`}>
+          <div 
+            className={styles.messagesContainer}
+            ref={chatContainerRef}
+            onScroll={handleScroll}
+          >
+	            {messages.map((msg, index) => {
 	            const assistantText = msg.role === 'assistant'
 	              ? getAssistantRenderableText(msg)
 	              : '';
@@ -496,6 +539,7 @@ export default function ChatDetail() {
 	                      artifacts={msg.artifacts}
 	                      sessionId={chatId}
 	                      messageId={msg.id}
+                        onPreviewArtifact={handlePreviewArtifact}
 	                    />
 	                  </>
 	                )}
@@ -564,15 +608,24 @@ export default function ChatDetail() {
 	                )}
 	              </div>
 	            );
-	          })}
-          {isStreaming && (
-            <div className={styles.streamingIndicator}>
-              <div className={styles.loadingDots}>
-                <span>.</span><span>.</span><span>.</span>
+	            })}
+            {isStreaming && (
+              <div className={styles.streamingIndicator}>
+                <div className={styles.loadingDots}>
+                  <span>.</span><span>.</span><span>.</span>
+                </div>
               </div>
+            )}
+            <div ref={messagesEndRef} style={{ height: 0, overflow: 'hidden' }} />
+          </div>
+          {activeArtifactPreview ? (
+            <div className={styles.previewPane}>
+              <ChatArtifactPreviewPane
+                preview={activeArtifactPreview}
+                onClose={() => setActiveArtifactPreview(null)}
+              />
             </div>
-          )}
-          <div ref={messagesEndRef} style={{ height: 0, overflow: 'hidden' }} />
+          ) : null}
         </div>
 
         {/* Input Area */}

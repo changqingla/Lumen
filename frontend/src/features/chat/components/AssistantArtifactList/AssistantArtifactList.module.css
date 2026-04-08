@@ -62,6 +62,38 @@
   flex-shrink: 0;
 }
 
+.artifactActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.artifactPreviewButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+}
+
+.artifactPreviewButton:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: rgba(100, 116, 139, 0.4);
+}
+
+.artifactPreviewButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .artifactDownloadButton:hover:not(:disabled) {
   opacity: 0.88;
 }
@@ -78,6 +110,16 @@
   }
 
   .artifactDownloadButton {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .artifactActions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .artifactPreviewButton {
     width: 100%;
     justify-content: center;
   }

@@ -1,4 +1,5 @@
 export { default as AssistantArtifactList } from "./AssistantArtifactList/AssistantArtifactList";
+export { default as ChatArtifactPreviewPane } from "./ChatArtifactPreviewPane/ChatArtifactPreviewPane";
 export { default as AssistantMessageFlow } from "./AssistantMessageFlow/AssistantMessageFlow";
 export { default as AssistantMessageInterruption } from "./AssistantMessageInterruption/AssistantMessageInterruption";
 export { default as ChatModelSelector } from "./ChatModelSelector/ChatModelSelector";

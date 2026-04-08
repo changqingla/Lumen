@@ -25,6 +25,18 @@
   background: var(--lumen-page-bg);
 }
 
+.chatWorkspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.chatWorkspaceSplit {
+  gap: 0;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
@@ -1724,6 +1736,8 @@
 
 .messagesArea {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0;
@@ -1733,12 +1747,46 @@
   /* 布局隔离：防止内容变化影响容器尺寸 */
   contain: layout style;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--border) 58%, transparent) transparent;
+}
+
+.messagesArea::-webkit-scrollbar {
+  width: 8px;
+}
+
+.messagesArea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messagesArea::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border) 56%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.messagesArea::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 28%, var(--border) 72%);
+}
+
+.previewPane {
+  width: min(48vw, 720px);
+  min-width: 360px;
+  max-width: 50%;
+  min-height: 0;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.58), transparent 36%),
+    linear-gradient(180deg, rgba(244, 247, 251, 0.94), rgba(235, 240, 246, 0.9));
+  backdrop-filter: blur(10px);
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.3);
 }
 
 .messageGroup {
   max-width: 860px;
   margin: 0 auto;
-  padding: 20px 20px 40px 20px; /* 底部padding */
+  padding: 0 20px 32px 20px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -2213,8 +2261,24 @@
 /* 当使用双栏布局时，消息区域需要更宽 */
 .messagesArea.dualLayoutActive .messageGroup {
   max-width: 90%;
+  padding-top: 0;
   padding-left: 40px;
   padding-right: 40px;
+}
+
+@media (max-width: 960px) {
+  .chatWorkspace {
+    flex-direction: column;
+  }
+
+  .previewPane {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    min-height: 320px;
+    border-left: none;
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+  }
 }
 
 /* 确保双栏布局时滚动正常 */

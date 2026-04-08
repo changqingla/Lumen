@@ -7,8 +7,7 @@
  * - MD: 使用 Markdown 渲染
  */
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { FileText, Star, X, Copy, Check, Loader2 } from 'lucide-react';
-import { getFileIcon } from '@/shared/utils/fileIcons';
+import { FileText, Star, X, Loader2 } from 'lucide-react';
 import OptimizedMarkdown from '@/shared/components/OptimizedMarkdown';
 import styles from './DocumentViewer.module.css';
 
@@ -40,8 +39,6 @@ export default function DocumentViewer({
   const [selectedText, setSelectedText] = useState<string>('');
   const [showAddButton, setShowAddButton] = useState<boolean>(false);
   const [buttonPosition, setButtonPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [copied, setCopied] = useState(false);
-  
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -234,20 +231,6 @@ export default function DocumentViewer({
     }, 50);
   }, []);
 
-  // 复制全部内容
-  const handleCopyAll = async () => {
-    try {
-      const content = htmlContent 
-        ? contentRef.current?.innerText || '' 
-        : textContent;
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('复制失败:', err);
-    }
-  };
-
   // 监听选择变化
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -326,24 +309,7 @@ export default function DocumentViewer({
     <div className={styles.container} ref={containerRef}>
       {/* 工具栏 */}
       <div className={styles.toolbar}>
-        <div className={styles.toolbarLeft}>
-          <img src={getFileIcon(fileName)} alt="File" className={styles.fileIcon} />
-          <span className={styles.fileName}>{fileName}</span>
-        </div>
-
-        <div className={styles.toolbarCenter} />
-
         <div className={styles.toolbarRight}>
-          <button
-            onClick={handleCopyAll}
-            className={styles.toolbarBtn}
-            title="复制全部内容"
-            disabled={loading || !!error}
-          >
-            {copied ? <Check size={16} /> : <Copy size={16} />}
-            <span>{copied ? '已复制' : '复制'}</span>
-          </button>
-
           {onToggleFavorite && (
             <button
               onClick={onToggleFavorite}
@@ -355,9 +321,13 @@ export default function DocumentViewer({
           )}
 
           {onClose && (
-            <button onClick={onClose} className={styles.closeBtn} title="关闭预览">
+            <button
+              onClick={onClose}
+              className={styles.closeBtn}
+              title="关闭预览"
+              aria-label="关闭预览"
+            >
               <X size={16} />
-              <span className={styles.closeBtnText}>关闭预览</span>
             </button>
           )}
         </div>

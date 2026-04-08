@@ -1,108 +1,77 @@
 .container {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: var(--surface, #ffffff);
+  background: var(--layout-main-bg);
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* 工具栏 */
 .toolbar {
+  position: absolute;
+  top: 10px;
+  right: 12px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 24px;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.02);
-  gap: 20px;
-  flex-shrink: 0;
+  justify-content: flex-end;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom: none;
+  box-shadow: none;
+  gap: 8px;
   z-index: 10;
-  transition: all 0.3s ease;
+  transition: opacity 0.2s ease;
 }
 
 :global(.dark) .toolbar {
-  background: rgba(30, 41, 59, 0.85);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: transparent;
 }
 
-.toolbarLeft,
-.toolbarCenter,
 .toolbarRight {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.toolbarLeft {
-  flex: 1;
-  min-width: 0;
-}
-
-.toolbarCenter {
-  flex-shrink: 0;
-}
-
-.fileIcon {
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  object-fit: contain;
-}
-
-.fileName {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text, #1e293b);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  letter-spacing: -0.01em;
-}
-
-:global(.dark) .fileName {
-  color: #e2e8f0;
+  gap: 8px;
 }
 
 /* 通用按钮样式 */
-.toolbarBtn,
 .favoriteBtn,
 .closeBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--text-muted, #64748b);
+  gap: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: color-mix(in srgb, var(--layout-main-bg) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--text-muted) 82%, transparent);
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  font-size: 13px;
+  font-size: 0;
   font-weight: 500;
 }
 
-.toolbarBtn:hover:not(:disabled),
 .favoriteBtn:hover,
 .closeBtn:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: color-mix(in srgb, var(--bg-elev-1) 92%, transparent);
   color: var(--text, #0f172a);
+  border-color: color-mix(in srgb, var(--border) 88%, transparent);
   transform: translateY(-1px);
 }
 
-:global(.dark) .toolbarBtn:hover:not(:disabled),
 :global(.dark) .favoriteBtn:hover,
 :global(.dark) .closeBtn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #f8fafc;
+  background: var(--bg-elev-2);
+  color: var(--text);
 }
 
-.toolbarBtn:active:not(:disabled),
 .favoriteBtn:active,
 .closeBtn:active {
   transform: translateY(0) scale(0.98);
@@ -128,32 +97,26 @@
 
 /* 关闭按钮特殊样式 */
 .closeBtn {
-  padding: 8px 16px;
-  background: rgba(241, 245, 249, 0.8);
-  color: #475569;
-  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--layout-main-bg) 88%, transparent);
+  color: color-mix(in srgb, var(--text-muted) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
 }
 
 :global(.dark) .closeBtn {
-  background: rgba(51, 65, 85, 0.5);
-  color: #94a3b8;
+  background: color-mix(in srgb, var(--layout-main-bg) 78%, transparent);
+  color: color-mix(in srgb, var(--text-muted) 86%, transparent);
 }
 
 .closeBtn:hover {
-  background: #ef4444;
-  color: white;
-  border-color: #ef4444;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+  background: color-mix(in srgb, var(--bg-elev-1) 86%, transparent);
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--border) 86%, transparent);
+  box-shadow: none;
 }
 
 :global(.dark) .closeBtn:hover {
-  background: #ef4444;
-  color: white;
-}
-
-.closeBtnText {
-  line-height: 1;
-  font-weight: 600;
+  background: var(--bg-elev-2);
+  color: var(--text);
 }
 
 /* 文档内容区域 */
@@ -161,42 +124,66 @@
   flex: 1;
   overflow: auto;
   position: relative;
-  background: white;
+  background: var(--layout-main-bg);
   padding: 0;
   user-select: text;
   -webkit-user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--border) 54%, transparent) transparent;
+}
+
+.content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border) 52%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.content::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 24%, var(--border) 76%);
 }
 
 :global(.dark) .content {
-  background: #1e293b;
+  background: var(--layout-main-bg);
 }
 
 /* Markdown 包装器 */
 .markdownWrapper {
   width: 100%;
-  padding: 24px 32px;
+  padding: 16px 20px 24px;
   min-height: 100%;
   user-select: text;
   -webkit-user-select: text;
+  background: transparent;
 }
 
 :global(.dark) .markdownWrapper {
-  background: #1e293b;
+  background: transparent;
 }
 
 /* DOCX 转换后的 HTML 内容 */
 .docContent {
   width: 100%;
-  padding: 24px 32px;
+  padding: 16px 20px 24px;
   min-height: 100%;
   line-height: 1.8;
   color: #1e293b;
   user-select: text;
   -webkit-user-select: text;
+  background: transparent;
 }
 
 :global(.dark) .docContent {
-  background: #1e293b;
+  background: transparent;
   color: #e2e8f0;
 }
 
@@ -247,7 +234,7 @@
 /* 纯文本内容 */
 .textContent {
   width: 100%;
-  padding: 24px 32px;
+  padding: 16px 20px 24px;
   min-height: 100%;
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -257,6 +244,7 @@
   color: #1e293b;
   user-select: text;
   -webkit-user-select: text;
+  background: transparent;
 }
 
 :global(.dark) .textContent {
@@ -365,14 +353,6 @@
   .markdownWrapper,
   .docContent,
   .textContent {
-    padding: 16px;
-  }
-  
-  .toolbar {
-    padding: 10px 16px;
-  }
-  
-  .closeBtnText {
-    display: none;
+    padding: 14px 16px 20px;
   }
 }

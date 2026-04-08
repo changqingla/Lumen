@@ -1,14 +1,19 @@
 import { useCallback, useState } from 'react';
-import { Download } from 'lucide-react';
+import { Download, Eye } from 'lucide-react';
 import { api, type ChatArtifact } from '@/shared/api/client';
 import { useToast } from '@/shared/hooks/useToast';
 import { getFileIcon } from '@/shared/utils/fileIcons';
+import {
+  isArtifactPreviewable,
+  resolveArtifactName,
+} from '@/features/chat/lib/artifact-preview';
 import styles from './AssistantArtifactList.module.css';
 
 interface AssistantArtifactListProps {
   artifacts?: ChatArtifact[];
   sessionId?: string;
   messageId: string;
+  onPreviewArtifact?: (artifact: ChatArtifact) => Promise<void> | void;
 }
 
 const formatFileSize = (bytes: number) => {
@@ -19,23 +24,11 @@ const formatFileSize = (bytes: number) => {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 };
 
-const resolveArtifactName = (artifact: ChatArtifact) => {
-  if (artifact.name && artifact.name.trim()) {
-    return artifact.name.trim();
-  }
-  if (artifact.path && artifact.path.trim()) {
-    const segments = artifact.path.split('/');
-    return segments[segments.length - 1] || '生成文件';
-  }
-  const objectPath = artifact.object_path || '';
-  const parts = objectPath.split('/');
-  return parts[parts.length - 1] || '生成文件';
-};
-
 export default function AssistantArtifactList({
   artifacts,
   sessionId,
   messageId,
+  onPreviewArtifact,
 }: AssistantArtifactListProps) {
   const toast = useToast();
   const [artifactLoadingKeys, setArtifactLoadingKeys] = useState<Set<string>>(new Set());
@@ -103,6 +96,7 @@ export default function AssistantArtifactList({
         const isDownloading = artifactLoadingKeys.has(loadingKey);
         const artifactName = resolveArtifactName(artifact);
         const canDownload = Boolean(targetSessionId && artifact.object_path);
+        const canPreview = Boolean(onPreviewArtifact && canDownload && isArtifactPreviewable(artifactName));
 
         return (
           <div
@@ -120,15 +114,28 @@ export default function AssistantArtifactList({
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              className={styles.artifactDownloadButton}
-              onClick={() => handleDownloadArtifact(artifact)}
-              disabled={!canDownload || isDownloading}
-            >
-              <Download size={14} />
-              <span>{isDownloading ? '准备中...' : '下载'}</span>
-            </button>
+            <div className={styles.artifactActions}>
+              {canPreview ? (
+                <button
+                  type="button"
+                  className={styles.artifactPreviewButton}
+                  onClick={() => void onPreviewArtifact?.(artifact)}
+                  disabled={isDownloading}
+                >
+                  <Eye size={14} />
+                  <span>预览</span>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={styles.artifactDownloadButton}
+                onClick={() => handleDownloadArtifact(artifact)}
+                disabled={!canDownload || isDownloading}
+              >
+                <Download size={14} />
+                <span>{isDownloading ? '准备中...' : '下载'}</span>
+              </button>
+            </div>
           </div>
         );
       })}

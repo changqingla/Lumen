@@ -6,6 +6,7 @@ import {
   AssistantArtifactList,
   AssistantMessageFlow,
   AssistantMessageInterruption,
+  ChatArtifactPreviewPane,
   ChatUIModeSwitch,
   KnowledgeBaseSelector,
   type SelectionState,
@@ -20,8 +21,14 @@ import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/
 import { useToast } from '@/shared/hooks/useToast';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { api, type ChatAttachment, type ChatRuntimeThreadUploadFile } from '@/shared/api/client';
+import type { ChatArtifact } from '@/shared/api/client';
 import { getAssistantRenderableText, hasAssistantActionBar, hasAssistantVisiblePayload } from '@/features/chat/lib/assistant-message';
 import { assertChatUIMode, type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
+import {
+  getArtifactPreviewType,
+  resolveArtifactName,
+  type ChatArtifactPreviewTarget,
+} from '@/features/chat/lib/artifact-preview';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import { getFileIcon } from '@/shared/utils/fileIcons';
 import { Menu, ChevronDown, X, Check, Copy, ThumbsUp, ThumbsDown, FileText, Paperclip, RefreshCw, Presentation, PanelsTopLeft, Sparkles, Search, Sheet, ChartColumn, BookOpenText, ScrollText } from 'lucide-react';
@@ -351,6 +358,7 @@ export default function Home() {
     quotaLimit: 0,
     resetDate: '',
   });
+  const [activeArtifactPreview, setActiveArtifactPreview] = useState<ChatArtifactPreviewTarget | null>(null);
   
   // 处理文件上传点击
   const handleUploadClick = () => {
@@ -1381,6 +1389,41 @@ export default function Home() {
     }
   };
 
+  useEffect(() => {
+    setActiveArtifactPreview((current) => (
+      current && current.sessionId === currentSessionId ? current : null
+    ));
+  }, [currentSessionId]);
+
+  const handlePreviewArtifact = useCallback(async (artifact: ChatArtifact) => {
+    const objectPath = (artifact.object_path || '').trim();
+    if (!objectPath) {
+      toast.error('文件路径无效，无法预览');
+      return;
+    }
+
+    const targetSessionId = (artifact.session_id || currentSessionId || '').trim();
+    if (!targetSessionId) {
+      toast.error('当前会话不存在，无法预览文件');
+      return;
+    }
+
+    const fileName = resolveArtifactName(artifact);
+    try {
+      const response = await api.getSessionArtifactUrl(targetSessionId, objectPath);
+      setActiveArtifactPreview({
+        sessionId: targetSessionId,
+        objectPath,
+        fileName,
+        url: response.url,
+        previewType: getArtifactPreviewType(fileName),
+      });
+    } catch (error) {
+      console.error('Failed to preview artifact:', error);
+      toast.error(error instanceof Error ? error.message : '打开预览失败，请稍后重试');
+    }
+  }, [currentSessionId, toast]);
+
   const renderComposer = (
     placeholder: string,
     kbButton: React.RefObject<HTMLButtonElement | null>,
@@ -1678,12 +1721,13 @@ export default function Home() {
             // 对话界面
             <>
               {/* 计算是否有双栏布局激活（最后一条AI消息使用双栏） */}
-              <div 
-                className={styles.messagesArea}
-                ref={chatContainerRef}
-                onScroll={handleScroll}
-	              >
-	                <div className={styles.messageGroup}>
+              <div className={`${styles.chatWorkspace} ${activeArtifactPreview ? styles.chatWorkspaceSplit : ''}`}>
+                <div 
+                  className={`${styles.messagesArea} ${activeArtifactPreview ? styles.dualLayoutActive : ''}`}
+                  ref={chatContainerRef}
+                  onScroll={handleScroll}
+	                >
+	                  <div className={styles.messageGroup}>
 	                  {messages.map((msg, index) => {
 	                    const assistantText = msg.role === 'assistant'
 	                      ? getAssistantRenderableText(msg)
@@ -1813,6 +1857,7 @@ export default function Home() {
 	                                artifacts={msg.artifacts}
 	                                sessionId={currentSessionId}
 	                                messageId={msg.id}
+                                  onPreviewArtifact={handlePreviewArtifact}
 	                              />
 	                            )}
 	                            {/* AI 消息操作按钮 - 只在流式输出完成后显示 */}
@@ -1891,8 +1936,17 @@ export default function Home() {
                     </div>
                   );
                   })}
-                  <div ref={messagesEndRef} />
+                    <div ref={messagesEndRef} />
+                  </div>
                 </div>
+                {activeArtifactPreview ? (
+                  <div className={styles.previewPane}>
+                    <ChatArtifactPreviewPane
+                      preview={activeArtifactPreview}
+                      onClose={() => setActiveArtifactPreview(null)}
+                    />
+                  </div>
+                ) : null}
               </div>
 
               {renderComposer('继续对话...', kbButtonRef2, true)}

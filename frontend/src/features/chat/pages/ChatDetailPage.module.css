@@ -32,6 +32,18 @@
   overflow: hidden;
 }
 
+.chatWorkspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.chatWorkspaceSplit {
+  gap: 0;
+}
+
 /* Header */
 .header {
   height: 60px;
@@ -89,12 +101,47 @@
 .messagesContainer {
   flex: 1;
   min-height: 0; /* 关键：允许 flex 子项收缩 */
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 20px;
+  padding: 4px 20px 20px;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end; /* 消息从底部开始堆叠 */
+  justify-content: flex-start;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--border) 58%, transparent) transparent;
+}
+
+.messagesContainer::-webkit-scrollbar {
+  width: 8px;
+}
+
+.messagesContainer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messagesContainer::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border) 56%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.messagesContainer::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 28%, var(--border) 72%);
+}
+
+.previewPane {
+  width: min(48vw, 720px);
+  min-width: 360px;
+  max-width: 50%;
+  min-height: 0;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.58), transparent 36%),
+    linear-gradient(180deg, rgba(244, 247, 251, 0.94), rgba(235, 240, 246, 0.9));
+  backdrop-filter: blur(10px);
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.3);
 }
 
 .userMessage {
@@ -544,6 +591,17 @@
 
   .messagesContainer {
     padding: 16px;
+  }
+
+  .chatWorkspace {
+    flex-direction: column;
+  }
+
+  .previewPane {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    min-height: 320px;
   }
 
   .messageContent {
