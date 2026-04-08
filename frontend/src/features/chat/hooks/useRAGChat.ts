@@ -745,6 +745,30 @@ const stringifyAssistantTupleMessages = (
   }).join('|');
 };
 
+const stringifyAssistantTupleMessagesForEquivalence = (
+  tupleMessages: AssistantTupleMessage[] | undefined,
+): string => {
+  if (!tupleMessages || tupleMessages.length === 0) {
+    return '';
+  }
+
+  return tupleMessages.map((message) => {
+    const toolCalls = (message.tool_calls || []).map((toolCall, index) => ({
+      id: toolCall.id || `${toolCall.name}:${index}`,
+      name: toolCall.name,
+      args: toolCall.args,
+    }));
+    return JSON.stringify({
+      type: message.type,
+      content: message.content || '',
+      tool_calls: toolCalls,
+      tool_call_id: message.tool_call_id || '',
+      name: message.name || '',
+      status: message.status || '',
+    });
+  }).join('|');
+};
+
 const getMessageRichnessScore = (message: Message): number => {
   const tupleText = stringifyAssistantTupleMessages(message.assistantTupleMessages);
   const toolTraceText = stringifyToolTraces(message.toolTraces);
@@ -1199,7 +1223,10 @@ const areMessagesEquivalent = (left: Message, right: Message): boolean => {
   if (stringifyToolTraces(left.toolTraces) !== stringifyToolTraces(right.toolTraces)) {
     return false;
   }
-  if (stringifyAssistantTupleMessages(left.assistantTupleMessages) !== stringifyAssistantTupleMessages(right.assistantTupleMessages)) {
+  if (
+    stringifyAssistantTupleMessagesForEquivalence(left.assistantTupleMessages)
+    !== stringifyAssistantTupleMessagesForEquivalence(right.assistantTupleMessages)
+  ) {
     return false;
   }
   if (stringifyInterruption(left.interruption) !== stringifyInterruption(right.interruption)) {
@@ -2361,6 +2388,7 @@ export function useRAGChat(options: UseRAGChatOptions) {
           if (!normalizedRun) {
             return;
           }
+          const previousAssistantMessageId = assistantMessage.id;
           assistantMessage.id = normalizedRun.assistantMessage.id;
           assistantMessage.content = normalizedRun.assistantMessage.content;
           assistantMessage.thinking = normalizedRun.assistantMessage.thinking;
@@ -2375,6 +2403,11 @@ export function useRAGChat(options: UseRAGChatOptions) {
           const nextTaskModeDecision = buildTaskModeDecisionStateFromHistory(normalizedRun.taskModeDecisionEvent);
           updateSessionRuntimeState(runtime, (current) => ({
             ...current,
+            messages: current.messages.map((message) => (
+              message.id === previousAssistantMessageId
+                ? { ...assistantMessage }
+                : message
+            )),
             activeRun: normalizedRun,
             taskSnapshot: nextTaskSnapshot || current.taskSnapshot,
             taskModeDecision: nextTaskModeDecision || current.taskModeDecision,
