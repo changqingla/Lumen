@@ -44,6 +44,14 @@
   gap: 0;
 }
 
+.chatWorkspaceSplit > .messagesContainer,
+.chatWorkspaceSplit > .previewPane {
+  flex: 1 1 50%;
+  width: 50%;
+  max-width: 50%;
+  min-width: 0;
+}
+
 /* Header */
 .header {
   height: 60px;
@@ -132,9 +140,10 @@
 }
 
 .previewPane {
-  width: min(48vw, 720px);
-  min-width: 360px;
+  flex: 1 1 50%;
+  width: 50%;
   max-width: 50%;
+  min-width: 0;
   min-height: 0;
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.58), transparent 36%),

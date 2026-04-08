@@ -3,15 +3,17 @@
  * 支持预览：
  * - DOCX: 使用 mammoth 转换为 HTML（支持图片）
  * - DOC: 显示不支持提示，降级显示 markdown 内容
+ * - PPTX: 转换为 HTML 幻灯片
  * - TXT: 直接显示文本内容
  * - MD: 使用 Markdown 渲染
  */
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { FileText, Star, X, Loader2 } from 'lucide-react';
+import { pptxToHtml } from '@jvmr/pptx-to-html';
 import OptimizedMarkdown from '@/shared/components/OptimizedMarkdown';
 import styles from './DocumentViewer.module.css';
 
-type PreviewType = 'docx' | 'doc' | 'txt' | 'md';
+type PreviewType = 'docx' | 'doc' | 'txt' | 'md' | 'pptx';
 
 interface DocumentViewerProps {
   url: string;  // 原文件的 URL
@@ -36,6 +38,7 @@ export default function DocumentViewer({
   const [error, setError] = useState<string>('');
   const [htmlContent, setHtmlContent] = useState<string>('');
   const [textContent, setTextContent] = useState<string>('');
+  const [pptxSlides, setPptxSlides] = useState<string[]>([]);
   const [selectedText, setSelectedText] = useState<string>('');
   const [showAddButton, setShowAddButton] = useState<boolean>(false);
   const [buttonPosition, setButtonPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -53,6 +56,8 @@ export default function DocumentViewer({
       case 'md':
       case 'markdown':
         return 'md';
+      case 'pptx':
+        return 'pptx';
       default:
         return 'txt';
     }
@@ -91,6 +96,7 @@ export default function DocumentViewer({
       setError('');
       setHtmlContent('');
       setTextContent('');
+      setPptxSlides([]);
 
       try {
         const response = await fetch(url, { signal: controller.signal });
@@ -100,7 +106,25 @@ export default function DocumentViewer({
 
         const blob = await response.blob();
 
-        if (previewType === 'docx' || previewType === 'doc') {
+        if (previewType === 'pptx') {
+          const arrayBuffer = await blob.arrayBuffer();
+          if (!isActive) {
+            return;
+          }
+
+          const slidesHtml = await pptxToHtml(arrayBuffer, {
+            width: 960,
+            height: 540,
+            scaleToFit: true,
+            letterbox: true,
+          });
+
+          if (!isActive) {
+            return;
+          }
+
+          setPptxSlides(slidesHtml);
+        } else if (previewType === 'docx' || previewType === 'doc') {
           // 检查是否为 ZIP 格式（真正的 docx）
           const isZip = await isZipLikeBlob(blob);
           if (!isActive) {
@@ -278,6 +302,22 @@ export default function DocumentViewer({
           className={styles.docContent}
           dangerouslySetInnerHTML={{ __html: htmlContent }}
         />
+      );
+    }
+
+    if (pptxSlides.length > 0) {
+      return (
+        <div className={styles.pptxDeck}>
+          {pptxSlides.map((slideHtml, index) => (
+            <section key={`pptx-slide-${index}`} className={styles.pptxSlideFrame}>
+              <div className={styles.pptxSlideMeta}>第 {index + 1} 页</div>
+              <div
+                className={styles.pptxSlide}
+                dangerouslySetInnerHTML={{ __html: slideHtml }}
+              />
+            </section>
+          ))}
+        </div>
       );
     }
 

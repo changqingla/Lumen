@@ -4,6 +4,7 @@
   --lumen-page-border: #dce1e8;
   --lumen-page-border-strong: #cfd6e1;
   --lumen-page-muted: #6b7280;
+  --home-chat-top-offset: 25px;
 
   height: 100vh;
   height: 100dvh;
@@ -35,6 +36,14 @@
 
 .chatWorkspaceSplit {
   gap: 0;
+}
+
+.chatWorkspaceSplit > .messagesArea,
+.chatWorkspaceSplit > .previewPane {
+  flex: 1 1 50%;
+  width: 50%;
+  max-width: 50%;
+  min-width: 0;
 }
 
 .overlay {
@@ -1319,6 +1328,10 @@
 
 /* 移动端适配 */
 @media (max-width: 768px) and (pointer: coarse) {
+  .home {
+    --home-chat-top-offset: 57px;
+  }
+
   .sidebarContainer {
     position: fixed;
     top: 0;
@@ -1708,7 +1721,7 @@
 /* 聊天区域主容器 - 使用绝对定位固定尺寸，防止流式传输时容器位置偏移 */
 .chatContainer {
   position: absolute;
-  top: 75px;
+  top: var(--home-chat-top-offset);
   left: 0;
   right: 0;
   bottom: 0;
@@ -1771,9 +1784,10 @@
 }
 
 .previewPane {
-  width: min(48vw, 720px);
-  min-width: 360px;
+  flex: 1 1 50%;
+  width: 50%;
   max-width: 50%;
+  min-width: 0;
   min-height: 0;
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.58), transparent 36%),

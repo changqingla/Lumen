@@ -16,6 +16,7 @@
     "web:check": "tsc --project frontend/tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@jvmr/pptx-to-html": "^1.0.1",
     "lucide-react": "^0.511.0",
     "mammoth": "^1.11.0",
     "pdfjs-dist": "^5.4.394",

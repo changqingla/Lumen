@@ -20,6 +20,7 @@ export default function ChatArtifactPreviewPane({
     preview.previewType === 'md'
     || preview.previewType === 'txt'
     || preview.previewType === 'docx'
+    || preview.previewType === 'pptx'
   ) {
     return (
       <aside className={styles.previewPane}>

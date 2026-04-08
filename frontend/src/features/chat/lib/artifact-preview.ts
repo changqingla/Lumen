@@ -1,6 +1,6 @@
 import type { ChatArtifact } from '@/shared/api/client';
 
-export type ArtifactPreviewType = 'docx' | 'txt' | 'md' | 'html' | 'unsupported';
+export type ArtifactPreviewType = 'docx' | 'txt' | 'md' | 'html' | 'pptx' | 'unsupported';
 
 export interface ChatArtifactPreviewTarget {
   sessionId: string;
@@ -36,6 +36,9 @@ export const getArtifactPreviewType = (fileName: string): ArtifactPreviewType =>
   }
   if (extension === 'html' || extension === 'htm') {
     return 'html';
+  }
+  if (extension === 'pptx') {
+    return 'pptx';
   }
   return 'unsupported';
 };
