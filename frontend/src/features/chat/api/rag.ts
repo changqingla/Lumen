@@ -878,6 +878,7 @@ class RAGAPIClient {
       Object.entries(handlers.resumeState?.toolResultContentByCallId || {}),
     );
     const taskLabelByTaskId = new Map<string, string>();
+    let hasObservedMessagesEvent = false;
     let buffer = '';
     let eventName = 'message';
     let dataLines: string[] = [];
@@ -908,6 +909,7 @@ class RAGAPIClient {
 
       scopedMessages.forEach((message) => {
         if (message.type === 'ai') {
+          const shouldEmitAiContent = !fromValuesSnapshot || !hasObservedMessagesEvent;
           (message.tool_calls || []).forEach((toolCall, toolIndex) => {
             extractPresentFileArtifacts(toolCall, handlers.sessionId).forEach((artifact) => {
               if (seenArtifactPaths.has(artifact.object_path)) {
@@ -938,7 +940,7 @@ class RAGAPIClient {
 
           const nextThinking = message.thinking || '';
           const previousThinking = lastAiThinkingByMessageId.get(message.id) || '';
-          if (nextThinking !== previousThinking) {
+          if (shouldEmitAiContent && nextThinking !== previousThinking) {
             const thinkingDelta = nextThinking.startsWith(previousThinking)
               ? nextThinking.slice(previousThinking.length)
               : nextThinking;
@@ -950,6 +952,10 @@ class RAGAPIClient {
 
           const nextContent = message.content || '';
           const previousContent = lastAiContentByMessageId.get(message.id) || '';
+          if (!shouldEmitAiContent) {
+            lastAiContentByMessageId.set(message.id, nextContent);
+            return;
+          }
           if (nextContent === previousContent) {
             return;
           }
@@ -1182,6 +1188,7 @@ class RAGAPIClient {
       }
 
       if (normalizedEventName === 'messages') {
+        hasObservedMessagesEvent = true;
         emitRuntimeMessages(parsed);
         return false;
       }
