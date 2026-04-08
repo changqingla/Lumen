@@ -96,7 +96,7 @@ class InsightRuntimeService:
             # Different sessions should run concurrently, but the same thread
             # should fail fast instead of silently queueing behind an active run.
             "multitask_strategy": "reject",
-            "stream_mode": ["messages", "values", "custom"],
+            "stream_mode": ["messages-tuple", "values", "custom"],
             "context": {
                 "thread_id": normalized_thread_id,
                 "model_name": model_name,
