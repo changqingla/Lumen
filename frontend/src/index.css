@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -21,6 +23,24 @@
   --danger: #ef4444;
   --chip-bg: #eef2ff;
   --chip-border: #e0e7ff;
+  --font-headline: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --color-background: #0b1326;
+  --color-primary: #c0c1ff;
+  --color-secondary: #4cd7f6;
+  --color-tertiary: #ddb7ff;
+  --color-surface: #0b1326;
+  --color-surface-container: #171f33;
+  --color-surface-container-low: #131b2e;
+  --color-surface-container-lowest: #0a1020;
+  --color-surface-container-high: #222a3d;
+  --color-surface-container-highest: #2d3449;
+  --color-on-surface: #dae2fd;
+  --color-on-surface-variant: #c7c4d8;
+  --color-outline-variant: #464555;
+  --color-primary-container: #4b4dd8;
+  --color-secondary-container: #03b5d3;
+  --color-tertiary-container: #862dd4;
   color-scheme: light;
 }
 
@@ -159,4 +179,28 @@ html.dark .react-pdf__Page__canvas {
 
 .glass-input::placeholder {
   color: rgba(255, 255, 255, 0.3);
+}
+
+@layer utilities {
+  .glass-panel {
+    background: rgba(23, 31, 51, 0.7);
+    backdrop-filter: blur(24px);
+  }
+
+  .hero-gradient {
+    background: linear-gradient(135deg, #4b4dd8 0%, #03b5d3 100%);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 20px rgba(192, 193, 255, 0.3);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }
