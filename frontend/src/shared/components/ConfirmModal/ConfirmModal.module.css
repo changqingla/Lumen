@@ -1,0 +1,284 @@
+/* 遮罩层 */
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3200;
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 弹窗主体 */
+.modal {
+  background: var(--surface);
+  border-radius: 24px;
+  width: 90%;
+  max-width: 400px;
+  padding: 40px 32px 32px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 
+    0 10px 40px -10px rgba(0, 0, 0, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes scaleIn {
+  from { 
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  to { 
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* 图标区域 */
+.iconContainer {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modalIcon {
+  position: relative;
+  z-index: 2;
+  stroke-width: 1.5px;
+}
+
+/* 背景光晕 */
+.iconBlob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  z-index: 1;
+  filter: blur(16px);
+  opacity: 0.4;
+  animation: blobPulse 3s infinite alternate ease-in-out;
+}
+
+@keyframes blobPulse {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; }
+  100% { transform: translate(-50%, -50%) scale(1.15); opacity: 0.5; }
+}
+
+/* 不同类型的颜色主题 */
+/* Warning */
+.warning .modalIcon { color: #d97706; }
+.warning .iconBlob { background: radial-gradient(circle, #fcd34d 0%, #f59e0b 100%); }
+
+/* Danger */
+.danger .modalIcon { color: #ef4444; }
+.danger .iconBlob { background: radial-gradient(circle, #fca5a5 0%, #ef4444 100%); }
+
+/* Info */
+.info .modalIcon { color: #3b82f6; }
+.info .iconBlob { background: radial-gradient(circle, #93c5fd 0%, #3b82f6 100%); }
+
+/* Success */
+.success .modalIcon { color: #10b981; }
+.success .iconBlob { background: radial-gradient(circle, #6ee7b7 0%, #10b981 100%); }
+
+
+/* 文本内容 */
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 12px 0;
+  letter-spacing: -0.01em;
+}
+
+.message {
+  font-size: 15px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin: 0 0 32px 0;
+}
+
+/* 按钮组 */
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.btnCancel,
+.btnConfirm {
+  flex: 1;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* 取消按钮 */
+.btnCancel {
+  background: var(--bg-elev-1);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.btnCancel:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.btnCancel:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 确认按钮 - 基础样式 */
+.btnConfirm {
+  color: white;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.btnConfirm:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+}
+
+.btnConfirm:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 确认按钮 - 类型特定的渐变背景 (日间模式) */
+.btn-warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.25);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+}
+
+.btn-info {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+}
+
+.btn-success {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+}
+
+/* 确认按钮 - 微光效果 */
+.btnConfirm::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 100%);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.btnConfirm:hover::before {
+  opacity: 1;
+}
+
+/* === 夜间模式适配 === */
+/* 夜间模式下，确认按钮改为半透明背景 + 柔和边框，避免刺眼 */
+
+:global(.dark) .btnConfirm {
+  box-shadow: none;
+  background: transparent;
+  border-width: 1px;
+  border-style: solid;
+}
+
+:global(.dark) .btn-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+:global(.dark) .btn-warning:not(:disabled):hover {
+  background: rgba(245, 158, 11, 0.25);
+}
+
+:global(.dark) .btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+:global(.dark) .btn-danger:not(:disabled):hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+:global(.dark) .btn-info {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+:global(.dark) .btn-info:not(:disabled):hover {
+  background: rgba(59, 130, 246, 0.25);
+}
+
+:global(.dark) .btn-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+:global(.dark) .btn-success:not(:disabled):hover {
+  background: rgba(16, 185, 129, 0.25);
+}
+
+
+/* Loading spinner */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  opacity: 0.8;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 夜间模式特定微调 */
+:global(.dark) .modal {
+  border: 1px solid var(--border);
+}

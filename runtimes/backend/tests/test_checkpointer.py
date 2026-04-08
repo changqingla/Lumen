@@ -1,0 +1,341 @@
+"""Unit tests for checkpointer config and singleton factory."""
+
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
+
+from src.agents.checkpointer import get_checkpointer, reset_checkpointer
+from src.agents.checkpointer.async_provider import (
+    _normalize_string_values,
+    _select_checkpoint_keys_for_run_ids,
+    _select_latest_checkpoints_per_namespace,
+    _select_prunable_checkpoint_keys,
+)
+from src.config.checkpointer_config import (
+    CheckpointerConfig,
+    get_checkpointer_config,
+    load_checkpointer_config_from_dict,
+    set_checkpointer_config,
+)
+
+
+@pytest.fixture(autouse=True)
+def reset_state():
+    """Reset singleton state before each test."""
+    from src.config import app_config as app_config_module
+
+    app_config_module._app_config = None
+    set_checkpointer_config(None)
+    reset_checkpointer()
+    yield
+    app_config_module._app_config = None
+    set_checkpointer_config(None)
+    reset_checkpointer()
+
+
+# ---------------------------------------------------------------------------
+# Config tests
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpointerConfig:
+    def test_load_memory_config(self):
+        load_checkpointer_config_from_dict({"type": "memory"})
+        config = get_checkpointer_config()
+        assert config is not None
+        assert config.type == "memory"
+        assert config.connection_string is None
+
+    def test_load_postgres_config(self):
+        load_checkpointer_config_from_dict({"type": "postgres", "connection_string": "postgresql://localhost/db"})
+        config = get_checkpointer_config()
+        assert config is not None
+        assert config.type == "postgres"
+        assert config.connection_string == "postgresql://localhost/db"
+
+    def test_default_connection_string_is_none(self):
+        config = CheckpointerConfig(type="memory")
+        assert config.connection_string is None
+
+    def test_set_config_to_none(self):
+        load_checkpointer_config_from_dict({"type": "memory"})
+        set_checkpointer_config(None)
+        assert get_checkpointer_config() is None
+
+    def test_invalid_type_raises(self):
+        with pytest.raises(Exception):
+            load_checkpointer_config_from_dict({"type": "unknown"})
+
+    def test_sqlite_type_is_rejected(self):
+        with pytest.raises(Exception):
+            load_checkpointer_config_from_dict({"type": "sqlite", "connection_string": "/tmp/test.db"})
+
+
+class TestAsyncMaintenanceHelpers:
+    @staticmethod
+    def _make_checkpoint_tuple(
+        checkpoint_id: str,
+        *,
+        checkpoint_ns: str = "",
+        run_id: str | None = None,
+    ) -> CheckpointTuple:
+        checkpoint = empty_checkpoint()
+        checkpoint["id"] = checkpoint_id
+        metadata = {}
+        if run_id is not None:
+            metadata["run_id"] = run_id
+        return CheckpointTuple(
+            {
+                "configurable": {
+                    "thread_id": "thread-a",
+                    "checkpoint_ns": checkpoint_ns,
+                    "checkpoint_id": checkpoint_id,
+                }
+            },
+            checkpoint,
+            metadata,
+        )
+
+    def test_normalize_string_values_deduplicates_and_drops_empty(self):
+        assert _normalize_string_values([" run-1 ", "", "run-2", "run-1", None]) == (  # type: ignore[list-item]
+            "run-1",
+            "run-2",
+        )
+
+    def test_select_checkpoint_keys_for_run_ids_matches_run_metadata(self):
+        rows = [
+            ("thread-a", "", "cp-1", b'{"run_id":"run-1"}'),
+            ("thread-a", "", "cp-2", b'{"run_id":"run-2"}'),
+            ("thread-b", "ns", "cp-3", b'{"run_id":"run-1"}'),
+            ("thread-c", "", "cp-4", b"not-json"),
+        ]
+
+        assert _select_checkpoint_keys_for_run_ids(rows, ["run-1"]) == [
+            ("thread-a", "", "cp-1"),
+            ("thread-b", "ns", "cp-3"),
+        ]
+
+    def test_select_prunable_checkpoint_keys_keeps_latest_per_namespace(self):
+        rows = [
+            ("thread-a", "", "cp-3"),
+            ("thread-a", "", "cp-2"),
+            ("thread-a", "", "cp-1"),
+            ("thread-a", "ns", "cp-5"),
+            ("thread-a", "ns", "cp-4"),
+            ("thread-b", "", "cp-2"),
+            ("thread-b", "", "cp-1"),
+        ]
+
+        assert _select_prunable_checkpoint_keys(rows, strategy="keep_latest") == [
+            ("thread-a", "", "cp-2"),
+            ("thread-a", "", "cp-1"),
+            ("thread-a", "ns", "cp-4"),
+            ("thread-b", "", "cp-1"),
+        ]
+
+    def test_select_prunable_checkpoint_keys_delete_strategy_removes_all(self):
+        rows = [
+            ("thread-a", "", "cp-2"),
+            ("thread-a", "", "cp-1"),
+        ]
+
+        assert _select_prunable_checkpoint_keys(rows, strategy="delete") == rows
+
+    def test_select_latest_checkpoints_per_namespace_keeps_latest_only(self):
+        checkpoints = [
+            self._make_checkpoint_tuple("cp-1", checkpoint_ns=""),
+            self._make_checkpoint_tuple("cp-3", checkpoint_ns=""),
+            self._make_checkpoint_tuple("cp-2", checkpoint_ns=""),
+            self._make_checkpoint_tuple("cp-4", checkpoint_ns="images"),
+            self._make_checkpoint_tuple("cp-5", checkpoint_ns="images"),
+        ]
+
+        selected = _select_latest_checkpoints_per_namespace(checkpoints)
+
+        assert [
+            (
+                item.config["configurable"]["checkpoint_ns"],
+                item.config["configurable"]["checkpoint_id"],
+            )
+            for item in selected
+        ] == [
+            ("", "cp-3"),
+            ("images", "cp-5"),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Factory tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetCheckpointer:
+    def test_returns_in_memory_saver_when_not_configured(self):
+        """get_checkpointer should return InMemorySaver when not configured."""
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        with patch("src.agents.checkpointer.provider.get_app_config", side_effect=FileNotFoundError):
+            cp = get_checkpointer()
+        assert cp is not None
+        assert isinstance(cp, InMemorySaver)
+
+    def test_memory_returns_in_memory_saver(self):
+        load_checkpointer_config_from_dict({"type": "memory"})
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        cp = get_checkpointer()
+        assert isinstance(cp, InMemorySaver)
+
+    def test_memory_singleton(self):
+        load_checkpointer_config_from_dict({"type": "memory"})
+        cp1 = get_checkpointer()
+        cp2 = get_checkpointer()
+        assert cp1 is cp2
+
+    def test_reset_clears_singleton(self):
+        load_checkpointer_config_from_dict({"type": "memory"})
+        cp1 = get_checkpointer()
+        reset_checkpointer()
+        cp2 = get_checkpointer()
+        assert cp1 is not cp2
+
+    def test_postgres_raises_when_package_missing(self):
+        load_checkpointer_config_from_dict({"type": "postgres", "connection_string": "postgresql://localhost/db"})
+        with patch.dict(sys.modules, {"langgraph.checkpoint.postgres": None}):
+            reset_checkpointer()
+            with pytest.raises(ImportError, match="langgraph-checkpoint-postgres"):
+                get_checkpointer()
+
+    def test_postgres_raises_when_connection_string_missing(self):
+        load_checkpointer_config_from_dict({"type": "postgres"})
+        mock_saver = MagicMock()
+        mock_module = MagicMock()
+        mock_module.PostgresSaver = mock_saver
+        with patch.dict(sys.modules, {"langgraph.checkpoint.postgres": mock_module}):
+            reset_checkpointer()
+            with pytest.raises(ValueError, match="checkpointer\\.connection_string"):
+                get_checkpointer()
+
+    def test_postgres_creates_saver(self):
+        """Postgres checkpointer is created when packages are available."""
+        load_checkpointer_config_from_dict({"type": "postgres", "connection_string": "postgresql://localhost/db"})
+
+        mock_saver_instance = MagicMock()
+        from_conn_string_mock = MagicMock()
+
+        class FakePostgresSaver:
+            @classmethod
+            def from_conn_string(cls, connection_string):
+                from_conn_string_mock(connection_string)
+
+                class _ContextManager:
+                    def __enter__(self_inner):
+                        return mock_saver_instance
+
+                    def __exit__(self_inner, exc_type, exc, tb):
+                        return False
+
+                return _ContextManager()
+
+        mock_pg_module = MagicMock()
+        mock_pg_module.PostgresSaver = FakePostgresSaver
+
+        with patch.dict(sys.modules, {"langgraph.checkpoint.postgres": mock_pg_module}):
+            reset_checkpointer()
+            cp = get_checkpointer()
+
+        assert cp is mock_saver_instance
+        from_conn_string_mock.assert_called_once_with("postgresql://localhost/db")
+        mock_saver_instance.setup.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# app_config.py integration
+# ---------------------------------------------------------------------------
+
+
+class TestAppConfigLoadsCheckpointer:
+    def test_load_checkpointer_section(self):
+        """load_checkpointer_config_from_dict populates the global config."""
+        set_checkpointer_config(None)
+        load_checkpointer_config_from_dict({"type": "memory"})
+        cfg = get_checkpointer_config()
+        assert cfg is not None
+        assert cfg.type == "memory"
+
+
+# ---------------------------------------------------------------------------
+# InsightFlowClient falls back to config checkpointer
+# ---------------------------------------------------------------------------
+
+
+class TestClientCheckpointerFallback:
+    def test_client_uses_config_checkpointer_when_none_provided(self):
+        """InsightFlowClient._ensure_agent falls back to get_checkpointer() when checkpointer=None."""
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        from src.client import InsightFlowClient
+
+        load_checkpointer_config_from_dict({"type": "memory"})
+
+        captured_kwargs = {}
+
+        def fake_create_agent(**kwargs):
+            captured_kwargs.update(kwargs)
+            return MagicMock()
+
+        model_mock = MagicMock()
+        config_mock = MagicMock()
+        config_mock.models = [model_mock]
+        config_mock.get_model_config.return_value = MagicMock(supports_vision=False)
+        config_mock.checkpointer = None
+
+        with (
+            patch("src.client.get_app_config", return_value=config_mock),
+            patch("src.client.create_agent", side_effect=fake_create_agent),
+            patch("src.client.create_chat_model", return_value=MagicMock()),
+            patch("src.client._build_middlewares", return_value=[]),
+            patch("src.client.apply_prompt_template", return_value=""),
+            patch("src.client.InsightFlowClient._get_tools", return_value=[]),
+        ):
+            client = InsightFlowClient(checkpointer=None)
+            config = client._get_runnable_config("test-thread")
+            client._ensure_agent(config)
+
+        assert "checkpointer" in captured_kwargs
+        assert isinstance(captured_kwargs["checkpointer"], InMemorySaver)
+
+    def test_client_explicit_checkpointer_takes_precedence(self):
+        """An explicitly provided checkpointer is used even when config checkpointer is set."""
+        from src.client import InsightFlowClient
+
+        load_checkpointer_config_from_dict({"type": "memory"})
+
+        explicit_cp = MagicMock()
+        captured_kwargs = {}
+
+        def fake_create_agent(**kwargs):
+            captured_kwargs.update(kwargs)
+            return MagicMock()
+
+        model_mock = MagicMock()
+        config_mock = MagicMock()
+        config_mock.models = [model_mock]
+        config_mock.get_model_config.return_value = MagicMock(supports_vision=False)
+        config_mock.checkpointer = None
+
+        with (
+            patch("src.client.get_app_config", return_value=config_mock),
+            patch("src.client.create_agent", side_effect=fake_create_agent),
+            patch("src.client.create_chat_model", return_value=MagicMock()),
+            patch("src.client._build_middlewares", return_value=[]),
+            patch("src.client.apply_prompt_template", return_value=""),
+            patch("src.client.InsightFlowClient._get_tools", return_value=[]),
+        ):
+            client = InsightFlowClient(checkpointer=explicit_cp)
+            config = client._get_runnable_config("test-thread")
+            client._ensure_agent(config)
+
+        assert captured_kwargs["checkpointer"] is explicit_cp

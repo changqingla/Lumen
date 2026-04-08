@@ -1,17 +1,21 @@
 {
-  "name": "trae-project",
+  "name": "lumen",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview",
-    "check": "tsc -b --noEmit"
+    "dev": "npm run web:dev",
+    "build": "npm run web:build",
+    "lint": "npm run web:lint",
+    "preview": "npm run web:preview",
+    "check": "npm run web:check",
+    "web:dev": "vite --config frontend/vite.config.ts",
+    "web:build": "tsc --project frontend/tsconfig.json --noEmit && vite build --config frontend/vite.config.ts",
+    "web:lint": "cd frontend && ../node_modules/.bin/eslint --config eslint.config.js \"src/**/*.{ts,tsx}\"",
+    "web:preview": "vite preview --config frontend/vite.config.ts",
+    "web:check": "tsc --project frontend/tsconfig.json --noEmit"
   },
   "dependencies": {
-    "clsx": "^2.1.1",
     "lucide-react": "^0.511.0",
     "mammoth": "^1.11.0",
     "pdfjs-dist": "^5.4.394",
@@ -26,7 +30,6 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "tailwind-merge": "^3.0.2",
     "zustand": "^5.0.3"
   },
   "devDependencies": {

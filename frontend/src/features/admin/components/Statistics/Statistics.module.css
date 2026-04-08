@@ -1,0 +1,227 @@
+.container {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.loading {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--admin-text-muted, #64748b);
+  font-size: 16px;
+}
+
+.stateCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 24px;
+  background: var(--admin-surface, #fff);
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  border-radius: 16px;
+  color: #f87171;
+}
+
+.stateTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--admin-text-strong, #7f1d1d);
+}
+
+.stateDesc {
+  font-size: 13px;
+  color: var(--admin-text-muted, #b91c1c);
+  margin-top: 4px;
+}
+
+.refreshBtn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--admin-border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--admin-surface, #fff);
+  color: var(--admin-text, #334155);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.refreshBtn:hover:not(:disabled) {
+  border-color: var(--admin-border-strong, #cbd5e1);
+  background: var(--admin-surface-muted, #f8fafc);
+}
+
+.refreshBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+}
+
+.card {
+  background: var(--admin-surface, #fff);
+  border: 1px solid var(--admin-border, #e2e8f0);
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.cardIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.cardTitle {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--admin-text-strong, #0f172a);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.mainStat {
+  margin-bottom: 24px;
+}
+
+.mainNumber {
+  font-size: 48px;
+  font-weight: 900;
+  color: var(--admin-text-strong, #0f172a);
+  line-height: 1;
+  margin-bottom: 8px;
+  letter-spacing: -0.03em;
+}
+
+.mainLabel {
+  font-size: 14px;
+  color: var(--admin-text-muted, #64748b);
+  font-weight: 600;
+}
+
+.breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 20px;
+  border-top: 1px solid var(--admin-border, #f1f5f9);
+}
+
+.breakdownItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.breakdownLabel {
+  font-size: 13px;
+  color: var(--admin-text-muted, #64748b);
+  font-weight: 600;
+}
+
+.breakdownValue {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--admin-text, #1e293b);
+}
+
+.trendContent {
+  padding-top: 16px;
+}
+
+.trendItem {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--admin-border, #f1f5f9);
+}
+
+.trendItem:last-child {
+  border-bottom: none;
+}
+
+.trendLabel {
+  font-size: 13px;
+  color: var(--admin-text-muted, #64748b);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.trendValue {
+  font-size: 24px;
+  font-weight: 900;
+  color: #10b981;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 968px) and (pointer: coarse) {
+  .cards {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+
+  .mainNumber {
+    font-size: 40px;
+  }
+}
+
+@media (max-width: 768px) and (pointer: coarse) {
+  .actions {
+    justify-content: stretch;
+  }
+
+  .refreshBtn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .stateCard {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .cards {
+    grid-template-columns: 1fr;
+  }
+}

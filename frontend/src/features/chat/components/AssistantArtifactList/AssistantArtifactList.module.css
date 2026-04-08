@@ -1,0 +1,84 @@
+.artifactList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.artifactCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.artifactInfo {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.artifactIcon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.artifactMeta {
+  min-width: 0;
+}
+
+.artifactName {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.artifactSubMeta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.artifactDownloadButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+  flex-shrink: 0;
+}
+
+.artifactDownloadButton:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.artifactDownloadButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (max-width: 640px) {
+  .artifactCard {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .artifactDownloadButton {
+    width: 100%;
+    justify-content: center;
+  }
+}

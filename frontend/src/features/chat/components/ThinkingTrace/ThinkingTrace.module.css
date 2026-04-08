@@ -1,0 +1,174 @@
+.trace {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  white-space: normal;
+  color: var(--text);
+}
+
+.textBlock {
+  border-left: 2px solid var(--border-light);
+  padding-left: 10px;
+  color: var(--text-muted);
+}
+
+.textMarkdown {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.textMarkdown p {
+  margin: 0;
+}
+
+.textMarkdown p + p {
+  margin-top: 6px;
+}
+
+.textMarkdown ul,
+.textMarkdown ol {
+  margin: 6px 0;
+}
+
+.toolGroup {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev-1);
+  overflow: hidden;
+}
+
+.toolGroupSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.toolGroupSummary::-webkit-details-marker {
+  display: none;
+}
+
+.toolGroupTitle {
+  letter-spacing: 0.02em;
+}
+
+.toolGroupMeta {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.toolItem {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.toolItemHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 10px;
+}
+
+.toolItemHeader::-webkit-details-marker {
+  display: none;
+}
+
+.toolTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolName {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolState {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.state_success {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.state_error {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.state_running {
+  color: #334155;
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+
+.toolBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+
+.foldPanel {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-elev-1);
+}
+
+.foldSummary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 6px 8px;
+  user-select: none;
+}
+
+.foldSummary::-webkit-details-marker {
+  display: none;
+}
+
+.codeLike {
+  margin: 0;
+  padding: 0 8px 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

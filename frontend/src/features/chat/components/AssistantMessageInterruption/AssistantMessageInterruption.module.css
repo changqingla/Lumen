@@ -1,0 +1,11 @@
+.notice {
+  margin: 6px 0 0;
+  max-width: min(720px, 100%);
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b42318;
+}
+
+:global(.dark) .notice {
+  color: #fca5a5;
+}

@@ -1,0 +1,155 @@
+{
+  "mime_exact_view_type": {
+    "text/markdown": "markdown",
+    "application/json": "json",
+    "application/ld+json": "text",
+    "application/xml": "text",
+    "application/yaml": "text",
+    "application/x-yaml": "text",
+    "application/toml": "text",
+    "application/javascript": "text",
+    "application/x-javascript": "text",
+    "application/typescript": "text",
+    "text/csv": "table_text",
+    "application/csv": "table_text",
+    "text/tab-separated-values": "table_text",
+    "application/pdf": "pdf",
+    "application/msword": "office_document",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "office_document",
+    "application/vnd.oasis.opendocument.text": "office_document",
+    "application/vnd.ms-powerpoint": "presentation",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "presentation",
+    "application/vnd.oasis.opendocument.presentation": "presentation",
+    "application/vnd.ms-excel": "spreadsheet",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "spreadsheet",
+    "application/vnd.oasis.opendocument.spreadsheet": "spreadsheet",
+    "application/zip": "archive",
+    "application/x-zip-compressed": "archive",
+    "application/x-7z-compressed": "archive",
+    "application/x-rar-compressed": "archive",
+    "application/gzip": "archive",
+    "application/x-tar": "archive"
+  },
+  "suffix_view_type": {
+    ".txt": "text",
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".rst": "text",
+    ".json": "json",
+    ".jsonl": "json",
+    ".csv": "table_text",
+    ".tsv": "table_text",
+    ".html": "text",
+    ".htm": "text",
+    ".xml": "text",
+    ".yaml": "text",
+    ".yml": "text",
+    ".toml": "text",
+    ".ini": "text",
+    ".cfg": "text",
+    ".log": "text",
+    ".sql": "text",
+    ".py": "text",
+    ".js": "text",
+    ".ts": "text",
+    ".css": "text",
+    ".java": "text",
+    ".c": "text",
+    ".cpp": "text",
+    ".h": "text",
+    ".hpp": "text",
+    ".go": "text",
+    ".rs": "text",
+    ".sh": "text",
+    ".pdf": "pdf",
+    ".doc": "office_document",
+    ".docx": "office_document",
+    ".odt": "office_document",
+    ".ppt": "presentation",
+    ".pptx": "presentation",
+    ".odp": "presentation",
+    ".xls": "spreadsheet",
+    ".xlsx": "spreadsheet",
+    ".ods": "spreadsheet",
+    ".zip": "archive",
+    ".7z": "archive",
+    ".rar": "archive",
+    ".gz": "archive",
+    ".tar": "archive"
+  },
+  "mime_prefix_view_type": {
+    "text/": "text",
+    "image/": "image",
+    "audio/": "audio",
+    "video/": "video"
+  },
+  "available_views_by_view_type": {
+    "text": [
+      "text"
+    ],
+    "markdown": [
+      "text"
+    ],
+    "json": [
+      "text"
+    ],
+    "table_text": [
+      "text"
+    ],
+    "image": [
+      "vision"
+    ]
+  },
+  "capabilities_by_view_type": {
+    "text": [
+      "read_text"
+    ],
+    "markdown": [
+      "read_text"
+    ],
+    "json": [
+      "read_text"
+    ],
+    "table_text": [
+      "read_text"
+    ],
+    "image": [
+      "vision_read",
+      "image_transform"
+    ],
+    "pdf": [
+      "extract_text",
+      "sandbox_process"
+    ],
+    "office_document": [
+      "document_structure_inspect",
+      "style_inspect",
+      "sandbox_process"
+    ],
+    "presentation": [
+      "slide_structure_inspect",
+      "presentation_edit",
+      "sandbox_process"
+    ],
+    "spreadsheet": [
+      "table_inspect",
+      "data_transform",
+      "sandbox_process"
+    ],
+    "archive": [
+      "archive_extract",
+      "sandbox_process"
+    ],
+    "audio": [
+      "audio_transcribe",
+      "sandbox_process"
+    ],
+    "video": [
+      "video_inspect",
+      "sandbox_process"
+    ],
+    "binary": [
+      "sandbox_process"
+    ]
+  }
+}

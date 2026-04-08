@@ -1,0 +1,434 @@
+# lumen 应用配置
+#
+# 使用指南：
+# - 将此文件复制为 `config.yaml`，并按你的环境进行定制
+# - 该配置文件默认路径为当前工作目录下的 `config.yaml`。
+#   也可以通过 `LUMEN_CONFIG_PATH` 环境变量指定其他路径。
+# - 所有字段值都支持环境变量。示例：`api_key: $OPENAI_API_KEY`
+# - `use` 路径是一个字符串，格式类似："package_name.sub_package_name.module_name:class_name/variable_name"。
+
+# ============================================================================
+# 模型配置
+# ============================================================================
+# 配置 Agent 可用的 LLM 模型
+
+models:
+  - name: xiaomi/mimo-v2-pro
+    display_name: Xiaomi MiMo V2 Pro
+    use: langchain_openai:ChatOpenAI
+    model: xiaomi/mimo-v2-pro
+    base_url: https://openrouter.ai/api/v1
+    api_key: $OPENROUTER_API_KEY
+    timeout: 240
+    supports_thinking: true
+    supports_vision: false
+    when_thinking_enabled:
+      extra_body:
+        thinking:
+          type: enabled
+
+  # 示例：Volcengine（Doubao）模型
+  # - name: doubao-seed-1.8
+  #   display_name: Doubao-Seed-1.8
+  #   use: src.models.patched_deepseek:PatchedChatDeepSeek
+  #   model: doubao-seed-1-8-251228
+  #   api_base: https://ark.cn-beijing.volces.com/api/v3
+  #   api_key: $VOLCENGINE_API_KEY
+  #   supports_thinking: true
+  #   supports_vision: true
+  #   supports_reasoning_effort: true
+  #   when_thinking_enabled:
+  #     extra_body:
+  #       thinking:
+  #         type: enabled
+
+  # 示例：OpenAI 模型
+  # - name: gpt-4
+  #   display_name: GPT-4
+  #   use: langchain_openai:ChatOpenAI
+  #   model: gpt-4
+  #   api_key: $OPENAI_API_KEY # 使用环境变量
+  #   max_tokens: 4096
+  #   temperature: 0.7
+  #   supports_vision: true # 为 view_image 工具启用视觉能力
+
+  # 示例：Anthropic Claude 模型
+  # - name: claude-3-5-sonnet
+  #   display_name: Claude 3.5 Sonnet
+  #   use: langchain_anthropic:ChatAnthropic
+  #   model: claude-3-5-sonnet-20241022
+  #   api_key: $ANTHROPIC_API_KEY
+  #   max_tokens: 8192
+  #   supports_vision: true  # 为 view_image 工具启用视觉能力
+  #   when_thinking_enabled:
+  #     thinking:
+  #       type: enabled
+
+  # 示例：Google Gemini 模型
+  # - name: gemini-2.5-pro
+  #   display_name: Gemini 2.5 Pro
+  #   use: langchain_google_genai:ChatGoogleGenerativeAI
+  #   model: gemini-2.5-pro
+  #   google_api_key: $GOOGLE_API_KEY
+  #   max_tokens: 8192
+  #   supports_vision: true
+
+  # 示例：DeepSeek 模型（支持思考）
+  # - name: deepseek-v3
+  #   display_name: DeepSeek V3 (Thinking)
+  #   use: src.models.patched_deepseek:PatchedChatDeepSeek
+  #   model: deepseek-reasoner
+  #   api_key: $DEEPSEEK_API_KEY
+  #   max_tokens: 16384
+  #   supports_thinking: true
+  #   supports_vision: false  # DeepSeek V3 不支持视觉
+  #   when_thinking_enabled:
+  #     extra_body:
+  #       thinking:
+  #         type: enabled
+
+  # 示例：Kimi K2.5 模型
+  # - name: kimi-k2.5
+  #   display_name: Kimi K2.5
+  #   use: src.models.patched_deepseek:PatchedChatDeepSeek
+  #   model: kimi-k2.5
+  #   api_base: https://api.moonshot.cn/v1
+  #   api_key: $MOONSHOT_API_KEY
+  #   max_tokens: 32768
+  #   supports_thinking: true
+  #   supports_vision: true  # 请以具体模型能力为准
+  #   when_thinking_enabled:
+  #     extra_body:
+  #       thinking:
+  #         type: enabled
+
+  # 示例：Novita AI（兼容 OpenAI）
+  # Novita 提供兼容 OpenAI 的 API，且定价具有竞争力
+  # 参考：https://novita.ai
+  # - name: novita-deepseek-v3.2
+  #   display_name: Novita DeepSeek V3.2
+  #   use: langchain_openai:ChatOpenAI
+  #   model: deepseek/deepseek-v3.2
+  #   api_key: $NOVITA_API_KEY
+  #   base_url: https://api.novita.ai/openai
+  #   max_tokens: 4096
+  #   temperature: 0.7
+  #   supports_thinking: true
+  #   supports_vision: true
+  #   when_thinking_enabled:
+  #     extra_body:
+  #       thinking:
+  #         type: enabled
+
+# ============================================================================
+# 工具组配置
+# ============================================================================
+# 定义工具分组，用于组织与访问控制
+
+tool_groups:
+  - name: web
+  - name: file:read
+  - name: file:write
+  - name: bash
+
+# ============================================================================
+# 工具配置
+# ============================================================================
+# 配置 Agent 可用的工具
+
+tools:
+  # Web 搜索工具（需要 Tavily API Key）
+  - name: web_search
+    group: web
+    use: src.community.tavily.tools:web_search_tool
+    max_results: 5
+    # api_key: $TAVILY_API_KEY  # 按需设置
+
+  # Web 搜索工具（需要 InfoQuest API Key）
+  # - name: web_search
+  #   group: web
+  #   use: src.community.infoquest.tools:web_search_tool
+  #   # 用于限制搜索结果范围，只返回指定时间区间内的内容。设为 -1 可关闭时间过滤
+  #   search_time_range: 10
+
+  # Web 抓取工具（使用 Jina AI reader）
+  - name: web_fetch
+    group: web
+    use: src.community.jina_ai.tools:web_fetch_tool
+    timeout: 10
+
+  # Web 抓取工具（使用 InfoQuest AI reader）
+  # - name: web_fetch
+  #   group: web
+  #   use: src.community.infoquest.tools:web_fetch_tool
+  #   # 整体抓取流程超时时间（秒）。设为正数启用，设为 -1 禁用
+  #   timeout: 10
+  #   # 页面加载后等待时间（秒）。设为正数启用，设为 -1 禁用
+  #   fetch_time: 10
+  #   # 页面导航超时时间（秒）。设为正数启用，设为 -1 禁用
+  #   navigation_timeout: 30
+
+  # 图片搜索工具（使用 DuckDuckGo）
+  # 可在图片生成前先检索参考图
+  - name: image_search
+    group: web
+    use: src.community.image_search.tools:image_search_tool
+    max_results: 5
+
+  # 文件操作工具
+  - name: ls
+    group: file:read
+    use: src.sandbox.tools:ls_tool
+
+  - name: read_file
+    group: file:read
+    use: src.sandbox.tools:read_file_tool
+
+  - name: write_file
+    group: file:write
+    use: src.sandbox.tools:write_file_tool
+
+  - name: str_replace
+    group: file:write
+    use: src.sandbox.tools:str_replace_tool
+
+  # Bash 执行工具
+  - name: bash
+    group: bash
+    use: src.sandbox.tools:bash_tool
+
+# ============================================================================
+# Agent Loop 配置
+# ============================================================================
+# 控制模型与工具往返过程中的运行时保护策略
+
+agent_loop:
+  # 在同一轮对话中，允许“同一工具 + 相同参数”被重复调用的最大次数。
+  # 超过后会触发 loop guard，阻止继续空转。
+  max_identical_tool_calls: 3
+
+# ============================================================================
+# 沙箱配置
+# ============================================================================
+# 在本地沙箱（直接执行）与基于 Docker 的 AIO 沙箱之间选择
+
+# 选项 1：本地沙箱
+# 直接在宿主机上执行命令
+# sandbox:
+#   use: src.sandbox.local:LocalSandboxProvider
+
+# 选项 2：容器化 AIO 沙箱（默认）
+# 在隔离容器中执行命令（Docker 或 Apple Container）
+# 在 macOS 上：若可用，优先使用 Apple Container，否则回退到 Docker
+# 在其他平台上：使用 Docker
+sandbox:
+  use: src.community.aio_sandbox:AioSandboxProvider
+
+#   # 注意：技能目录会自动从 skills.path 挂载到 skills.container_path
+#   # mounts:
+#   #   # 其他自定义挂载
+#   #   - host_path: /path/on/host
+#   #     container_path: /home/user/shared
+#   #     read_only: false
+#
+#   # 可选：注入到沙箱容器中的环境变量
+#   # 以 $ 开头的值会从宿主机环境变量解析
+#   # environment:
+#   #   NODE_ENV: production
+#   #   DEBUG: "false"
+#   #   API_KEY: $MY_API_KEY        # 读取宿主机的 MY_API_KEY 环境变量
+#   #   DATABASE_URL: $DATABASE_URL  # 读取宿主机的 DATABASE_URL 环境变量
+
+# 选项 3：由 Provisioner 管理的 AIO 沙箱（与根目录 docker/docker-compose.yml 协同）
+# 每个 sandbox_id 都会在 k3s 中获得一个由 provisioner 管理的独立 Pod。
+# 适合追求更高隔离性和可扩展性的生产或高级场景：
+# sandbox:
+#   use: src.community.aio_sandbox:AioSandboxProvider
+#   provisioner_url: http://provisioner:8002
+
+# ============================================================================
+# 子 Agent 配置
+# ============================================================================
+# 配置子 Agent 执行超时
+# 子 Agent 是由主 Agent 委派任务的后台工作单元
+
+# subagents:
+#   # 所有子 Agent 的默认超时时间（秒）（默认：900 = 15 分钟）
+#   timeout_seconds: 900
+#
+#   # 可选：按 Agent 覆盖超时
+#   agents:
+#     general-purpose:
+#       timeout_seconds: 1800  # 复杂多步骤任务可设为 30 分钟
+#     bash:
+#       timeout_seconds: 300   # 快速命令执行可设为 5 分钟
+
+# ============================================================================
+# 技能配置
+# ============================================================================
+# 为专用 Agent 工作流配置技能目录
+
+skills:
+  # 宿主机上的技能目录路径（可填相对项目根目录或绝对路径）
+  # 默认：../skills（相对于 backend 目录）
+  # 取消注释后可自定义：
+  # path: /absolute/path/to/custom/skills
+
+  # 技能在沙箱容器内的挂载路径
+  # Agent 会通过该路径在本地沙箱和 Docker 沙箱中访问技能
+  # 默认：/mnt/skills
+  container_path: /mnt/skills
+
+# ============================================================================
+# 标题生成配置
+# ============================================================================
+# 自动生成会话标题相关设置
+
+title:
+  enabled: true
+  max_words: 6
+  max_chars: 60
+  model_name: null # 使用默认模型（models 列表中的第一个）
+
+# ============================================================================
+# 摘要配置
+# ============================================================================
+# 当接近 token 上限时自动摘要历史对话
+# 这样可以在长对话中保持上下文，同时避免超出模型限制
+
+summarization:
+  enabled: true
+
+  # 用于摘要的模型（null = 使用默认模型）
+  # 推荐：使用轻量且成本较低的模型，如 "gpt-4o-mini" 或类似模型
+  model_name: null
+
+  # 触发条件：至少需要一个
+  # 满足任一阈值即触发摘要（OR 逻辑）
+  # 既可配置单个触发器，也可配置触发器列表
+  trigger:
+    # token 数达到 15564 时触发
+    - type: tokens
+      value: 15564
+    # 取消注释后，当消息数达到 50 也会触发
+    # - type: messages
+    #   value: 50
+    # 取消注释后，当达到模型最大输入 token 的 80% 时触发
+    # - type: fraction
+    #   value: 0.8
+
+  # 摘要后的上下文保留策略
+  # 指定要保留多少近期历史
+  keep:
+    # 保留最近 10 条消息（推荐）
+    type: messages
+    value: 10
+    # 备选：按 token 数保留
+    # type: tokens
+    # value: 3000
+    # 备选：按模型最大输入 token 的比例保留
+    # type: fraction
+    # value: 0.3
+
+  # 准备摘要输入时允许保留的最大 token 数
+  # 设为 null 表示不裁剪（不建议用于超长对话）
+  trim_tokens_to_summarize: 15564
+
+  # 自定义摘要提示模板（null = 使用默认 LangChain 提示）
+  # 提示词应引导模型提取关键信息上下文
+  summary_prompt: null
+
+# ============================================================================
+# 记忆配置
+# ============================================================================
+# 全局记忆机制
+# 为个性化回复存储用户上下文和对话历史
+memory:
+  enabled: true
+  storage_path: memory.json # 相对于 backend 目录的路径
+  debounce_seconds: 30 # 处理排队更新前的等待时间
+  model_name: null # 使用默认模型
+  max_facts: 100 # 最多存储的事实条数
+  fact_confidence_threshold: 0.7 # 事实存储的最低置信度
+  injection_enabled: true # 是否将记忆注入系统提示词
+  max_injection_tokens: 2000 # 记忆注入的最大 token 数
+
+# ============================================================================
+# Checkpointer 配置
+# ============================================================================
+# 为嵌入式 InsightFlowClient 配置状态持久化。
+# LangGraph Server 会通过其自身服务基础设施单独管理状态持久化
+# （该配置不会影响 LangGraph Server）。
+#
+# 配置后，InsightFlowClient 会自动使用该 checkpointer，
+# 使多轮对话在进程重启后仍可保持。
+#
+# 支持类型：
+#   memory   - 仅进程内存。进程退出后状态丢失。（默认）
+#   postgres - PostgreSQL 持久化，适用于多进程部署。
+#              依赖：uv add langgraph-checkpoint-postgres psycopg[binary] psycopg-pool
+#
+# 示例：
+#
+# 内存模式（省略时默认，无持久化）：
+# checkpointer:
+#   type: memory
+#
+# PostgreSQL（多进程，生产环境）：
+checkpointer:
+  type: $LUMEN_CHECKPOINTER_TYPE
+  connection_string: $LUMEN_CHECKPOINTER_CONNECTION_STRING
+
+# ============================================================================
+# IM 通道配置
+# ============================================================================
+# 将 lumen 连接到外部消息平台。
+# 所有通道都使用出站连接（WebSocket 或轮询），无需公网 IP。
+
+# channels:
+#   # LangGraph Server URL，用于线程/消息管理（默认：http://localhost:2024）
+#   langgraph_url: http://localhost:2024
+#   # Gateway API URL，用于 /models、/memory 等辅助查询（默认：http://localhost:8001）
+#   gateway_url: http://localhost:8001
+#
+#   # 可选：所有 IM 通道的默认会话设置
+#   session:
+#     assistant_id: lead_agent
+#     config:
+#       recursion_limit: 300
+#     context:
+#       thinking_enabled: true
+#       is_plan_mode: false
+#       subagent_enabled: false
+#
+#   feishu:
+#     enabled: false
+#     app_id: $FEISHU_APP_ID
+#     app_secret: $FEISHU_APP_SECRET
+#
+#   slack:
+#     enabled: false
+#     bot_token: $SLACK_BOT_TOKEN     # xoxb-...
+#     app_token: $SLACK_APP_TOKEN     # xapp-... (Socket Mode)
+#     allowed_users: []               # 空列表表示允许所有用户
+#
+#   telegram:
+#     enabled: false
+#     bot_token: $TELEGRAM_BOT_TOKEN
+#     allowed_users: []               # 空列表表示允许所有用户
+#
+#     # 可选：按通道覆盖会话设置
+#     session:
+#       assistant_id: mobile_agent
+#       context:
+#         thinking_enabled: false
+#
+#       # 可选：按 user_id 覆盖单个用户配置
+#       users:
+#         "123456789":
+#           assistant_id: vip_agent
+#           config:
+#             recursion_limit: 300
+#           context:
+#             thinking_enabled: true
+#             subagent_enabled: true

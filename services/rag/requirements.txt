@@ -1,0 +1,105 @@
+# DeepRAG 文档处理核心依赖
+# 基于代码库中的导入语句分析
+
+# 文档处理和解析
+tika>=2.6.0                    # Apache Tika，用于多种文档格式解析
+python-docx>=0.8.11           # Word 文档处理
+openpyxl>=3.1.0               # Excel 文件处理
+markdown>=3.4.0               # Markdown 文件处理
+python-pptx>=0.6.21           # PowerPoint 文档处理
+
+# 图像处理
+Pillow>=9.5.0                 # Python 图像处理库
+numpy>=1.24.0                 # 数值计算基础库
+
+# 数据处理
+pandas>=2.0.0                 # 数据分析和处理
+python-dateutil>=2.8.2        # 日期时间处理工具
+
+# 中文文本处理
+hanziconv>=0.3.2              # 繁简体中文转换
+xpinyin>=0.7.6                # 中文转拼音
+
+# 自然语言处理
+nltk>=3.8.1                   # 自然语言工具包
+datrie>=0.8.2                 # 字典树数据结构
+
+# 分词工具
+tiktoken>=0.5.0               # OpenAI 的分词器
+
+# 字符串枚举支持 (Python < 3.11)
+strenum>=0.4.0                # 字符串枚举类型
+
+# HTTP 请求和 Web 服务
+requests>=2.31.0              # HTTP 请求库
+fastapi>=0.104.0              # 现代 Web API 框架
+uvicorn>=0.24.0               # ASGI 服务器
+python-multipart>=0.0.6       # 文件上传支持
+aiohttp>=3.9.0                # 异步 HTTP 客户端
+pydantic>=2.5.0
+pydantic-settings>=2.1.0      # BaseSettings 配置管理
+
+# 异步处理
+trio>=0.22.0                  # 现代异步 I/O 库
+
+# Redis 支持
+redis>=5.0.0                  # Redis Python 客户端（支持异步）
+
+# 机器学习和深度学习
+huggingface-hub>=0.16.0       # Hugging Face 模型下载
+
+# HTML 处理 (deepdoc 需要)
+readability-lxml>=0.8.1       # HTML 内容提取
+html-text>=0.5.2              # HTML 转文本
+chardet>=5.0.0                # 字符编码检测
+
+# 类型检查和验证 (deepdoc 需要)
+beartype>=0.15.0              # 运行时类型检查
+
+# JSON 处理 (deepdoc 需要)
+demjson3>=3.0.6               # 容错 JSON 解析器
+shapely==2.1.1
+pyclipper==1.3.0.post6
+
+# 其它
+roman_numbers==1.0.2
+word2number==1.1
+cn2an
+
+# 类型提示 (旧版本 Python)
+typing-extensions>=4.5.0      # 类型提示扩展
+
+# embedding 相关依赖
+openai>=1.0.0                 # OpenAI API 客户端
+dashscope>=1.14.0             # 阿里云通义千问 API
+google-generativeai>=0.3.0   # Google Gemini API
+zhipuai>=2.0.0                # 智谱AI API
+torch>=2.0.0                  # PyTorch 深度学习框架
+FlagEmbedding>=1.2.0          # BAAI 嵌入模型
+fastembed>=0.2.0              # FastEmbed 嵌入库
+mistralai>=0.1.0              # Mistral AI API
+boto3>=1.26.0                 # AWS SDK (Bedrock)
+cohere>=4.0.0                 # Cohere API
+replicate>=0.15.0             # Replicate API
+qianfan>=0.3.0                # 百度千帆 API
+voyageai>=0.2.0               # Voyage AI API
+
+# Elasticsearch
+elasticsearch==8.15.1
+elasticsearch_dsl==8.18.0
+elastic_transport
+
+# LangChain
+langchain-openai==0.3.28
+langchain>=0.1.0
+langchain-core>=0.1.0
+
+# Tavily 搜索
+tavily-python==0.7.11
+
+# 安装说明：
+# 1. 安装 Python 3.8 或更高版本
+# 2. 运行：pip install -r requirements.txt
+# 3. NLTK 需要下载额外数据：
+#    python -c "import nltk; nltk.download('punkt_tab'); nltk.download('wordnet')"
+# python -c "import nltk; nltk.download('wordnet'); nltk.download('omw-1.4'); print('WordNet数据下载完成')"

@@ -1,0 +1,604 @@
+.chatDetail {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  background-color: var(--layout-main-bg);
+  color: var(--text);
+  overflow: hidden;
+  position: relative; /* 建立定位上下文，约束内部布局 */
+}
+
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+}
+
+.sidebarContainer {
+  flex-shrink: 0;
+  z-index: 1000;
+}
+
+.mainContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  height: 60px;
+  flex-shrink: 0;
+  background-color: var(--layout-main-bg);
+  border-bottom: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 100;
+}
+
+.menuButton {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menuButton:hover {
+  background-color: var(--bg-elev-2);
+}
+
+.backButton {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease;
+}
+
+.backButton:hover {
+  background-color: var(--bg-elev-2);
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+}
+
+/* Messages Container */
+.messagesContainer {
+  flex: 1;
+  min-height: 0; /* 关键：允许 flex 子项收缩 */
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end; /* 消息从底部开始堆叠 */
+}
+
+.userMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-bottom: 16px; /* 消息之间明确间距 */
+}
+
+.aiMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 16px; /* 消息之间明确间距 */
+}
+
+.messageContent {
+  max-width: 70%;
+  padding: 12px 16px;
+  border-radius: 18px;
+  font-size: 14px;
+  line-height: 1.4;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.userMessage .messageContent {
+  background: #6366f1;
+  color: #ffffff;
+}
+
+.userMessageBlock {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.userMessageBlock .messageContent {
+  max-width: 70%;
+}
+
+.aiMessage .messageContent {
+  background-color: var(--bg-elev-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.messageActions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 0 14px;
+  margin-top: 12px;
+  opacity: 1;
+}
+
+.userMessageActions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.userMessageBlock:hover .userMessageActions,
+.userMessageBlock:focus-within .userMessageActions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.actionButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  padding: 0;
+  font-size: 14px;
+}
+
+.actionButton:hover {
+  color: var(--text-secondary);
+  background: var(--bg-elev-2);
+  transform: scale(1.1);
+}
+
+.actionButton[title="复制"]:hover {
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.actionButton.copied {
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.actionButton[title="点赞"]:hover,
+.actionButton[title="取消点赞"]:hover,
+.actionButton.liked {
+  color: #059669;
+  background: rgba(16, 185, 129, 0.12);
+  border: none;
+}
+
+.actionButton[title="点踩"]:hover,
+.actionButton[title="取消点踩"]:hover,
+.actionButton.disliked {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.14);
+  border: none;
+}
+
+.actionButton[title="保存到笔记"]:hover,
+.actionButton[title="已保存到笔记"]:hover,
+.actionButton[title="已保存到笔记"],
+.actionButton.saved {
+  color: #7c3aed;
+  background: rgba(139, 92, 246, 0.14);
+}
+
+.actionButton[title="重新生成"]:hover {
+  color: var(--text);
+  background: var(--bg-elev-2);
+}
+
+.actionButton:active {
+  transform: scale(0.95);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .userMessageActions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+}
+
+/* ----- 重新生成下拉菜单 ----- */
+.regenerateWrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.regenerateMenu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  z-index: 100;
+  overflow: hidden;
+  padding: 4px;
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.regenerateMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.regenerateMenuItem:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+.regenerateMenuItem svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.regenerateMenuItem:hover svg {
+  color: var(--text-secondary);
+}
+
+.regenerateMenuItem:first-child {
+  border-bottom: none;
+  margin-bottom: 2px;
+}
+
+/* 适配暗色模式的重新生成菜单 */
+:global(html.dark) .actionButton[title="复制"]:hover {
+  color: #93c5fd;
+  background: rgba(37, 99, 235, 0.24);
+}
+
+:global(html.dark) .actionButton.copied {
+  color: #93c5fd;
+  background: rgba(37, 99, 235, 0.24);
+}
+
+:global(html.dark) .actionButton[title="点赞"]:hover,
+:global(html.dark) .actionButton[title="取消点赞"]:hover,
+:global(html.dark) .actionButton.liked {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.2);
+}
+
+:global(html.dark) .actionButton[title="点踩"]:hover,
+:global(html.dark) .actionButton[title="取消点踩"]:hover,
+:global(html.dark) .actionButton.disliked {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.2);
+}
+
+:global(html.dark) .actionButton[title="保存到笔记"]:hover,
+:global(html.dark) .actionButton[title="已保存到笔记"]:hover,
+:global(html.dark) .actionButton[title="已保存到笔记"],
+:global(html.dark) .actionButton.saved {
+  color: #c4b5fd;
+  background: rgba(139, 92, 246, 0.2);
+}
+
+:global(html.dark) .regenerateMenu {
+  background: #1f2937;
+  border-color: #374151;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+:global(html.dark) .regenerateMenuItem {
+  color: #e5e7eb;
+}
+
+:global(html.dark) .regenerateMenuItem:hover {
+  background: #374151;
+  color: #a5b4fc;
+}
+
+:global(html.dark) .regenerateMenuItem svg {
+  color: #9ca3af;
+}
+
+:global(html.dark) .regenerateMenuItem:hover svg {
+  color: #a5b4fc;
+}
+
+.thinkingText {
+  color: var(--text-muted);
+}
+
+/* Loading dots animation */
+.thinkingDots {
+  display: flex;
+  gap: 4px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: blink 1.4s infinite both;
+}
+
+.dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  0%, 80%, 100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+/* ==================== 输入区域 ==================== */
+.inputArea {
+  flex-shrink: 0;
+  padding: 16px 20px;
+  background-color: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.inputControls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background-color: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.5;
+  padding: 6px 0;
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.input:disabled {
+  opacity: 0.5;
+}
+
+.sendBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: #6366f1;
+  color: #ffffff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: #4f46e5;
+  transform: scale(1.05);
+}
+
+.sendBtn:disabled {
+  background: var(--bg-elev-2);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+
+
+/* Streaming Indicator */
+.streamingIndicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  padding: 12px 16px;
+  animation: slideIn 0.3s ease-out;
+}
+
+.loadingDots {
+  display: flex;
+  gap: 3px;
+}
+
+.loadingDots span {
+  animation: blink 1.4s infinite both;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.loadingDots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loadingDots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ==================== 响应式设计 ==================== */
+@media (max-width: 768px) and (pointer: coarse) {
+  .sidebarContainer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+
+  .sidebarContainer.open {
+    transform: translateX(0);
+  }
+
+  .mainContent {
+    width: 100%;
+  }
+
+  .header {
+    padding: 0 16px;
+  }
+
+  .title {
+    font-size: 16px;
+  }
+
+  .messagesContainer {
+    padding: 16px;
+  }
+
+  .messageContent {
+    max-width: 85%;
+  }
+
+  .inputArea {
+    padding: 12px 16px;
+  }
+}
+
+@media (max-width: 480px) and (pointer: coarse) {
+  .messageContent {
+    max-width: 90%;
+    font-size: 13px;
+  }
+
+  .input {
+    font-size: 14px;
+  }
+
+  .sendBtn {
+    width: 32px;
+    height: 32px;
+  }
+}
+
+/* 焦点样式 */
+.backButton:focus,
+.menuButton:focus,
+.sendBtn:focus,
+.input:focus {
+  outline: none;
+}
+
+.backButton:focus-visible,
+.menuButton:focus-visible,
+.sendBtn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+
+/* ==========================================================================
+   双栏布局支持
+   ========================================================================== */
+
+/* 当使用双栏布局时，AI消息需要全宽 */
+.aiMessage:has([class*="dualLayout"]) {
+  max-width: 100%;
+  width: 100%;
+  align-items: stretch;
+}
+
+/* 双栏布局内的消息内容不限制宽度 */
+.aiMessage:has([class*="dualLayout"]) .messageContent {
+  max-width: 100%;
+}

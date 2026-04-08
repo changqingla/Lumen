@@ -1,41 +1,88 @@
-# Dependencies
+# -----------------------------
+# Node / Frontend
+# -----------------------------
 node_modules/
-
-# Environment files (contain sensitive data)
-.env
-*.env
-.env.local
-.env.*.local
-
-# Build output
+**/node_modules/
 dist/
 build/
-rag/
-# Logs
-logs/
-*.log
+coverage/
+.vite/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
-.idea/
-*.swp
-*.swo
-
+# -----------------------------
 # Python
+# -----------------------------
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 *.so
 .Python
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
 
+# -----------------------------
+# Env / Secrets
+# -----------------------------
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.template
+!**/.env.example
 
-# Temporary files
+# -----------------------------
+# Logs / Runtime
+# -----------------------------
+logs/
+**/logs/
+*.log
+*.pid
+*.out
+runtimes/state/*
+!runtimes/state/.gitkeep
+runtimes/state/checkpoints.db*
+runtimes/state/.langgraph_api/
+runtimes/state/.langgraph_api/db.sqlite*
+runtimes/state/threads/
+runtimes/log/*
+!runtimes/log/.gitkeep
+runtimes/backend/.langgraph_api/
+runtimes/backend/static/browser_history/*.gif
+runtimes/backend/.claude/settings.local.json
+
+# -----------------------------
+# IDE / OS / Temp
+# -----------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+**/.DS_Store
+Thumbs.db
 *.tmp
 *.temp
-Reader/node_modules
+.cache/
+
+# -----------------------------
+# Project-specific
+# -----------------------------
+agent-bk/
+runtimes/legacy-agent/.agent/temp/
+.kiro/
+Third

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Deep Doc Agent 上下文管理系统数据库表结构
--- 使用 reader_qaq 数据库，与 Reader 项目共享
+-- 使用 reader_qaq 数据库，与 Lumen 项目共享
 -- ============================================================================
 
 -- 1. 会话表（Deep Doc Agent）
@@ -142,4 +142,3 @@ FROM agent_compression_history
 GROUP BY session_id;
 
 COMMENT ON VIEW agent_compression_statistics IS 'Deep Doc Agent 压缩效果统计视图';
-

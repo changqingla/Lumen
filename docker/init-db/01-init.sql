@@ -12,6 +12,4 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- This file will be executed on first database initialization
--- Additional tables will be created by SQLAlchemy on application startup
-
-
+-- Lumen 主业务表由 backend/run_migrations.py 统一管理，不再依赖应用启动时自动建表

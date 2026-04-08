@@ -1,0 +1,838 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4); 
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease-out;
+  padding: 20px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  background: #fff;
+  border-radius: 32px;
+  width: 440px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 
+    0 25px 50px -12px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(255, 255, 255, 0.1);
+  animation: slideUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  position: relative;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* --- Atmospheric Banner (流动极光) --- */
+.banner {
+  height: 160px;
+  background: linear-gradient(-45deg, #c4b5fd, #a5b4fc, #67e8f9, #f9a8d4);
+  background-size: 300% 300%;
+  animation: auroraFlow 8s ease infinite;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
+  opacity: 0.3;
+  mix-blend-mode: overlay;
+}
+
+@keyframes auroraFlow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.closeBtn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #475569;
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.closeBtn:hover {
+  background: white;
+  color: #0f172a;
+  transform: rotate(90deg);
+}
+
+/* --- Navigation (Floating Tabs) --- */
+.navContainer {
+  display: flex;
+  justify-content: center;
+  margin-top: -24px;
+  z-index: 5;
+  padding-bottom: 20px;
+}
+
+.nav {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  padding: 4px;
+  border-radius: 999px;
+  display: flex;
+  box-shadow: 
+    0 4px 6px -1px rgba(0, 0, 0, 0.05),
+    0 0 0 1px rgba(255,255,255,0.6) inset;
+}
+
+.navItem {
+  padding: 6px 20px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.navItem:hover {
+  color: #334155;
+}
+
+.navItem.active {
+  background: #fff;
+  color: #6366f1;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+}
+
+/* --- Content Scroll Area --- */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 28px 40px; 
+  scrollbar-width: none;
+}
+.content::-webkit-scrollbar {
+  display: none;
+}
+
+/* --- Profile Header (Avatar + Name) --- */
+.profileHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: -60px;
+  position: relative;
+  margin-bottom: 36px;
+  z-index: 10;
+}
+
+.avatarWrapper {
+  position: relative;
+  margin-bottom: 12px;
+  z-index: 2;
+  /* 确保在 Banner 上方 */
+  filter: drop-shadow(0 10px 20px rgba(0,0,0,0.1)); 
+}
+
+/* Name Edit Styles */
+.nameContainer {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nameDisplay {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+
+.nameDisplay:hover {
+  background: rgba(0,0,0,0.03);
+}
+
+.nameText {
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.editIcon {
+  color: #94a3b8;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: all 0.2s ease;
+}
+
+.nameDisplay:hover .editIcon {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.nameEditWrapper {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  min-width: 120px;
+}
+
+.nameInputEditing {
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f172a;
+  text-align: center;
+  border: none;
+  background: transparent;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  letter-spacing: -0.02em;
+  caret-color: #6366f1;
+  font-family: inherit;
+}
+
+.nameInputEditing:focus,
+.nameInputEditing:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.nameEditIndicator {
+  position: absolute;
+  bottom: -2px;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #6366f1, transparent);
+  border-radius: 2px;
+  opacity: 0.8;
+  animation: expandWidth 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes expandWidth {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* --- Membership Card (Artistic Redesign) --- */
+.membershipCard {
+  border-radius: 24px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 24px;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 10px 30px -10px rgba(0,0,0,0.05);
+}
+
+.membershipCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 35px -10px rgba(0,0,0,0.1);
+}
+
+/* === Basic Card (普通用户) - Refined Minimalist === */
+.cardBasic {
+  background: #ffffff;
+  border: 1px solid #f1f5f9;
+  box-shadow: 
+    0 10px 40px -10px rgba(0,0,0,0.05),
+    0 0 0 1px rgba(0,0,0,0.01);
+}
+
+.cardBasic .cardLabel {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.cardBasic .cardValue {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.cardBasic .cardIcon {
+  background: #f8fafc;
+  color: #94a3b8;
+  border: 1px solid #f1f5f9;
+}
+
+.cardBasic .crownIcon {
+  color: #94a3b8;
+}
+
+.expiryDate {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+  font-feature-settings: "tnum";
+}
+
+/* Activation Area Styling */
+.cardBasic .cardBottom {
+  margin-top: 24px;
+  background: linear-gradient(to bottom right, #f8fafc, #f1f5f9);
+  border-radius: 16px;
+  padding: 20px;
+  border: 1px solid #f1f5f9;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Decorative background element for activation area */
+.cardBasic .cardBottom::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100px;
+  height: 100px;
+  background: radial-gradient(circle at top right, #e0e7ff 0%, transparent 70%);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.activationLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4f46e5;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.activationIcon {
+  color: #4f46e5;
+}
+
+/* === Premium Card (会员) - 紫罗兰星空/高级优雅 === */
+.cardPremium {
+  /* 使用优雅的紫色渐变，营造高贵质感 */
+  background: linear-gradient(145deg, #6b21a8 0%, #4c1d95 50%, #3b0764 100%);
+  position: relative;
+  overflow: hidden;
+  color: white;
+  border: 1px solid rgba(167, 139, 250, 0.2);
+  box-shadow: 
+    0 20px 40px -10px rgba(107, 33, 168, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+/* 顶部光影流光 - 紫色光晕 */
+.cardPremium::before {
+  content: "";
+  position: absolute;
+  top: -100%;
+  left: -50%;
+  width: 200%;
+  height: 300%;
+  background: radial-gradient(
+    circle at 50% 50%, 
+    rgba(196, 181, 253, 0.12) 0%, 
+    transparent 50%
+  );
+  transform: rotate(-45deg);
+  pointer-events: none;
+}
+
+/* 底部装饰性微光 - 紫色光晕 */
+.cardPremium::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 150px;
+  height: 150px;
+  background: radial-gradient(
+    circle at bottom right,
+    rgba(167, 139, 250, 0.25),
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+/* 玻璃质感覆盖层 */
+.cardPremium::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top right, rgba(255,255,255,0.2), transparent 60%);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.cardPremium .cardLabel {
+  color: rgba(255,255,255,0.8);
+}
+
+.cardPremium .cardValue {
+  color: white;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.cardPremium .cardIcon {
+  background: rgba(255,255,255,0.2);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.3);
+  box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.cardPremium .crownIcon {
+  color: #fbbf24; /* 金色皇冠 */
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+}
+
+.cardPremium .cardBottom {
+  border-top: 1px solid rgba(255,255,255,0.1);
+  background: rgba(59, 7, 100, 0.4); /* 深紫色半透明底色 */
+  margin: 0 -24px -24px;
+  padding: 20px 24px 24px;
+}
+
+/* --- Common Inner Elements --- */
+.cardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  position: relative;
+  z-index: 2;
+  margin-bottom: 24px;
+}
+
+.cardLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cardValue {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.cardIcon {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Input Area (Redesigned) --- */
+.cardBottom {
+  position: relative;
+  z-index: 2;
+}
+
+.redeemInputWrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(8px);
+  padding: 4px 4px 4px 16px;
+  border-radius: 99px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 8px -2px rgba(0,0,0,0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.redeemInputWrapper:focus-within {
+  background: #ffffff;
+  border-color: #a5b4fc;
+  box-shadow: 
+    0 4px 12px rgba(99, 102, 241, 0.15),
+    0 0 0 2px rgba(99, 102, 241, 0.05);
+  transform: translateY(-1px);
+}
+
+.redeemInput {
+  flex: 1;
+  border: none;
+  font-size: 13px;
+  outline: none;
+  color: #1e293b;
+  background: transparent;
+  padding: 0;
+  font-weight: 500;
+  min-width: 0;
+}
+
+.redeemInput:focus,
+.redeemInput:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.redeemInput::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.redeemBtn {
+  background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+  color: white;
+  border: none;
+  border-radius: 99px;
+  padding: 8px 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.2);
+  white-space: nowrap;
+}
+
+.redeemBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(79, 70, 229, 0.3);
+  background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+}
+
+.redeemBtn:disabled {
+  background: #cbd5e1;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* --- Organization Dashboard Styles (New) --- */
+.orgDashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 8px;
+}
+
+.orgListPreview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.orgPreviewItem {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #f1f5f9;
+}
+
+.orgAvatarSmall {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #475569;
+  margin-right: 12px;
+  overflow: hidden;
+}
+
+.orgAvatarSmall img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.orgInfo {
+  flex: 1;
+}
+
+.orgName {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.orgRole {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.viewAllLink {
+  text-align: center;
+  padding: 12px;
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-top: 8px;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 40px 20px;
+  background: #f8fafc;
+  border-radius: 20px;
+  border: 1px dashed #e2e8f0;
+}
+
+.emptyIcon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+}
+
+.emptyText {
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.6;
+  margin-bottom: 20px;
+  max-width: 240px;
+}
+
+.emptyBtn {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  padding: 8px 20px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.emptyBtn:hover {
+  border-color: #cbd5e1;
+  color: #1e293b;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+@media (max-width: 480px) and (pointer: coarse) {
+  .modal {
+    width: 100%;
+    height: 100vh;
+    border-radius: 0;
+    max-height: none;
+  }
+}
+
+
+/* === Dark Mode Support === */
+:global(.dark) .modal {
+  background: #1e293b;
+  box-shadow: 
+    0 25px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+:global(.dark) .closeBtn {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+
+:global(.dark) .closeBtn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #f1f5f9;
+}
+
+:global(.dark) .nav {
+  background: rgba(30, 41, 59, 0.9);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+}
+
+:global(.dark) .navItem {
+  color: #94a3b8;
+}
+
+:global(.dark) .navItem:hover {
+  color: #e2e8f0;
+}
+
+:global(.dark) .navItem.active {
+  background: #334155;
+  color: #a5b4fc;
+}
+
+:global(.dark) .nameText {
+  color: #f1f5f9;
+}
+
+:global(.dark) .nameInputEditing {
+  color: #f1f5f9;
+}
+
+/* Membership Card - Basic (Dark) */
+:global(.dark) .cardBasic {
+  background: #334155;
+  border-color: #475569;
+}
+
+:global(.dark) .cardBasic .cardLabel {
+  color: #94a3b8;
+}
+
+:global(.dark) .cardBasic .cardValue {
+  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+:global(.dark) .cardBasic .cardIcon {
+  background: #475569;
+  color: #94a3b8;
+  border-color: #64748b;
+}
+
+:global(.dark) .cardBasic .cardBottom {
+  background: linear-gradient(to bottom right, #475569, #334155);
+  border-color: #475569;
+}
+
+:global(.dark) .cardBasic .cardBottom::before {
+  background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.2) 0%, transparent 70%);
+}
+
+:global(.dark) .expiryDate {
+  color: #64748b;
+}
+
+:global(.dark) .activationLabel {
+  color: #a5b4fc;
+}
+
+:global(.dark) .activationIcon {
+  color: #a5b4fc;
+}
+
+:global(.dark) .redeemInputWrapper {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: #475569;
+}
+
+:global(.dark) .redeemInputWrapper:focus-within {
+  background: #1e293b;
+  border-color: #6366f1;
+}
+
+:global(.dark) .redeemInput {
+  color: #f1f5f9;
+}
+
+:global(.dark) .redeemInput::placeholder {
+  color: #64748b;
+}
+
+/* Organization Dashboard (Dark) */
+:global(.dark) .sectionTitle {
+  color: #94a3b8;
+}
+
+:global(.dark) .orgPreviewItem {
+  background: #334155;
+  border-color: #475569;
+}
+
+:global(.dark) .orgAvatarSmall {
+  background: linear-gradient(135deg, #475569 0%, #334155 100%);
+  color: #94a3b8;
+}
+
+:global(.dark) .orgName {
+  color: #f1f5f9;
+}
+
+:global(.dark) .orgRole {
+  color: #94a3b8;
+}
+
+:global(.dark) .viewAllLink {
+  color: #64748b;
+}
+
+:global(.dark) .emptyState {
+  background: #334155;
+  border-color: #475569;
+}
+
+:global(.dark) .emptyIcon {
+  background: #475569;
+  color: #64748b;
+}
+
+:global(.dark) .emptyText {
+  color: #94a3b8;
+}
+
+:global(.dark) .emptyBtn {
+  background: #475569;
+  border-color: #64748b;
+  color: #e2e8f0;
+}
+
+:global(.dark) .emptyBtn:hover {
+  background: #64748b;
+  border-color: #94a3b8;
+}
