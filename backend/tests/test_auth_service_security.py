@@ -20,24 +20,28 @@ async def test_login_does_not_reveal_whether_email_exists():
 
 
 @pytest.mark.asyncio
-async def test_send_code_register_existing_email_returns_generic_success():
+async def test_send_code_register_existing_email_returns_conflict():
     service = AuthService(db=object())
     service.user_repo = SimpleNamespace(get_by_email=AsyncMock(return_value=object()))
     service.email_service = SimpleNamespace(send_verification_code=AsyncMock(return_value=True))
 
-    result = await service.send_verification_code("user@example.com", "register")
+    with pytest.raises(HTTPException) as exc_info:
+        await service.send_verification_code("user@example.com", "register")
 
-    assert result is True
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"]["code"] == "CONFLICT"
     service.email_service.send_verification_code.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_send_code_reset_missing_email_returns_generic_success():
+async def test_send_code_reset_missing_email_returns_not_found():
     service = AuthService(db=object())
     service.user_repo = SimpleNamespace(get_by_email=AsyncMock(return_value=None))
     service.email_service = SimpleNamespace(send_verification_code=AsyncMock(return_value=True))
 
-    result = await service.send_verification_code("user@example.com", "reset")
+    with pytest.raises(HTTPException) as exc_info:
+        await service.send_verification_code("user@example.com", "reset")
 
-    assert result is True
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail["error"]["code"] == "NOT_FOUND"
     service.email_service.send_verification_code.assert_not_awaited()

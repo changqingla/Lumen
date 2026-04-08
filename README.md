@@ -17,6 +17,10 @@
   <img alt="rag" src="https://img.shields.io/badge/RAG-Elasticsearch_%2B_MinIO-0f172a?style=for-the-badge">
 </p>
 
+<p>
+  <img alt="Lumen showcase carousel" src="./docs/assets/readme-showcase-carousel.gif" width="100%">
+</p>
+
 </div>
 
 ## 为什么是 Lumen

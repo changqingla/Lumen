@@ -42,9 +42,15 @@ class AuthService:
         existing = await self.user_repo.get_by_email(email)
         
         if type == "register" and existing:
-            return True
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": {"code": "CONFLICT", "message": "Email already registered"}}
+            )
         if type == "reset" and not existing:
-            return True
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": {"code": "NOT_FOUND", "message": "账号未注册"}}
+            )
 
         return await self.email_service.send_verification_code(email)
 
