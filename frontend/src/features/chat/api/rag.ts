@@ -1424,7 +1424,7 @@ class RAGAPIClient {
     }
 
     runtimeState.activeRunId = runId;
-    const streamMode = encodeURIComponent(JSON.stringify(['messages', 'values', 'custom']));
+    const streamMode = encodeURIComponent(JSON.stringify(['messages-tuple', 'values', 'custom']));
     const response = await fetch(
       joinUrl(
         runtimeState.prepared.langgraph_base_url,
