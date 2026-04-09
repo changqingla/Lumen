@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { authAPI } from '@/shared/api/client';
+import { useGuestMode } from '@/shared/hooks/useGuestMode';
 
 interface AdminRouteProps {
   children: React.ReactNode;
@@ -13,10 +14,16 @@ interface AdminRouteProps {
 export default function AdminRoute({ children }: AdminRouteProps) {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const { isGuestMode } = useGuestMode();
 
   useEffect(() => {
+    if (isGuestMode) {
+      setLoading(false);
+      setIsAdmin(true);
+      return;
+    }
     checkAdminStatus();
-  }, []);
+  }, [isGuestMode]);
 
   const checkAdminStatus = async () => {
     try {
@@ -50,4 +57,3 @@ export default function AdminRoute({ children }: AdminRouteProps) {
 
   return <>{children}</>;
 }
-

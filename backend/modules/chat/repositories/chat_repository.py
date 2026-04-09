@@ -65,6 +65,24 @@ class ChatRepository:
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_user_role_messages(
+        self,
+        user_id: UUID,
+        role: str = "user",
+    ) -> int:
+        """Count messages by role across all sessions belonging to a user."""
+        stmt = (
+            select(func.count(ChatMessage.id))
+            .select_from(ChatMessage)
+            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+            .where(
+                ChatSession.user_id == user_id,
+                ChatMessage.role == role,
+            )
+        )
+        result = await self.db.execute(stmt)
+        return int(result.scalar() or 0)
     
     async def update_session_title(self, session_id: UUID, title: str) -> Optional[ChatSession]:
         """更新会话标题"""

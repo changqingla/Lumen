@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { api, type ChatModelOption } from '@/shared/api/client';
 import { readAuthToken, subscribeAuthSessionReset } from '@/shared/lib/auth-runtime';
+import { isGuestModeEnabled } from '@/shared/lib/guest-mode';
 
 interface ChatModelsResponse {
   default_model: string;
@@ -40,6 +41,13 @@ const filterModelsByVisionRequirement = (
 );
 
 const loadChatModels = async (): Promise<ChatModelsResponse> => {
+  if (isGuestModeEnabled() || !getChatModelsAuthToken()) {
+    return {
+      default_model: '',
+      models: [],
+    };
+  }
+
   const authToken = getChatModelsAuthToken();
   const currentCachedResponse = getCachedResponseForCurrentUser();
   if (currentCachedResponse) {

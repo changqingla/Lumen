@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from config.database import get_db
-from middlewares.auth import get_current_user
+from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity, get_current_user
 from models.user import User
 from schemas.workspace import WorkspaceAttachmentInput
 
@@ -23,6 +23,7 @@ from schemas.workspace import WorkspaceAttachmentInput
 router = APIRouter(prefix="/chat", tags=["Chat"])
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _ARTIFACT_URL_EXPIRES_SECONDS = 3600
+_GUEST_MESSAGE_LIMIT = 3
 
 
 def _create_chat_service(db: AsyncSession):
@@ -30,6 +31,30 @@ def _create_chat_service(db: AsyncSession):
     from modules.chat.services.chat_service import ChatService
 
     return ChatService(ChatRepository(db))
+
+
+def _raise_guest_login_required(message: str) -> None:
+    raise HTTPException(
+        status_code=403,
+        detail={"error": {"code": "GUEST_LOGIN_REQUIRED", "message": message}},
+    )
+
+
+async def _ensure_guest_message_available(
+    *,
+    db: AsyncSession,
+    identity: AuthenticatedIdentity,
+) -> None:
+    if not identity.is_guest:
+        return
+
+    chat_service = _create_chat_service(db)
+    used_count = await chat_service.chat_repo.count_user_role_messages(identity.user.id, role="user")
+    if used_count >= _GUEST_MESSAGE_LIMIT:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "GUEST_TRIAL_EXHAUSTED", "message": f"游客试用仅支持发送 {_GUEST_MESSAGE_LIMIT} 条消息，登录后可继续完整体验。"}},
+        )
 
 
 def _create_workspace_service(session_id: str, user_id: str):
@@ -610,11 +635,12 @@ async def list_sessions(
     page: int = 1,
     page_size: int = 50,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """获取用户的所有聊天会话"""
     chat_service = _create_chat_service(db)
-    
+    current_user = identity.user
+
     sessions = await chat_service.list_sessions(current_user.id, page, page_size)
     session_ids = [session.id for session in sessions]
     stats_by_session = await chat_service.chat_repo.get_sessions_stats_bulk(session_ids)
@@ -638,10 +664,12 @@ async def list_sessions(
 async def create_session(
     request: CreateSessionRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """创建新的聊天会话"""
     chat_service = _create_chat_service(db)
+    current_user = identity.user
+    await _ensure_guest_message_available(db=db, identity=identity)
     await _validate_session_model_name(
         db=db,
         current_user=current_user,
@@ -661,10 +689,14 @@ async def create_session(
 async def create_empty_session(
     request: CreateEmptySessionRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """创建空聊天会话，供文件先上传后提问等场景使用。"""
+    if identity.is_guest:
+        _raise_guest_login_required("游客模式下暂不支持创建空会话或上传文件，请先登录。")
+
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     await _validate_session_model_name(
         db=db,
         current_user=current_user,
@@ -683,10 +715,11 @@ async def create_empty_session(
 async def get_session(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """获取聊天会话详情"""
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     
     session = await chat_service.get_session(session_id, current_user.id)
     if not session:
@@ -700,10 +733,14 @@ async def update_session_config(
     session_id: UUID,
     request: UpdateConfigRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """更新会话配置（部分更新）"""
+    if identity.is_guest:
+        _raise_guest_login_required("游客模式下暂不支持修改会话配置，请先登录。")
+
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     await _validate_session_model_name(
         db=db,
         current_user=current_user,
@@ -725,10 +762,14 @@ async def update_session_config(
 @router.delete("/sessions/all")
 async def delete_all_sessions(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """删除用户的所有聊天会话"""
+    if identity.is_guest:
+        _raise_guest_login_required("游客模式下暂不支持清空对话，请先登录。")
+
     chat_service = _create_chat_service(db)
+    current_user = identity.user
 
     deleted_count = await chat_service.delete_all_sessions(current_user.id)
 
@@ -739,10 +780,14 @@ async def delete_all_sessions(
 async def delete_session(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """删除聊天会话"""
+    if identity.is_guest:
+        _raise_guest_login_required("游客模式下暂不支持删除对话，请先登录。")
+
     chat_service = _create_chat_service(db)
+    current_user = identity.user
 
     success = await chat_service.delete_session(session_id, current_user.id)
     if not success:
@@ -755,11 +800,12 @@ async def delete_session(
 async def get_messages(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """获取会话的所有消息"""
     chat_service = _create_chat_service(db)
     chat_repo = chat_service.chat_repo
+    current_user = identity.user
     session = await chat_repo.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -792,9 +838,18 @@ async def add_message(
     session_id: UUID,
     request: AddMessageRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """添加消息到会话"""
+    current_user = identity.user
+    if identity.is_guest and request.role != "user":
+        # 游客模式只需要允许链路内部写入 1 条用户消息对应的 assistant 回复。
+        session = await _create_chat_service(db).get_session(session_id, current_user.id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+    if identity.is_guest and request.role == "user":
+        await _ensure_guest_message_available(db=db, identity=identity)
+
     chat_service = _create_chat_service(db)
     session = await chat_service.get_session(session_id, current_user.id)
     if not session:
@@ -906,10 +961,11 @@ async def get_session_artifact_url(
     session_id: UUID,
     object_path: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """获取当前会话产物文件下载地址（带权限校验）。"""
     chat_service = _create_chat_service(db)
+    current_user = identity.user
 
     session = await chat_service.get_session(session_id, current_user.id)
     if not session:
@@ -955,10 +1011,11 @@ async def download_session_artifact(
     session_id: UUID,
     object_path: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """代理下载当前会话产物文件，避免浏览器直接跨域下载失败。"""
     chat_service = _create_chat_service(db)
+    current_user = identity.user
 
     session = await chat_service.get_session(session_id, current_user.id)
     if not session:
@@ -1030,10 +1087,14 @@ async def download_session_artifact(
 async def delete_last_assistant_message(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
 ):
     """删除会话中最后一条 AI 回复"""
+    if identity.is_guest:
+        _raise_guest_login_required("游客模式下暂不支持修改对话，请先登录。")
+
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     
     deleted_message_id = await chat_service.delete_last_assistant_message(
         session_id,

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api, type ChatSessionConfig } from '@/shared/api/client';
+import { readAuthToken } from '@/shared/lib/auth-runtime';
+import { isGuestModeEnabled } from '@/shared/lib/guest-mode';
 
 export interface ChatSession {
   id: string;
@@ -15,6 +17,12 @@ export function useChatSessions() {
   const [loading, setLoading] = useState(false);
 
   const loadChatSessions = useCallback(async () => {
+    if (isGuestModeEnabled() || !readAuthToken()) {
+      setChatSessions([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       const response = await api.listChatSessions(1, 50);

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.database import get_db
 from config.settings import settings
-from middlewares.auth import get_current_user
+from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity
 from models.user import User
 
 
@@ -246,13 +246,14 @@ async def _resolve_selected_kb_documents(
 async def prepare_session_thread(
     session_id: UUID,
     request: ThreadPrepareRequest,
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
     db: AsyncSession = Depends(get_db),
 ):
     """Prepare an lumen thread and project session materials into it."""
 
     insight_runtime_service = _get_insight_runtime_service()
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     session = await chat_service.get_session(session_id, current_user.id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -374,16 +375,22 @@ async def prepare_session_thread(
 async def upload_session_thread_files(
     session_id: UUID,
     files: list[UploadFile] = File(...),
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload chat composer files directly into the runtime thread uploads area."""
+    if identity.is_guest:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "GUEST_LOGIN_REQUIRED", "message": "游客模式下暂不支持上传文件，请先登录。"}},
+        )
 
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
     insight_runtime_service = _get_insight_runtime_service()
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     session = await chat_service.get_session(session_id, current_user.id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -428,13 +435,19 @@ async def upload_session_thread_files(
 async def delete_session_thread_file(
     session_id: UUID,
     filename: str,
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a chat composer file from the runtime thread uploads area."""
+    if identity.is_guest:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "GUEST_LOGIN_REQUIRED", "message": "游客模式下暂不支持上传文件，请先登录。"}},
+        )
 
     insight_runtime_service = _get_insight_runtime_service()
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     session = await chat_service.get_session(session_id, current_user.id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -457,13 +470,14 @@ async def list_session_thread_uploads(
     session_id: UUID,
     sync_workspace_assets: bool = True,
     sync_kb_documents: bool = False,
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
     db: AsyncSession = Depends(get_db),
 ):
     """List Insight thread uploads for a chat session."""
 
     insight_runtime_service = _get_insight_runtime_service()
     chat_service = _create_chat_service(db)
+    current_user = identity.user
     session = await chat_service.get_session(session_id, current_user.id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")

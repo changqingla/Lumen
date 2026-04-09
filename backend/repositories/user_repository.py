@@ -1,10 +1,13 @@
 """User repository for database operations."""
+import hashlib
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
 from datetime import datetime
 from models.user import User
-import uuid
 
 
 class UserRepository:
@@ -66,6 +69,36 @@ class UserRepository:
         )
         self.db.add(user)
         await self.db.commit()
+        await self.db.refresh(user)
+        return user
+
+    async def get_or_create_guest_user(self, guest_id: str) -> User:
+        """Get or create a lightweight guest-backed user record."""
+        normalized_guest_id = guest_id.strip().lower()
+        guest_email = f"guest+{normalized_guest_id}@guest.lumen.local"
+        guest_name = f"guest_{hashlib.sha1(normalized_guest_id.encode('utf-8')).hexdigest()[:16]}"
+
+        existing = await self.get_by_email(guest_email)
+        if existing:
+            return existing
+
+        user = User(
+            email=guest_email,
+            password_hash='!guest_account!',
+            name=guest_name,
+            user_level='basic',
+            is_admin=False,
+        )
+        self.db.add(user)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            existing = await self.get_by_email(guest_email)
+            if existing:
+                return existing
+            raise
+
         await self.db.refresh(user)
         return user
     

@@ -4,6 +4,8 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { authAPI } from '@/shared/api/client';
+import { readAuthToken } from '@/shared/lib/auth-runtime';
+import { isGuestModeEnabled } from '@/shared/lib/guest-mode';
 import { useToast } from './useToast';
 
 export interface UserProfile {
@@ -21,6 +23,16 @@ export interface UserProfile {
   }>;
 }
 
+const GUEST_PROFILE: UserProfile = {
+  name: '游客',
+  email: '',
+  avatar: undefined,
+  is_member: false,
+  is_advanced_member: false,
+  is_admin: false,
+  organizations: [],
+};
+
 export function useUserProfile() {
   const toast = useToast();
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -31,6 +43,13 @@ export function useUserProfile() {
    * 加载用户资料
    */
   const fetchProfile = useCallback(async () => {
+    if (isGuestModeEnabled() || !readAuthToken()) {
+      setProfile(GUEST_PROFILE);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -123,6 +142,13 @@ export function useUserProfile() {
 
   // 初次加载
   useEffect(() => {
+    if (isGuestModeEnabled() || !readAuthToken()) {
+      setProfile(GUEST_PROFILE);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     // 先尝试从 localStorage 读取
     const storedProfile = localStorage.getItem('userProfile');
     if (storedProfile) {
@@ -147,4 +173,3 @@ export function useUserProfile() {
     activateMembership,
   };
 }
-

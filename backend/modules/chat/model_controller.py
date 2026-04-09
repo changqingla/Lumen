@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.database import get_db
-from middlewares.auth import get_current_user
+from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity
 from models.user import User
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -37,10 +37,11 @@ class ChatModelsListResponse(BaseModel):
 
 @router.get("/models", response_model=ChatModelsListResponse)
 async def list_chat_models(
-    current_user: User = Depends(get_current_user),
+    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
     db: AsyncSession = Depends(get_db),
 ):
     """List runtime-backed selectable chat models."""
+    current_user = identity.user
     insight_runtime_service = _get_insight_runtime_service()
     runtime_models = await insight_runtime_service.list_runtime_models()
     from modules.model_config.services.model_config_service import ModelConfigService
@@ -51,10 +52,12 @@ async def list_chat_models(
         for item in runtime_models
         if str(item.get("name") or "").strip()
     ]
-    user_models = [
-        ChatModelResponse(**item)
-        for item in await model_config_service.list_user_model_bindings(current_user.id)
-    ]
+    user_models = []
+    if not identity.is_guest:
+        user_models = [
+            ChatModelResponse(**item)
+            for item in await model_config_service.list_user_model_bindings(current_user.id)
+        ]
     models = [*system_models, *user_models]
     if not models:
         raise HTTPException(status_code=503, detail="当前没有可用模型")

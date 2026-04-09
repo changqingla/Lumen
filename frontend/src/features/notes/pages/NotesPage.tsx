@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import Sidebar from '@/app/components/Sidebar/Sidebar';
 import OptimizedMarkdown from '@/shared/components/OptimizedMarkdown';
 import { api, noteAPI } from '@/shared/api/client';
+import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { useChatSessions } from '@/features/chat/hooks/useChatSessions';
 import ConfirmModal from '@/shared/components/ConfirmModal/ConfirmModal';
@@ -46,6 +47,7 @@ const PROTECTED_FOLDER = '生活';
 export default function NotesPage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const { isGuestMode, promptLogin } = useGuestMode();
   const { chatSessions, refreshSessions } = useChatSessions();
   
   // UI State
@@ -91,15 +93,24 @@ export default function NotesPage() {
   }, []);
 
   useEffect(() => {
+    if (isGuestMode) {
+      setFolders([]);
+      return;
+    }
     loadFolders();
-  }, []);
+  }, [isGuestMode]);
 
   useEffect(() => {
+    if (isGuestMode) {
+      setNotes([]);
+      return;
+    }
     loadNotes();
-  }, [selectedFolder]);
+  }, [isGuestMode, selectedFolder]);
 
   // 自动保存
   useEffect(() => {
+    if (isGuestMode) return;
     if (!selectedNote) return;
     
     const hasChanges = noteTitle !== selectedNote.title || noteContent !== selectedNote.content;
@@ -131,7 +142,7 @@ export default function NotesPage() {
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [noteTitle, noteContent, selectedNote, toast]);
+  }, [isGuestMode, noteTitle, noteContent, selectedNote, toast]);
 
   const loadFolders = async () => {
     try {
@@ -177,6 +188,15 @@ export default function NotesPage() {
   };
 
   const handleNewNote = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可创建笔记',
+        message: '游客模式下暂不支持创建和编辑笔记，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     try {
       // 切换前同步当前笔记状态
       syncCurrentNoteToList();
@@ -214,6 +234,15 @@ export default function NotesPage() {
   };
 
   const handleDeleteNote = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可删除笔记',
+        message: '游客模式下暂不支持编辑笔记，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!selectedNote) return;
     
     try {
@@ -233,6 +262,15 @@ export default function NotesPage() {
 
   // 文件夹管理
   const handleCreateFolder = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文件夹',
+        message: '游客模式下暂不支持创建和编辑文件夹，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!newFolderName.trim()) {
       toast.warning('请输入文件夹名称');
       return;
@@ -255,6 +293,15 @@ export default function NotesPage() {
   };
 
   const handleRenameFolder = async (folder: FolderData) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文件夹',
+        message: '游客模式下暂不支持创建和编辑文件夹，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (folder.name === PROTECTED_FOLDER) {
       toast.warning('生活才是生命的真谛，不允许重命名');
       return;
@@ -266,6 +313,15 @@ export default function NotesPage() {
   };
 
   const handleSaveRename = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文件夹',
+        message: '游客模式下暂不支持创建和编辑文件夹，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!editingFolderId) return;
     
     if (!editingFolderName.trim()) {
@@ -290,6 +346,15 @@ export default function NotesPage() {
   };
 
   const handleDeleteFolder = (folder: FolderData) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文件夹',
+        message: '游客模式下暂不支持创建和编辑文件夹，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (folder.name === PROTECTED_FOLDER) {
       toast.warning('生活才是生命的真谛，不允许删除');
       return;
@@ -301,6 +366,15 @@ export default function NotesPage() {
   };
 
   const confirmDeleteFolder = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文件夹',
+        message: '游客模式下暂不支持创建和编辑文件夹，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!folderToDelete) return;
     
     try {
@@ -323,6 +397,14 @@ export default function NotesPage() {
 
   // 聊天处理函数
   const handleNewChat = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可新建对话',
+        message: '游客模式下仅支持浏览页面和发送 3 条消息，新建对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     navigate('/');
   };
 
@@ -331,6 +413,15 @@ export default function NotesPage() {
   };
 
   const handleDeleteChat = async (chatId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理对话',
+        message: '删除历史对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     try {
       await api.deleteChatSession(chatId);
       await refreshSessions();
@@ -364,6 +455,15 @@ export default function NotesPage() {
   };
 
   const handleDrop = async (e: React.DragEvent, targetFolderId: string | null) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可整理笔记',
+        message: '游客模式下暂不支持移动笔记，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     e.preventDefault();
     setDragOverFolderId(null);
     

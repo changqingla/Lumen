@@ -18,6 +18,7 @@ import {
 import { initializeEmptySessionRuntime, useRAGChat } from '@/features/chat/hooks/useRAGChat';
 import { useChatImageUpload } from '@/features/chat/hooks/useChatImageUpload';
 import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/useChatModels';
+import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { api, type ChatAttachment, type ChatRuntimeThreadUploadFile } from '@/shared/api/client';
@@ -280,6 +281,7 @@ const isInlineImageWorkspaceAttachment = (attachment: ChatAttachment) => {
 
 export default function Home() {
   const toast = useToast();
+  const { isGuestMode, hasReachedGuestMessageLimit, consumeGuestMessage, promptLogin } = useGuestMode();
   const { profile } = useUserProfile();
   const welcomePrefixText = useMemo(() => {
     const name = (profile?.name || '').trim();
@@ -362,6 +364,15 @@ export default function Home() {
   
   // 处理文件上传点击
   const handleUploadClick = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可上传文件',
+        message: '游客模式下可以浏览页面和发送 3 条消息，上传文件需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (fileInputRef.current) {
       fileInputRef.current.click();
     }
@@ -446,13 +457,18 @@ export default function Home() {
 
   // 加载聊天会话列表
   const loadChatSessions = useCallback(async () => {
+    if (isGuestMode) {
+      setChatSessions([]);
+      return;
+    }
+
     try {
       const response = await api.listChatSessions(1, 50);
       setChatSessions(response.sessions);
     } catch (error) {
       console.error('Failed to load chat sessions:', error);
     }
-  }, []);
+  }, [isGuestMode]);
 
   // ✅ 使用 useCallback 包装回调函数，避免不必要的重新渲染
   const handleError = useCallback((error: string | Error) => {
@@ -547,6 +563,15 @@ export default function Home() {
   });
 
   const uploadSelectedFiles = useCallback(async (selectedFiles: File[]) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可上传文件',
+        message: '游客模式下可以浏览页面和发送 3 条消息，上传文件需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (selectedFiles.length === 0) return;
 
     const imageFiles: File[] = [];
@@ -668,6 +693,8 @@ export default function Home() {
     appendChatImages,
     attachedFiles.length,
     currentSessionId,
+    isGuestMode,
+    promptLogin,
     selectedKBs,
     selectedDocIds,
     selectedModelName,
@@ -721,6 +748,13 @@ export default function Home() {
 
   // 加载知识库
   const loadKnowledgeBases = async () => {
+    if (isGuestMode) {
+      setMyKBs([]);
+      setFavoriteKBs([]);
+      setLoadingKBs(false);
+      return;
+    }
+
     setLoadingKBs(true);
     try {
       const [myKBResponse, favoriteKBResponse] = await Promise.all([
@@ -739,6 +773,15 @@ export default function Home() {
 
   // 打开知识库选择器时加载知识库并计算位置
   const handleOpenKBSelector = (buttonRef?: React.RefObject<HTMLButtonElement>) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可选择知识库',
+        message: '游客模式下暂不支持绑定知识库，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     const ref = buttonRef || kbButtonRef;
     
     if (ref?.current) {
@@ -1159,6 +1202,15 @@ export default function Home() {
       return;
     }
 
+    if (isGuestMode && hasReachedGuestMessageLimit) {
+      promptLogin({
+        title: '登陆解锁更多功能',
+        message: '游客试用仅支持发送 3 条消息，登录后可继续完整体验。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     shouldAutoScrollRef.current = true; // 强制滚动
     
     // ✅ 如果是已有会话，在发送消息前同步更新会话配置（确保文档选择被保存）
@@ -1177,12 +1229,15 @@ export default function Home() {
       }
     }
     
-    sendMessage(text, {
+    await sendMessage(text, {
       imageDataUrls: chatImages.map((item) => item.dataUrl),
       attachments: attachedFiles
         .filter((item) => item.status === 'ready' && item.attachment)
         .map((item) => item.attachment as ChatAttachment),
     });
+    if (isGuestMode) {
+      consumeGuestMessage();
+    }
     setInputMessage('');
     clearChatImages();
     
@@ -1212,6 +1267,15 @@ export default function Home() {
 
   // ✅ 新建对话 - 完整的状态清理
   const handleNewChat = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可新建对话',
+        message: '游客模式下仅支持体验当前会话，创建新对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     const oldSessionId = currentSessionId;
 
     setCurrentSessionId(undefined);
@@ -1271,6 +1335,15 @@ export default function Home() {
 
   // 删除会话
   const handleDeleteChat = async (chatId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理对话',
+        message: '删除历史对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     try {
       await api.deleteChatSession(chatId);
       // 如果删除的是当前会话，切换到新对话
@@ -1369,6 +1442,15 @@ export default function Home() {
 
   // 保存对话到笔记
   const handleSaveToNotes = async (messageId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可保存到笔记',
+        message: '游客模式下暂不支持保存内容，登录后可继续操作。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (savedToNotes.has(messageId)) {
       toast.info('该对话已保存到笔记');
       return;
