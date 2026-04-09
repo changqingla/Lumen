@@ -1211,6 +1211,11 @@ export default function Home() {
       return;
     }
 
+    const imageDataUrls = chatImages.map((item) => item.dataUrl);
+    const readyAttachments = attachedFiles
+      .filter((item) => item.status === 'ready' && item.attachment)
+      .map((item) => item.attachment as ChatAttachment);
+
     shouldAutoScrollRef.current = true; // 强制滚动
     
     // ✅ 如果是已有会话，在发送消息前同步更新会话配置（确保文档选择被保存）
@@ -1228,29 +1233,27 @@ export default function Home() {
         // 继续发送消息，不阻塞用户操作
       }
     }
-    
+
+    // 在流式回答开始前立即清空输入框和附件预览，避免已发送内容残留在编辑区。
+    setInputMessage('');
+    clearChatImages();
+    if (attachedFiles.length > 0) {
+      setAttachedFiles([]);
+    }
+
     await sendMessage(text, {
-      imageDataUrls: chatImages.map((item) => item.dataUrl),
-      attachments: attachedFiles
-        .filter((item) => item.status === 'ready' && item.attachment)
-        .map((item) => item.attachment as ChatAttachment),
+      imageDataUrls,
+      attachments: readyAttachments,
     });
     if (isGuestMode) {
       consumeGuestMessage();
     }
-    setInputMessage('');
-    clearChatImages();
     
     // 清除配额超限弹窗（如果有的话）
     if (quotaExceededModal.isOpen) {
       setQuotaExceededModal({ ...quotaExceededModal, isOpen: false });
     }
-    
-    // 发送后清除附件状态
-    if (attachedFiles.length > 0) {
-      setAttachedFiles([]);
-    }
-    
+
     // 🔒 如果选择了知识库且还未锁定，发送第一条消息后锁定
     if (selectedKBs.length > 0 && !isKBLocked) {
       setIsKBLocked(true);
