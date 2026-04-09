@@ -24,6 +24,7 @@ import { ShareToOrgModal } from '@/features/organization';
 import { kbAPI, favoriteAPI, api } from '@/shared/api/client';
 import { getAssistantRenderableText, hasAssistantActionBar, hasAssistantVisiblePayload } from '@/features/chat/lib/assistant-message';
 import { type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
+import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { getKnowledgeBaseAvatar } from '@/shared/utils/avatarUtils';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
@@ -93,6 +94,7 @@ export default function KnowledgeDetail() {
   const { kbId } = useParams<{ kbId: string }>();
   const navigate = useNavigate();
   const { profile } = useUserProfile();
+  const { isGuestMode, hasReachedGuestMessageLimit, consumeGuestMessage, promptLogin } = useGuestMode();
   const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
   
@@ -210,13 +212,18 @@ export default function KnowledgeDetail() {
 
   // 加载聊天会话列表
   const loadChatSessions = useCallback(async () => {
+    if (isGuestMode) {
+      setChatSessions([]);
+      return;
+    }
+
     try {
       const response = await api.listChatSessions(1, 50);
       setChatSessions(response.sessions);
     } catch (error) {
       console.error('Failed to load chat sessions:', error);
     }
-  }, []);
+  }, [isGuestMode]);
 
   // 选择历史会话
   const handleSelectChat = useCallback((chatId: string) => {
@@ -299,13 +306,25 @@ export default function KnowledgeDetail() {
     });
   }, [chatModels, currentSessionId, defaultModelName, selectedModelName, uiMode]);
 
-  const handleSendChatMessage = () => {
+  const handleSendChatMessage = async () => {
     const text = chatInput.trim();
     if (!text) {
       return;
     }
 
-    sendMessage(text);
+    if (isGuestMode && hasReachedGuestMessageLimit) {
+      promptLogin({
+        title: '登陆解锁更多功能',
+        message: '游客试用仅支持发送 3 条消息，登录后可继续完整体验。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
+    await sendMessage(text);
+    if (isGuestMode) {
+      consumeGuestMessage();
+    }
     setChatInput('');
     if (quotaExceededModal.isOpen) {
       setQuotaExceededModal((previous) => ({ ...previous, isOpen: false }));
@@ -546,6 +565,11 @@ export default function KnowledgeDetail() {
   }, [isStreaming, messages.length, scrollChatToBottom]);
 
   const loadKnowledgeBases = useCallback(async () => {
+    if (isGuestMode) {
+      setMyKnowledgeBases([]);
+      return;
+    }
+
     try {
       const response = await kbAPI.listKnowledgeBases();
       setMyKnowledgeBases((response.items || []) as KnowledgeBaseSummary[]);
@@ -553,7 +577,7 @@ export default function KnowledgeDetail() {
       console.error('Failed to load knowledge bases:', error);
       toast.error(getKnowledgeDetailErrorMessage(error, '加载知识库失败'));
     }
-  }, [toast]);
+  }, [isGuestMode, toast]);
 
   const loadVisibilityStatus = useCallback(async () => {
     if (!kbId) return;
@@ -598,7 +622,7 @@ export default function KnowledgeDetail() {
       console.log(`Loaded ${docIds.length} ready documents for KB ${kbId}`);
       
       // 检查文档收藏状态
-      if (nextDocuments.length > 0) {
+      if (!isGuestMode && nextDocuments.length > 0) {
         try {
           const items = nextDocuments.map((doc) => ({ type: 'document', id: doc.id }));
           const favoriteStatus = await favoriteAPI.checkFavorites(items);
@@ -623,7 +647,7 @@ export default function KnowledgeDetail() {
       toast.error(getKnowledgeDetailErrorMessage(error, '加载文档失败'));
       return [];
     }
-  }, [kbId, toast]);
+  }, [isGuestMode, kbId, toast]);
 
   // ============ File Upload Handlers ============
 
@@ -644,6 +668,15 @@ export default function KnowledgeDetail() {
     e.stopPropagation();
     setIsDragging(false);
     
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可上传文档',
+        message: '游客模式下可以浏览页面和发送 3 条消息，上传文档需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!currentKb?.isOwner) {
       toast.warning('只有所有者可以上传文档');
       return;
@@ -654,7 +687,17 @@ export default function KnowledgeDetail() {
     }
   };
 
-  const handleOpenPicker = () => fileInputRef.current?.click();
+  const handleOpenPicker = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可上传文档',
+        message: '游客模式下可以浏览页面和发送 3 条消息，上传文档需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+    fileInputRef.current?.click();
+  };
 
   // 复制消息内容
   const handleCopyMessage = async (content: string, messageId: string) => {
@@ -737,6 +780,15 @@ export default function KnowledgeDetail() {
 
   // 保存对话到笔记
   const handleSaveToNotes = async (messageId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可保存到笔记',
+        message: '游客模式下暂不支持保存内容，登录后可继续操作。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (savedToNotes.has(messageId)) {
       toast.info('该对话已保存到笔记');
       return;
@@ -765,6 +817,15 @@ export default function KnowledgeDetail() {
   };
 
   const handleFilesUpload = async (files: File[]) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可上传文档',
+        message: '游客模式下可以浏览页面和发送 1 条消息，上传文档需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!kbId) {
       toast.warning('请先选择一个知识库');
       return;
@@ -800,6 +861,15 @@ export default function KnowledgeDetail() {
   };
 
   const handleDeleteDocument = async (docId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文档',
+        message: '游客模式下暂不支持修改知识库内容，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!kbId) return;
     if (!currentKb?.isOwner) {
       toast.warning('只有所有者可以删除文档');
@@ -830,6 +900,15 @@ export default function KnowledgeDetail() {
 
   // 重试处理失败的文档
   const handleRetryDocument = async (docId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理文档',
+        message: '游客模式下暂不支持修改知识库内容，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!kbId) return;
     if (!currentKb?.isOwner) {
       toast.warning('只有所有者可以重新处理文档');
@@ -858,6 +937,15 @@ export default function KnowledgeDetail() {
   // ============ Knowledge Base Management ============
 
   const handleCreateKB = async (data: KnowledgeBaseFormData) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可创建知识库',
+        message: '游客模式下暂不支持创建知识库，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     try {
       await kbAPI.createKnowledgeBase(data.name, data.description, data.category);
       await loadKnowledgeBases();
@@ -868,11 +956,28 @@ export default function KnowledgeDetail() {
   };
 
   const handleEditKB = (kb?: KnowledgeBaseSummary) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可编辑知识库',
+        message: '游客模式下暂不支持修改知识库信息，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     setEditingKb(kb || currentKb || null);
     setIsEditModalOpen(true);
   };
 
   const handleSaveKB = async (data: KnowledgeBaseFormData) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可编辑知识库',
+        message: '游客模式下暂不支持修改知识库信息，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     const targetKbId = editingKb?.id || kbId;
     if (!targetKbId) return;
     try {
@@ -892,6 +997,15 @@ export default function KnowledgeDetail() {
 
   // 处理知识库头像上传
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可上传头像',
+        message: '游客模式下暂不支持修改知识库信息，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file || !kbId || !currentKb?.isOwner) return;
     
@@ -938,6 +1052,15 @@ export default function KnowledgeDetail() {
   };
 
   const handleDocumentDrop = async (docId: string, sourceKbId: string, targetKbId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可移动文档',
+        message: '游客模式下暂不支持修改知识库内容，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!currentKb?.isOwner) {
       toast.warning('只有所有者可以移动文档');
       return;
@@ -961,6 +1084,15 @@ export default function KnowledgeDetail() {
   };
 
   const handleDeleteKB = (targetKb?: KnowledgeBaseSummary | string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可删除知识库',
+        message: '游客模式下暂不支持删除知识库，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     const targetKbId = typeof targetKb === 'string' ? targetKb : targetKb?.id || kbId;
     if (!targetKbId) return;
     const matchedKb = typeof targetKb === 'object'
@@ -990,6 +1122,14 @@ export default function KnowledgeDetail() {
   // ============ Public/Private Toggle ============
 
   const handleTogglePublic = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可修改可见性',
+        message: '游客模式下暂不支持管理知识库权限，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     setIsTogglePublicModalOpen(true);
   };
 
@@ -1011,6 +1151,14 @@ export default function KnowledgeDetail() {
 
   // 共享到组织
   const handleShareBtnClick = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可共享知识库',
+        message: '游客模式下暂不支持共享操作，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     if (sharedOrgs.length > 0) {
       setIsUnshareModalOpen(true);
     } else {
@@ -1052,6 +1200,15 @@ export default function KnowledgeDetail() {
   // ============ Subscribe/Unsubscribe ============
 
   const handleSubscribe = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可订阅知识库',
+        message: '游客模式下暂不支持订阅与取消订阅，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!kbId) return;
     if (currentKb?.isSubscribed) {
       setIsUnsubscribeModalOpen(true);
@@ -1133,6 +1290,15 @@ export default function KnowledgeDetail() {
   // ============ Favorite Document ============
 
   const handleToggleFavoriteDoc = async (docId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可收藏文档',
+        message: '游客模式下暂不支持收藏操作，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (!kbId) return;
     
     try {

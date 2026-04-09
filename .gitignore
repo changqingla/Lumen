@@ -82,10 +82,7 @@ Thumbs.db
 # -----------------------------
 # Project-specific
 # -----------------------------
-agent-bk/
 runtimes/legacy-agent/.agent/temp/
 runtimes/state/runtime-venv/
 services/rag/core/res/huqie.txt.trie
 services/rag/core/res/*.trie
-.kiro/
-Third

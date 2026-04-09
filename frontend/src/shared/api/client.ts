@@ -1,12 +1,24 @@
 // API 客户端工具
 import type { ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 import { dispatchAuthSessionReset } from '@/shared/lib/auth-runtime';
+import { getGuestModeGuestId, isGuestModeEnabled } from '@/shared/lib/guest-mode';
 import { safeLocalStorageRemove } from '@/shared/utils/localStorage';
 
 // API 基础配置
 // 开发环境使用相对路径，通过 Vite 代理
 // 生产环境使用环境变量配置的完整 URL
 export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
+const attachGuestHeaders = (headers: Headers, token: string | null) => {
+  if (token || !isGuestModeEnabled() || headers.has('X-Guest-Id')) {
+    return;
+  }
+
+  const guestId = getGuestModeGuestId();
+  if (guestId) {
+    headers.set('X-Guest-Id', guestId);
+  }
+};
 
 // 通用请求函数
 async function request<T>(
@@ -24,6 +36,7 @@ async function request<T>(
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
+  attachGuestHeaders(headers, token);
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
@@ -114,6 +127,7 @@ async function requestBlob(
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
+  attachGuestHeaders(headers, token);
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,

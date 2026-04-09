@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { ToastProvider } from "@/shared/hooks/useToast";
 import ProtectedRoute from "@/app/components/ProtectedRoute";
 import AdminRoute from "@/app/components/RouteGuards/AdminRoute";
+import GuestLoginPrompt from "@/shared/components/GuestLoginPrompt/GuestLoginPrompt";
 
 const Home = lazy(() => import("@/features/chat/pages/HomePage"));
 const ChatDetail = lazy(() => import("@/features/chat/pages/ChatDetailPage"));
@@ -17,6 +18,7 @@ export default function App() {
   return (
     <ToastProvider>
       <Router>
+        <GuestLoginPrompt />
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-sm text-gray-500">Loading...</div>}>
           <Routes>
             {/* 公开路由 */}

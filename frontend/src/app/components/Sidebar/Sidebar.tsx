@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Sun, Moon, Headphones, LogOut, Book, Star, Notebook, ChevronsLeft, ChevronsRight, MoreVertical, Trash2, User, Building2, CreditCard, Settings as SettingsIcon, MessageSquareX, Bot } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { useTheme } from '@/shared/hooks/useTheme';
+import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import ContactModal from '@/shared/components/ContactModal/ContactModal';
 import UserBadge from '@/shared/components/UserBadge/UserBadge';
@@ -45,6 +46,7 @@ const normalizeUserLevel = (value: unknown): UserLevel => {
 export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClearAllChats, selectedChatId, collapsed: controlledCollapsed, onToggleCollapse, chats = [] }: SidebarProps) {
   const navigate = useNavigate();
   const { isDark, toggleTheme } = useTheme();
+  const { isGuestMode, promptLogin } = useGuestMode();
   const toast = useToast();
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [menuOpenChatId, setMenuOpenChatId] = useState<string | null>(null);
@@ -94,6 +96,20 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
       console.warn('Failed to read cached user profile:', error);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isGuestMode) {
+      return;
+    }
+
+    setProfile({
+      name: '游客',
+      email: '',
+      avatar: null,
+      user_level: 'basic',
+      is_admin: false,
+    });
+  }, [isGuestMode]);
 
   // 监听 localStorage 变化，实时更新用户信息
   useEffect(() => {
@@ -167,6 +183,15 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
   };
 
   const handleNewChatClick = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可新建对话',
+        message: '游客模式下仅支持浏览页面和发送 3 条消息，新建对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     try {
       // ✅ 清除 localStorage 中保存的会话ID，确保跳转到首页时显示空白的新对话界面
       // 这样可以避免从其他页面点击"新建对话"时，自动恢复首页的历史会话
@@ -184,6 +209,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
 
   const handleDeleteChat = (e: React.MouseEvent, chatId: string) => {
     e.stopPropagation(); // 阻止触发聊天项的点击事件
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理对话',
+        message: '删除历史对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     if (onDeleteChat) {
       onDeleteChat(chatId);
     }
@@ -197,6 +230,15 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
 
   // 清除所有对话
   const handleClearAllChats = async () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可清空对话',
+        message: '游客模式下暂不支持批量管理对话，登录后可继续操作。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     setIsClearingChats(true);
     try {
       await api.deleteAllChatSessions();
@@ -422,6 +464,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
               <button 
                 className={styles.menuItem} 
                 onClick={() => {
+                  if (isGuestMode) {
+                    promptLogin({
+                      title: '登录后可查看个人中心',
+                      message: '游客模式下暂不提供个人资料和会员能力，请先登录。',
+                      confirmText: '去登录',
+                    });
+                    return;
+                  }
                   setProfileInitialTab('profile');
                   setIsProfileModalOpen(true);
                   setIsProfileOpen(false);
@@ -432,7 +482,17 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
               </button>
               <button 
                 className={styles.menuItem} 
-                onClick={handleOrgManagerClick}
+                onClick={() => {
+                  if (isGuestMode) {
+                    promptLogin({
+                      title: '登录后可管理组织',
+                      message: '组织相关功能需要先登录。',
+                      confirmText: '去登录',
+                    });
+                    return;
+                  }
+                  handleOrgManagerClick();
+                }}
               >
                 <span className={styles.menuIcon}><Building2 size={16} /></span>
                 <span>组织管理</span>
@@ -440,6 +500,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
               <button
                 className={styles.menuItem}
                 onClick={() => {
+                  if (isGuestMode) {
+                    promptLogin({
+                      title: '登录后可配置模型',
+                      message: '模型配置属于账号能力，登录后即可使用。',
+                      confirmText: '去登录',
+                    });
+                    return;
+                  }
                   setIsModelConfigOpen(true);
                   setIsProfileOpen(false);
                 }}
@@ -451,6 +519,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
                 <button 
                   className={styles.menuItem} 
                   onClick={() => {
+                    if (isGuestMode) {
+                      promptLogin({
+                        title: '登录后可升级会员',
+                        message: '游客模式下暂不支持会员操作，请先登录。',
+                        confirmText: '去登录',
+                      });
+                      return;
+                    }
                     setIsProfileModalOpen(true);
                     setIsProfileOpen(false);
                   }}
@@ -463,6 +539,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
                 <button 
                   className={styles.menuItem} 
                   onClick={() => {
+                    if (isGuestMode) {
+                      promptLogin({
+                        title: '登录后可进入管理后台',
+                        message: '后台管理能力需要先登录。',
+                        confirmText: '去登录',
+                      });
+                      return;
+                    }
                     navigate('/admin');
                     setIsProfileOpen(false);
                   }}
@@ -478,6 +562,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
               <button
                 className={styles.menuItem}
                 onClick={() => {
+                  if (isGuestMode) {
+                    promptLogin({
+                      title: '登录后可清空对话',
+                      message: '游客模式下暂不支持批量管理对话，登录后可继续操作。',
+                      confirmText: '去登录',
+                    });
+                    return;
+                  }
                   setIsClearChatsModalOpen(true);
                   setIsProfileOpen(false);
                 }}
@@ -498,6 +590,14 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
                 type="button"
                 className={`${styles.menuItem} ${styles.menuDanger}`}
                 onClick={() => {
+                  if (isGuestMode) {
+                    promptLogin({
+                      title: '继续体验请先登录',
+                      message: '游客模式下点击这里会带你回到首页登录弹窗。',
+                      confirmText: '去登录',
+                    });
+                    return;
+                  }
                   try {
                     localStorage.removeItem('userProfile');
                     localStorage.removeItem('auth_token');

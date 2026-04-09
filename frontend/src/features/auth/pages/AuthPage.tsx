@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import heroImage1 from '@/assets/show/image-a40e9b1a22ad.webp';
 import heroImage2 from '@/assets/show/image-c5c42bc275b8.webp';
 import heroImage3 from '@/assets/show/image-9414bca96a27.webp';
@@ -8,6 +8,7 @@ import heroImage4 from '@/assets/show/image-758c70f191b1.webp';
 import heroImage5 from '@/assets/show/image-06e1d61b8d42.webp';
 import { authAPI } from '@/shared/api/client';
 import { dispatchAuthSessionReset } from '@/shared/lib/auth-runtime';
+import { disableGuestMode, enableGuestMode } from '@/shared/lib/guest-mode';
 import {
   ArrowRight,
   BarChart3,
@@ -117,7 +118,7 @@ function Header({ onLoginClick }: { onLoginClick: () => void }) {
   );
 }
 
-function Hero() {
+function Hero({ onTryDemo }: { onTryDemo: () => void }) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   useEffect(() => {
@@ -170,12 +171,12 @@ function Hero() {
             Get Started on GitHub
             <ArrowRight className="h-5 w-5" />
           </a>
-          <a
+          <button
             className="flex items-center justify-center gap-2 rounded-xl border border-on-surface/20 bg-surface-container-low/50 px-8 py-4 text-lg font-semibold text-on-surface backdrop-blur-md transition-all hover:bg-surface-container-high"
-            href="#features"
+            onClick={onTryDemo}
           >
             Try Demo
-          </a>
+          </button>
         </motion.div>
 
         <motion.div
@@ -794,6 +795,7 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
       localStorage.setItem('auth_token', response.token);
       localStorage.setItem('auth_user', JSON.stringify(response.user));
       localStorage.setItem('userProfile', JSON.stringify(response.user));
+      disableGuestMode();
       dispatchAuthSessionReset();
       setSuccessMsg('Signed in successfully. Redirecting to your workspace...');
       setIsClosingAfterSuccess(true);
@@ -1036,6 +1038,8 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
 }
 
 export default function AuthPage() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   useEffect(() => {
@@ -1067,11 +1071,26 @@ export default function AuthPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const modal = searchParams.get('modal');
+    if (modal !== 'login') {
+      return;
+    }
+
+    setIsAuthModalOpen(true);
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleTryDemo = () => {
+    enableGuestMode();
+    navigate('/');
+  };
+
   return (
     <div className="min-h-screen overflow-y-auto bg-background text-on-surface selection:bg-primary/30 selection:text-primary">
       <Header onLoginClick={() => setIsAuthModalOpen(true)} />
       <main>
-        <Hero />
+        <Hero onTryDemo={handleTryDemo} />
         <ValueProp />
         <Features />
         <Architecture />

@@ -17,6 +17,7 @@ import { api, favoriteAPI, kbAPI } from '@/shared/api/client';
 import { getAssistantRenderableText, hasAssistantActionBar, hasAssistantVisiblePayload } from '@/features/chat/lib/assistant-message';
 import { type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/useChatModels';
+import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { useRAGChat } from '@/features/chat/hooks/useRAGChat';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
@@ -71,6 +72,7 @@ export default function FavoritesPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
+  const { isGuestMode, hasReachedGuestMessageLimit, consumeGuestMessage, promptLogin } = useGuestMode();
   const { profile } = useUserProfile();
   const { chatSessions, refreshSessions } = useChatSessions();
   const [activeTab, setActiveTab] = useState<TabType>('kb');
@@ -250,6 +252,13 @@ export default function FavoritesPage() {
   }, []);
 
   const loadFavorites = useCallback(async () => {
+    if (isGuestMode) {
+      setFavoriteKBs([]);
+      setFavoriteDocs([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       if (activeTab === 'kb') {
@@ -266,7 +275,7 @@ export default function FavoritesPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, toast]);
+  }, [activeTab, isGuestMode, toast]);
 
   useEffect(() => {
     loadFavorites();
@@ -302,6 +311,15 @@ export default function FavoritesPage() {
   }, [isStreaming, messages, scrollToBottom]);
 
   const handleUnfavoriteDoc = async (docId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理收藏',
+        message: '游客模式下暂不支持收藏操作，请先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     console.log('handleUnfavoriteDoc called with docId:', docId);
     try {
       await favoriteAPI.unfavoriteDocument(docId);
@@ -410,14 +428,25 @@ export default function FavoritesPage() {
   }, []);
 
   // 发送消息
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!previewDoc || isStreaming) return;
     const text = inputMessage.trim();
     if (!text) {
       return;
     }
+    if (isGuestMode && hasReachedGuestMessageLimit) {
+      promptLogin({
+        title: '登陆解锁更多功能',
+        message: '游客试用仅支持发送 3 条消息，登录后可继续完整体验。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     shouldAutoScrollRef.current = true; // 发送消息时强制开启自动滚动
-    sendMessage(text);
+    await sendMessage(text);
+    if (isGuestMode) {
+      consumeGuestMessage();
+    }
     setInputMessage('');
     // 清除配额超限弹窗（如果有的话）
     if (quotaExceededModal.isOpen) {
@@ -508,6 +537,15 @@ export default function FavoritesPage() {
 
   // 保存对话到笔记
   const handleSaveToNotes = async (messageId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可保存到笔记',
+        message: '游客模式下暂不支持保存内容，登录后可继续操作。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     if (savedToNotes.has(messageId)) {
       toast.info('该对话已保存到笔记');
       return;
@@ -530,6 +568,14 @@ export default function FavoritesPage() {
 
   // 聊天处理函数
   const handleNewChat = () => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可新建对话',
+        message: '游客模式下仅支持体验当前会话，创建新对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
     navigate('/');
   };
 
@@ -538,6 +584,15 @@ export default function FavoritesPage() {
   };
 
   const handleDeleteChat = async (chatId: string) => {
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可管理对话',
+        message: '删除历史对话需要先登录。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
     try {
       await api.deleteChatSession(chatId);
       if (chatId === currentSessionId) {
