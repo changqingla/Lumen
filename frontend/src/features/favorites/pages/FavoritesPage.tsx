@@ -443,18 +443,20 @@ export default function FavoritesPage() {
       return;
     }
     shouldAutoScrollRef.current = true; // 发送消息时强制开启自动滚动
+
+    // 在流式回答开始前立即清空输入框，避免已发送内容继续停留在编辑区。
+    setInputMessage('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+
     await sendMessage(text);
     if (isGuestMode) {
       consumeGuestMessage();
     }
-    setInputMessage('');
     // 清除配额超限弹窗（如果有的话）
     if (quotaExceededModal.isOpen) {
       setQuotaExceededModal({ ...quotaExceededModal, isOpen: false });
-    }
-    // 重置输入框高度
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
     }
   };
 

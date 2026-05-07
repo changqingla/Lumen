@@ -321,11 +321,13 @@ export default function KnowledgeDetail() {
       return;
     }
 
+    // 在流式回答开始前立即清空输入框，避免已发送内容继续停留在编辑区。
+    setChatInput('');
+
     await sendMessage(text);
     if (isGuestMode) {
       consumeGuestMessage();
     }
-    setChatInput('');
     if (quotaExceededModal.isOpen) {
       setQuotaExceededModal((previous) => ({ ...previous, isOpen: false }));
     }

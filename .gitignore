@@ -44,6 +44,7 @@ env/
 **/.env.*.local
 !**/.env.template
 !**/.env.example
+runtimes/config/config.yaml
 
 # -----------------------------
 # Logs / Runtime
@@ -84,5 +85,7 @@ Thumbs.db
 # -----------------------------
 runtimes/legacy-agent/.agent/temp/
 runtimes/state/runtime-venv/
+services/rag/tmp/
+services/rag/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 services/rag/core/res/huqie.txt.trie
 services/rag/core/res/*.trie

@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# Tests
+pytest==7.4.4
+pytest-asyncio==0.23.3
+
+# Development tooling
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
