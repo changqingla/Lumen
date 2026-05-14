@@ -9,6 +9,7 @@ from modules.organization.repositories.organization_member_repository import Org
 from infrastructure.services.email_service import EmailService
 from utils.security import verify_password, get_password_hash, create_access_token
 from utils.minio_client import upload_file
+from utils.avatar_security import read_avatar_upload_file, validate_avatar_upload
 from config.settings import settings
 from typing import Tuple, Optional, Dict
 from datetime import datetime
@@ -251,38 +252,19 @@ class AuthService:
         Returns:
             Dict with avatar_url
         """
-        # Validate file type
-        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-        if file.content_type not in allowed_types:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_FILE_TYPE", "message": "仅支持 JPG、PNG、WEBP 格式"}}
-            )
-        
-        # Read file data
-        file_data = await file.read()
-        
-        # Validate file size (从配置读取)
-        max_size = settings.MAX_AVATAR_SIZE
-        if len(file_data) > max_size:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "FILE_TOO_LARGE", "message": f"文件大小不能超过{max_size // 1024 // 1024}MB"}}
-            )
-        
-        # Generate unique filename
-        file_extension = file.filename.split('.')[-1].lower() if file.filename and '.' in file.filename else 'jpg'
-        if file_extension not in {'jpg', 'jpeg', 'png', 'webp'}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_FILE_TYPE", "message": "仅支持 JPG、PNG、WEBP 格式"}}
-            )
+        file_data = await read_avatar_upload_file(file, settings.MAX_AVATAR_SIZE)
+        file_extension, content_type = validate_avatar_upload(
+            file_data=file_data,
+            filename=file.filename,
+            content_type=file.content_type,
+            max_bytes=settings.MAX_AVATAR_SIZE,
+        )
         file_hash = hashlib.md5(file_data).hexdigest()
         object_name = f"avatars/{user_id}/{file_hash}.{file_extension}"
         
         # Upload to MinIO
         try:
-            await upload_file(object_name, file_data, file.content_type)
+            await upload_file(object_name, file_data, content_type)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

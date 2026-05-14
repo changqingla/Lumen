@@ -38,6 +38,11 @@ const markdownSanitizeSchema: RehypeSanitizeOptions = {
       ['className', 'streaming-inline-caret'],
       ['className', 'streaming-code-caret'],
     ],
+    a: [
+      ...(defaultSchema.attributes?.a || []),
+      ['rel', 'nofollow', 'noopener', 'noreferrer'],
+      ['target', '_blank'],
+    ],
     code: [
       ...(defaultSchema.attributes?.code || []),
       'dataCopyContent',

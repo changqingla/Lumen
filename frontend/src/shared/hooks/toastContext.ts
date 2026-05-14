@@ -9,7 +9,6 @@ export interface Toast {
 }
 
 export interface ToastContextType {
-  toasts: Toast[];
   addToast: (type: ToastType, message: string) => void;
   removeToast: (id: string) => void;
   success: (message: string) => void;

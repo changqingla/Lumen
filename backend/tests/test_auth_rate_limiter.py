@@ -43,6 +43,21 @@ def _request(ip: str = "203.0.113.10") -> Request:
     )
 
 
+def _direct_request(
+    peer_ip: str = "8.8.8.8",
+    forwarded_ip: str = "203.0.113.99",
+) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/login",
+            "headers": [(b"x-forwarded-for", forwarded_ip.encode("ascii"))],
+            "client": (peer_ip, 12345),
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_auth_rate_limiter_blocks_after_limit(monkeypatch):
     fake_redis = _FakeRedis()
@@ -58,6 +73,30 @@ async def test_auth_rate_limiter_blocks_after_limit(monkeypatch):
     assert exc_info.value.status_code == 429
     assert exc_info.value.headers == {"Retry-After": "60"}
     assert exc_info.value.detail["error"]["code"] == "RATE_LIMITED"
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limiter_blocks_after_ip_limit_across_subjects(monkeypatch):
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(rate_limiter, "get_redis_client", AsyncMock(return_value=fake_redis))
+    policy = AuthRateLimit(
+        scope="login-ip-test",
+        max_attempts=10,
+        window_seconds=60,
+        ip_max_attempts=2,
+    )
+
+    await rate_limiter.enforce_auth_rate_limit(_request(), policy, "a@example.com")
+    await rate_limiter.enforce_auth_rate_limit(_request(), policy, "b@example.com")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await rate_limiter.enforce_auth_rate_limit(_request(), policy, "c@example.com")
+
+    assert exc_info.value.status_code == 429
+
+
+def test_client_ip_ignores_forwarded_for_from_public_direct_clients():
+    assert rate_limiter._client_ip(_direct_request()) == "8.8.8.8"
 
 
 @pytest.mark.asyncio

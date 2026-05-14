@@ -354,11 +354,12 @@ services:
       LUMEN_SERVER_NAME: ${LUMEN_SERVER_NAME:-ireader.online www.ireader.online}
       LUMEN_SSL_CERT_PATH: ${LUMEN_SSL_CERT_PATH:-/etc/letsencrypt/live/ireader.online/fullchain.pem}
       LUMEN_SSL_CERT_KEY_PATH: ${LUMEN_SSL_CERT_KEY_PATH:-/etc/letsencrypt/live/ireader.online/privkey.pem}
+      MINIO_PROXY_HOST: ${MINIO_PROXY_HOST:-minio:9000}
     command:
       - /bin/sh
       - -lc
       - |
-        envsubst '$$LUMEN_SERVER_NAME $$LUMEN_SSL_CERT_PATH $$LUMEN_SSL_CERT_KEY_PATH' < /etc/nginx/templates/lumen.conf.template > /etc/nginx/conf.d/default.conf &&
+        envsubst '$$LUMEN_SERVER_NAME $$LUMEN_SSL_CERT_PATH $$LUMEN_SSL_CERT_KEY_PATH $$MINIO_PROXY_HOST' < /etc/nginx/templates/lumen.conf.template > /etc/nginx/conf.d/default.conf &&
         nginx -g 'daemon off;'
     ports:
       - "${LUMEN_HTTP_BIND_HOST:-0.0.0.0}:${LUMEN_HTTP_PORT:-80}:80"

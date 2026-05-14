@@ -459,6 +459,7 @@ class DocumentParseService:
                 task.status = TaskStatus.FAILED
                 task.message = f"文档分块失败: {chunk_result['message']}"
                 task.completed_at = datetime.now()
+                self._cleanup_task_payload(task)
                 await self._persist_task(task)
                 return chunk_result
             
@@ -480,6 +481,7 @@ class DocumentParseService:
                 task.status = TaskStatus.FAILED
                 task.message = f"向量化失败: {embedding_result['message']}"
                 task.completed_at = datetime.now()
+                self._cleanup_task_payload(task)
                 await self._persist_task(task)
                 return embedding_result
             
@@ -500,6 +502,7 @@ class DocumentParseService:
                 task.status = TaskStatus.FAILED
                 task.message = f"存储失败: {store_result['message']}"
                 task.completed_at = datetime.now()
+                self._cleanup_task_payload(task)
                 await self._persist_task(task)
                 return store_result
             
@@ -541,6 +544,7 @@ class DocumentParseService:
                 task.message = f"处理异常: {str(e)}"
                 task.completed_at = datetime.now()
                 task.errors.append(str(e))
+                self._cleanup_task_payload(task)
                 await self._persist_task(task)
             
             return {

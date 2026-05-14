@@ -149,3 +149,32 @@ async def test_kb_avatar_rejects_svg_upload(monkeypatch):
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"]["code"] == "VALIDATION_ERROR"
     upload_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kb_avatar_rejects_oversized_upload(monkeypatch):
+    user_id = str(uuid4())
+    kb_id = str(uuid4())
+    service = kb_service_module.KnowledgeBaseService(db=object())
+    service.kb_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(id=kb_id, owner_id=user_id))
+    service.kb_repo.update = AsyncMock()
+    upload_file = AsyncMock()
+    monkeypatch.setattr(kb_service_module, "upload_file", upload_file, raising=False)
+    monkeypatch.setattr(
+        kb_service_module,
+        "settings",
+        SimpleNamespace(MAX_AVATAR_SIZE=3),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.upload_avatar(
+            kb_id=kb_id,
+            user_id=user_id,
+            file_data=b"\x89PNG\r\n\x1a\nextra",
+            filename="avatar.png",
+            content_type="image/png",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error"]["code"] == "VALIDATION_ERROR"
+    upload_file.assert_not_awaited()

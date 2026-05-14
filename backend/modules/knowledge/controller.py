@@ -3,9 +3,11 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from config.database import get_db
+from config.settings import settings
 from middlewares.auth import get_current_user
 from models.user import User
 from schemas.schemas import UpdateKBVisibilityRequest, ShareToOrgsRequest
+from utils.avatar_security import read_avatar_upload_file
 
 router = APIRouter(prefix="/kb", tags=["Knowledge Base"])
 
@@ -116,16 +118,7 @@ async def upload_kb_avatar(
     db: AsyncSession = Depends(get_db)
 ):
     """Upload knowledge base avatar image."""
-    # Validate file type
-    allowed_avatar_types = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
-    if file.content_type not in allowed_avatar_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "VALIDATION_ERROR", "message": "Only JPG, PNG, and WEBP images are allowed"}}
-        )
-    
-    # Read file
-    file_data = await file.read()
+    file_data = await read_avatar_upload_file(file, settings.MAX_AVATAR_SIZE)
     
     # Upload avatar
     service = _create_kb_service(db)
