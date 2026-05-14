@@ -11,6 +11,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { FileText, Star, X, Loader2 } from 'lucide-react';
 import { pptxToHtml } from '@jvmr/pptx-to-html';
 import OptimizedMarkdown from '@/shared/components/OptimizedMarkdown';
+import { sanitizeDocumentHtml } from '@/shared/lib/htmlSanitizer';
 import styles from './DocumentViewer.module.css';
 
 type PreviewType = 'docx' | 'doc' | 'txt' | 'md' | 'pptx';
@@ -123,7 +124,7 @@ export default function DocumentViewer({
             return;
           }
 
-          setPptxSlides(slidesHtml);
+          setPptxSlides(slidesHtml.map((slideHtml) => sanitizeDocumentHtml(slideHtml)));
         } else if (previewType === 'docx' || previewType === 'doc') {
           // 检查是否为 ZIP 格式（真正的 docx）
           const isZip = await isZipLikeBlob(blob);
@@ -154,7 +155,7 @@ export default function DocumentViewer({
               .replace(/<p>/g, '<p class="doc-paragraph">')
               .replace(/<h(\d)>/g, '<h$1 class="doc-heading">');
             
-            setHtmlContent(styledContent);
+            setHtmlContent(sanitizeDocumentHtml(styledContent));
           } else {
             // 旧版 .doc 文件，mammoth 不支持
             if (markdownContent) {
