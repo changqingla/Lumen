@@ -170,6 +170,8 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+# 如需运行测试、格式化或类型检查，再安装开发依赖：
+# pip install -r requirements-dev.txt
 python run_migrations.py
 uvicorn app.main:app --host 0.0.0.0 --port 13000
 ```
