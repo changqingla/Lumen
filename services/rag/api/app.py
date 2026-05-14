@@ -43,6 +43,7 @@ from embed_store.store_utils import ChunkValidator
 from chunk_edit_service import ChunkEditService
 from common_utils import DeepRAGCommonUtils
 from document_parse_service import DocumentParseService, TaskStatus
+from file_security import normalize_upload_filename
 
 # 导入schemas
 from schemas import (
@@ -189,11 +190,13 @@ class UnifiedService:
     def save_temp_file(self, file_content: bytes, filename: str) -> str:
         """保存临时文件"""
         import uuid
+        safe_filename = normalize_upload_filename(filename)
         # 创建UUID子目录来避免文件名冲突，但保持原始文件名
         file_id = str(uuid.uuid4())
         temp_subdir = self.temp_dir / file_id
         temp_subdir.mkdir(exist_ok=True)
-        temp_file_path = temp_subdir / filename
+        temp_file_path = temp_subdir / safe_filename
+        temp_file_path.resolve().relative_to(temp_subdir.resolve())
         
         with open(temp_file_path, "wb") as f:
             f.write(file_content)

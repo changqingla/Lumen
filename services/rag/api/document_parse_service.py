@@ -19,6 +19,7 @@ from pathlib import Path
 
 from embedding.chunk_embedder import ChunkEmbedder, EmbeddingConfig
 from common_utils import DeepRAGCommonUtils
+from file_security import normalize_upload_filename
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +175,12 @@ class DocumentParseService:
             worker_task.add_done_callback(self._worker_tasks.discard)
 
     def _payload_path_for(self, task_id: str, filename: str) -> Path:
-        safe_name = Path(filename).name or "source.bin"
+        safe_name = normalize_upload_filename(filename)
         task_dir = self._payload_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
-        return task_dir / safe_name
+        payload_path = task_dir / safe_name
+        payload_path.resolve().relative_to(task_dir.resolve())
+        return payload_path
 
     def _cleanup_task_payload(self, task: DocumentParseTask) -> None:
         if not task.source_path:
@@ -198,7 +201,7 @@ class DocumentParseService:
 
         task = DocumentParseTask(
             task_id=task_data["task_id"],
-            filename=task_data["filename"],
+            filename=normalize_upload_filename(task_data["filename"]),
             file_size=task_data["file_size"],
             chunk_config=task_data.get("chunk_config", {}),
             embedding_config=task_data.get("embedding_config", {}),
@@ -307,11 +310,12 @@ class DocumentParseService:
             await self.initialize()
 
         task_id = str(uuid.uuid4())
+        safe_filename = normalize_upload_filename(filename)
 
         # 创建任务对象
         task = DocumentParseTask(
             task_id=task_id,
-            filename=filename,
+            filename=safe_filename,
             file_size=len(file_content),
             chunk_config=chunk_config,
             embedding_config=embedding_config,
@@ -321,7 +325,7 @@ class DocumentParseService:
         # 设置任务状态为排队
         task.status = TaskStatus.QUEUED
         task.message = "任务已创建，正在排队等待处理"
-        task.source_path = str(self._payload_path_for(task_id, filename))
+        task.source_path = str(self._payload_path_for(task_id, safe_filename))
         with open(task.source_path, "wb") as payload_file:
             payload_file.write(file_content)
 
@@ -581,7 +585,9 @@ class DocumentParseService:
             # 使用UUID作为文件夹名，保持原始文件名
             task_temp_dir = temp_dir / task.task_id
             task_temp_dir.mkdir(exist_ok=True)
-            temp_file_path = task_temp_dir / task.filename
+            safe_filename = normalize_upload_filename(task.filename)
+            temp_file_path = task_temp_dir / safe_filename
+            temp_file_path.resolve().relative_to(task_temp_dir.resolve())
             if not task.source_path or not Path(task.source_path).exists():
                 raise FileNotFoundError(f"任务源文件不存在: {task.source_path}")
 
