@@ -144,22 +144,31 @@ async def delete_file(object_name: str):
 def get_file_url(object_name: str, expires_seconds: int = 3600) -> str:
     """Get presigned URL for file access."""
     try:
-        if settings.MINIO_PUBLIC_ENDPOINT == "nginx":
-            path_without_signature = f"/minio/{settings.MINIO_BUCKET}/{object_name}"
-            logger.info(f"Generated Nginx proxy URL (no signature) for {object_name}")
-            return path_without_signature
-
         expires = timedelta(seconds=expires_seconds)
         url = minio_client.presigned_get_object(
             settings.MINIO_BUCKET,
             object_name,
             expires=expires
         )
+
+        if settings.MINIO_PUBLIC_ENDPOINT == "nginx":
+            proxied_url = _to_nginx_minio_proxy_url(url)
+            logger.info(f"Generated Nginx proxied presigned URL for {object_name}")
+            return proxied_url
+
         logger.info(f"Generated presigned URL for {object_name}")
         return url
     except S3Error as e:
         logger.error(f"Error generating presigned URL for {object_name}: {e}")
         raise Exception(f"Failed to generate URL: {e}")
+
+
+def _to_nginx_minio_proxy_url(url: str) -> str:
+    parsed = urlparse(url)
+    path_with_query = parsed.path
+    if parsed.query:
+        path_with_query = f"{path_with_query}?{parsed.query}"
+    return f"/minio{path_with_query}"
 
 
 def get_upload_url(object_name: str, expires_seconds: int = 900) -> str:
@@ -173,11 +182,7 @@ def get_upload_url(object_name: str, expires_seconds: int = 900) -> str:
         )
 
         if settings.MINIO_PUBLIC_ENDPOINT == "nginx":
-            parsed = urlparse(url)
-            path_with_query = parsed.path
-            if parsed.query:
-                path_with_query = f"{path_with_query}?{parsed.query}"
-            proxied_url = f"/minio{path_with_query}"
+            proxied_url = _to_nginx_minio_proxy_url(url)
             logger.info(f"Generated Nginx proxied upload URL for {object_name}")
             return proxied_url
 
