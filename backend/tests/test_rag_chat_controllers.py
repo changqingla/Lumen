@@ -11,7 +11,12 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from middlewares.auth import AuthenticatedIdentity
 from modules.chat import controller as chat_controller
+
+
+def _identity(user_id):
+    return AuthenticatedIdentity(user=SimpleNamespace(id=user_id), is_guest=False)
 
 
 class _FakeMessage:
@@ -61,7 +66,7 @@ async def test_get_messages_returns_history(monkeypatch):
     response = await chat_controller.get_messages(
         session_id=session_id,
         db=object(),
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
     )
 
     assert response["messages"] == [{"id": "m-1", "role": "assistant"}]
@@ -119,7 +124,7 @@ async def test_get_messages_merges_attachment_status_from_workspace_manifest(mon
     response = await chat_controller.get_messages(
         session_id=session_id,
         db=object(),
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
     )
 
     attachments = response["messages"][0]["attachments"]
@@ -168,7 +173,7 @@ async def test_create_empty_session_returns_created_session(monkeypatch):
     response = await chat_controller.create_empty_session(
         request=request,
         db=object(),
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
     )
 
     assert response == session_payload
@@ -204,7 +209,7 @@ async def test_create_empty_session_rejects_invalid_model_name(monkeypatch):
         await chat_controller.create_empty_session(
             request=request,
             db=object(),
-            current_user=SimpleNamespace(id=user_id),
+            identity=_identity(user_id),
         )
 
     chat_service.create_empty_session.assert_not_awaited()
@@ -282,7 +287,7 @@ async def test_add_message_registers_chat_inline_images_into_workspace_attachmen
         session_id=session_id,
         request=request,
         db=object(),
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
     )
 
     assert response == persisted_payload
@@ -338,7 +343,7 @@ async def test_add_message_does_not_register_inline_images_when_attachment_valid
             session_id=session_id,
             request=request,
             db=object(),
-            current_user=SimpleNamespace(id=user_id),
+            identity=_identity(user_id),
         )
 
     assert exc_info.value.status_code == 403
@@ -416,7 +421,7 @@ async def test_download_session_artifact_streams_runtime_file(monkeypatch):
         session_id=session_id,
         object_path="mnt/user-data/outputs/final-image.png",
         db=object(),
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
     )
 
     assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''final-image.png"
@@ -454,7 +459,7 @@ async def test_download_session_artifact_streams_minio_file(monkeypatch):
         session_id=session_id,
         object_path=object_path,
         db=object(),
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
     )
 
     assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''report.txt"

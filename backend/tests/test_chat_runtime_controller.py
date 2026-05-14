@@ -11,7 +11,12 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
+from middlewares.auth import AuthenticatedIdentity
 from modules.chat import runtime_controller as chat_runtime_controller
+
+
+def _identity(user_id):
+    return AuthenticatedIdentity(user=SimpleNamespace(id=user_id), is_guest=False)
 
 
 @pytest.mark.asyncio
@@ -43,7 +48,7 @@ async def test_upload_session_thread_files_proxies_to_runtime_uploads(monkeypatc
     response = await chat_runtime_controller.upload_session_thread_files(
         session_id=session_id,
         files=[UploadFile(filename="notes.txt", file=io.BytesIO(b"hello world"))],
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
         db=object(),
     )
 
@@ -89,7 +94,7 @@ async def test_upload_session_thread_files_rejects_oversized_upload(monkeypatch)
         await chat_runtime_controller.upload_session_thread_files(
             session_id=session_id,
             files=[oversized],
-            current_user=SimpleNamespace(id=user_id),
+            identity=_identity(user_id),
             db=object(),
         )
 
@@ -118,7 +123,7 @@ async def test_delete_session_thread_file_proxies_to_runtime_delete(monkeypatch)
     response = await chat_runtime_controller.delete_session_thread_file(
         session_id=session_id,
         filename="notes.txt",
-        current_user=SimpleNamespace(id=user_id),
+        identity=_identity(user_id),
         db=object(),
     )
 

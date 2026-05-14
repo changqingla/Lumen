@@ -7,7 +7,12 @@ from uuid import uuid4
 
 import pytest
 
+from middlewares.auth import AuthenticatedIdentity
 from modules.chat import model_controller as chat_model_controller
+
+
+def _identity(user_id):
+    return AuthenticatedIdentity(user=SimpleNamespace(id=user_id), is_guest=False)
 
 
 @pytest.mark.asyncio
@@ -54,7 +59,7 @@ async def test_list_chat_models_preserves_runtime_vision_metadata(monkeypatch):
     monkeypatch.setattr(model_config_service_module, "ModelConfigService", FakeModelConfigService)
 
     response = await chat_model_controller.list_chat_models(
-        current_user=SimpleNamespace(id=uuid4()),
+        identity=_identity(uuid4()),
         db=object(),
     )
 

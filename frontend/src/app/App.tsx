@@ -1,6 +1,6 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import { ToastProvider } from "@/shared/hooks/useToast";
+import { ToastProvider } from "@/shared/hooks/ToastProvider";
 import ProtectedRoute from "@/app/components/ProtectedRoute";
 import AdminRoute from "@/app/components/RouteGuards/AdminRoute";
 import GuestLoginPrompt from "@/shared/components/GuestLoginPrompt/GuestLoginPrompt";

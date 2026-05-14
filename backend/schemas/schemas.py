@@ -19,11 +19,16 @@ class ErrorCode(str, Enum):
 
 class ErrorResponse(BaseModel):
     """Standard error response."""
-    error: dict = Field(..., example={
-        "code": "VALIDATION_ERROR",
-        "message": "参数不合法",
-        "details": {}
-    })
+    error: dict = Field(
+        ...,
+        json_schema_extra={
+            "example": {
+                "code": "VALIDATION_ERROR",
+                "message": "参数不合法",
+                "details": {},
+            }
+        },
+    )
 
 
 class PaginationMeta(BaseModel):

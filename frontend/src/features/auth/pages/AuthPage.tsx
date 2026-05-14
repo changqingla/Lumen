@@ -9,10 +9,10 @@ import heroImage5 from '@/assets/show/image-06e1d61b8d42.webp';
 import { authAPI } from '@/shared/api/client';
 import { dispatchAuthSessionReset } from '@/shared/lib/auth-runtime';
 import { disableGuestMode, enableGuestMode } from '@/shared/lib/guest-mode';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 import {
   ArrowRight,
   BarChart3,
-  BookOpen,
   Brain,
   ChevronLeft,
   ChevronRight,
@@ -724,8 +724,8 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
       await authAPI.sendVerificationCode(email, mode === 'reset' ? 'reset' : 'register');
       setTimer(60);
       setSuccessMsg('Verification code sent. Please check your inbox.');
-    } catch (err: any) {
-      const msg = mapAuthErrorMessage(err?.message || '', mode, 'send_code');
+    } catch (err: unknown) {
+      const msg = mapAuthErrorMessage(getErrorMessage(err, ''), mode, 'send_code');
       setError(msg);
     } finally {
       setSendingCode(false);
@@ -802,8 +802,8 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
       await preloadHomePage();
       onClose();
       navigate('/');
-    } catch (err: any) {
-      const msg = mapAuthErrorMessage(err?.message || '', mode, 'submit');
+    } catch (err: unknown) {
+      const msg = mapAuthErrorMessage(getErrorMessage(err, ''), mode, 'submit');
       setError(msg);
     } finally {
       setLoading(false);

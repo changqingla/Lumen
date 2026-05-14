@@ -1521,7 +1521,7 @@ export default function Home() {
           {attachedFiles.length > 0 && (
             <div className={styles.attachedFileContainer}>
               <div className={styles.fileCardList}>
-                {attachedFiles.map((attachedFile, index) => (
+                {attachedFiles.map((attachedFile) => (
                   <div key={attachedFile.localId} className={styles.fileCard}>
                     <div className={styles.fileIcon}>
                       <img src={getFileIcon(attachedFile.file.name)} alt="File" />

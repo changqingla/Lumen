@@ -7,6 +7,7 @@ __all__ = [
     "UserRepository",
     "ActivationCodeRepository",
     "OrganizationRepository",
+    "organization_repository",
     "OrganizationMemberRepository",
     "KnowledgeBaseRepository",
     "ChatRepository",
@@ -15,6 +16,10 @@ __all__ = [
 
 _EXPORT_MAP = {
     "UserRepository": (".user_repository", "UserRepository"),
+    "organization_repository": (
+        "modules.organization.repositories.organization_repository",
+        None,
+    ),
     "ActivationCodeRepository": (
         "modules.admin.repositories.activation_code_repository",
         "ActivationCodeRepository",
@@ -42,7 +47,8 @@ def __getattr__(name: str) -> Any:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
     module_name, attribute_name = export
-    value = getattr(import_module(module_name, __name__), attribute_name)
+    module = import_module(module_name, __name__)
+    value = module if attribute_name is None else getattr(module, attribute_name)
     globals()[name] = value
     return value
 

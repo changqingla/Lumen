@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { authAPI } from '@/shared/api/client';
 import { readAuthToken } from '@/shared/lib/auth-runtime';
 import { isGuestModeEnabled } from '@/shared/lib/guest-mode';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 import { useToast } from './useToast';
 
 export interface UserProfile {
@@ -76,8 +77,8 @@ export function useUserProfile() {
           JSON.stringify({ ...parsed, ...profile })
         );
       }
-    } catch (err: any) {
-      const errorMsg = err.message || '加载用户资料失败';
+    } catch (err: unknown) {
+      const errorMsg = getErrorMessage(err, '加载用户资料失败');
       setError(errorMsg);
       console.error('Failed to fetch profile:', err);
     } finally {
@@ -94,8 +95,8 @@ export function useUserProfile() {
         await authAPI.updateProfile(data);
         toast.success('资料更新成功');
         await fetchProfile();
-      } catch (err: any) {
-        const errorMsg = err.message || '更新资料失败';
+      } catch (err: unknown) {
+        const errorMsg = getErrorMessage(err, '更新资料失败');
         toast.error(errorMsg);
         throw err;
       }
@@ -113,8 +114,8 @@ export function useUserProfile() {
         toast.success('头像上传成功');
         await fetchProfile();
         return result.url;
-      } catch (err: any) {
-        const errorMsg = err.message || '头像上传失败';
+      } catch (err: unknown) {
+        const errorMsg = getErrorMessage(err, '头像上传失败');
         toast.error(errorMsg);
         throw err;
       }
@@ -131,8 +132,8 @@ export function useUserProfile() {
         await authAPI.activate(code);
         toast.success('激活成功');
         await fetchProfile();
-      } catch (err: any) {
-        const errorMsg = err.message || '激活失败';
+      } catch (err: unknown) {
+        const errorMsg = getErrorMessage(err, '激活失败');
         toast.error(errorMsg);
         throw err;
       }

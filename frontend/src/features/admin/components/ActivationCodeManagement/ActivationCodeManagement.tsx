@@ -2,10 +2,11 @@
  * 激活码管理组件
  * 提供激活码的生成、查看、作废功能
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Search, Copy, RefreshCw } from 'lucide-react';
 import { adminAPI } from '@/shared/api/client';
 import { useToast } from '@/shared/hooks/useToast';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 import styles from './ActivationCodeManagement.module.css';
 
 interface ActivationCode {
@@ -34,11 +35,7 @@ export default function ActivationCodeManagement() {
     codeExpiresIn: 0, // 激活码有效期（天），0表示永久
   });
 
-  useEffect(() => {
-    loadCodes();
-  }, []);
-
-  const loadCodes = async () => {
+  const loadCodes = useCallback(async () => {
     setLoading(true);
     try {
       const data = await adminAPI.listCodes(undefined, undefined, 1, 100);
@@ -52,13 +49,17 @@ export default function ActivationCodeManagement() {
         is_active: item.is_active,
       }));
       setCodes(formattedCodes);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to load codes:', error);
-      toast.error(error.message || '加载激活码失败');
+      toast.error(getErrorMessage(error, '加载激活码失败'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    void loadCodes();
+  }, [loadCodes]);
 
   const handleCreateCode = async () => {
     setSubmitting(true);
@@ -72,9 +73,9 @@ export default function ActivationCodeManagement() {
       setIsCreateModalOpen(false);
       toast.success('激活码已生成');
       await loadCodes();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to create code:', error);
-      toast.error(error.message || '生成激活码失败');
+      toast.error(getErrorMessage(error, '生成激活码失败'));
     } finally {
       setSubmitting(false);
     }
@@ -87,9 +88,9 @@ export default function ActivationCodeManagement() {
       await adminAPI.deactivateCode(code);
       toast.success('激活码已作废');
       await loadCodes();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to revoke code:', error);
-      toast.error(error.message || '作废激活码失败');
+      toast.error(getErrorMessage(error, '作废激活码失败'));
     }
   };
 
