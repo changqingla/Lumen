@@ -11,6 +11,7 @@ import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { useChatSessions } from '@/features/chat/hooks/useChatSessions';
 import ConfirmModal from '@/shared/components/ConfirmModal/ConfirmModal';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 import {
   Plus,
   Folder,
@@ -92,21 +93,42 @@ export default function NotesPage() {
     return () => window.removeEventListener('resize', check);
   }, []);
 
+  const loadFolders = useCallback(async () => {
+    try {
+      const response = await noteAPI.listFolders();
+      setFolders(response);
+    } catch (error: unknown) {
+      console.error('Failed to load folders:', error);
+      toast.error(getErrorMessage(error, '加载文件夹失败'));
+    }
+  }, [toast]);
+
+  const loadNotes = useCallback(async () => {
+    try {
+      const folderId = selectedFolder === 'all' ? undefined : selectedFolder;
+      const response = await noteAPI.listNotes(folderId, undefined, 1, 100);
+      setNotes(response.items);
+    } catch (error: unknown) {
+      console.error('Failed to load notes:', error);
+      toast.error(getErrorMessage(error, '加载笔记失败'));
+    }
+  }, [selectedFolder, toast]);
+
   useEffect(() => {
     if (isGuestMode) {
       setFolders([]);
       return;
     }
-    loadFolders();
-  }, [isGuestMode]);
+    void loadFolders();
+  }, [isGuestMode, loadFolders]);
 
   useEffect(() => {
     if (isGuestMode) {
       setNotes([]);
       return;
     }
-    loadNotes();
-  }, [isGuestMode, selectedFolder]);
+    void loadNotes();
+  }, [isGuestMode, loadNotes]);
 
   // 自动保存
   useEffect(() => {
@@ -134,8 +156,8 @@ export default function NotesPage() {
         ));
         
         setSelectedNote(prev => prev ? { ...prev, title: noteTitle, content: noteContent, updatedAt } : null);
-      } catch (error: any) {
-        toast.error(error.message || '保存失败');
+      } catch (error: unknown) {
+        toast.error(getErrorMessage(error, '保存失败'));
       } finally {
         setSaving(false);
       }
@@ -143,27 +165,6 @@ export default function NotesPage() {
 
     return () => clearTimeout(timer);
   }, [isGuestMode, noteTitle, noteContent, selectedNote, toast]);
-
-  const loadFolders = async () => {
-    try {
-      const response = await noteAPI.listFolders();
-      setFolders(response);
-    } catch (error: any) {
-      console.error('Failed to load folders:', error);
-      toast.error(error.message || '加载文件夹失败');
-    }
-  };
-
-  const loadNotes = async () => {
-    try {
-      const folderId = selectedFolder === 'all' ? undefined : selectedFolder;
-      const response = await noteAPI.listNotes(folderId, undefined, 1, 100);
-      setNotes(response.items);
-    } catch (error: any) {
-      console.error('Failed to load notes:', error);
-      toast.error(error.message || '加载笔记失败');
-    }
-  };
 
   // 同步当前笔记状态到列表
   const syncCurrentNoteToList = useCallback(() => {
@@ -228,8 +229,8 @@ export default function NotesPage() {
       setNoteContent(newNote.content);
       // 新笔记默认以编辑模式打开
       setIsPreviewMode(false);
-    } catch (error: any) {
-      toast.error(error.message || '创建笔记失败');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '创建笔记失败'));
     }
   };
 
@@ -255,8 +256,8 @@ export default function NotesPage() {
       setNoteContent('');
       
       toast.success('笔记已删除');
-    } catch (error: any) {
-      toast.error(error.message || '删除笔记失败');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '删除笔记失败'));
     }
   };
 
@@ -287,8 +288,8 @@ export default function NotesPage() {
       setCreatingFolder(false);
       setNewFolderName('');
       toast.success('文件夹创建成功');
-    } catch (error: any) {
-      toast.error(error.message || '创建文件夹失败');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '创建文件夹失败'));
     }
   };
 
@@ -340,8 +341,8 @@ export default function NotesPage() {
       setEditingFolderId(null);
       setEditingFolderName('');
       toast.success('文件夹重命名成功');
-    } catch (error: any) {
-      toast.error(error.message || '重命名失败');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '重命名失败'));
     }
   };
 
@@ -387,8 +388,8 @@ export default function NotesPage() {
       }
       
       toast.success('文件夹已删除');
-    } catch (error: any) {
-      toast.error(error.message || '删除文件夹失败');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '删除文件夹失败'));
     } finally {
       setDeleteModalOpen(false);
       setFolderToDelete(null);
@@ -499,8 +500,8 @@ export default function NotesPage() {
       
       const targetFolder = folders.find(f => f.id === targetFolderId);
       toast.success(`已移动到「${targetFolder?.name || '全部'}」`);
-    } catch (error: any) {
-      toast.error(error.message || '移动笔记失败');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '移动笔记失败'));
     } finally {
       setDraggedNote(null);
     }

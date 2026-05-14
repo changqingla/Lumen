@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from config import settings
+from file_security import normalize_upload_filename, read_upload_file_limited
 from schemas import ChunkRequest, UnifiedResponse
 
 logger = logging.getLogger(__name__)
@@ -66,29 +67,21 @@ async def chunk_document(
 
     try:
         # 验证文件
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="文件名不能为空")
+        safe_filename = normalize_upload_filename(file.filename)
 
-        file_ext = Path(file.filename).suffix.lower()
+        file_ext = Path(safe_filename).suffix.lower()
         if file_ext not in settings.SUPPORTED_FORMATS:
             raise HTTPException(
                 status_code=400,
                 detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(settings.SUPPORTED_FORMATS)}"
             )
 
-        # 读取文件内容
-        file_content = await file.read()
-
-        # 检查文件大小
-        if len(file_content) > settings.MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件大小超过限制 ({settings.MAX_FILE_SIZE / 1024 / 1024:.0f}MB)"
-            )
+        # 读取文件内容，过程中超过上限即停止
+        file_content = await read_upload_file_limited(file, settings.MAX_FILE_SIZE)
 
         # 确定解析器类型
         if parser_type == "auto":
-            parser_type = unified_service.detect_parser_type(file.filename)
+            parser_type = unified_service.detect_parser_type(safe_filename)
         
         # 检查是否是视觉解析器
         is_vision_parser = parser_type == "ppt"
@@ -142,7 +135,7 @@ async def chunk_document(
         )
 
         # 调用分块服务
-        result = await unified_service.process_chunk(file_content, file.filename, request)
+        result = await unified_service.process_chunk(file_content, safe_filename, request)
 
         processing_time = time.time() - start_time
 
@@ -159,7 +152,7 @@ async def chunk_document(
             
             return UnifiedResponse(
                 success=True,
-                message=f"成功分块文档 {file.filename}，生成 {result.get('total_chunks', 0)} 个分块",
+                message=f"成功分块文档 {safe_filename}，生成 {result.get('total_chunks', 0)} 个分块",
                 data=response_data,
                 processing_time=processing_time,
                 timestamp=datetime.now().isoformat()
@@ -233,29 +226,21 @@ async def parse_document(
     
     try:
         # 验证文件
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="文件名不能为空")
+        safe_filename = normalize_upload_filename(file.filename)
 
-        file_ext = Path(file.filename).suffix.lower()
+        file_ext = Path(safe_filename).suffix.lower()
         if file_ext not in settings.SUPPORTED_FORMATS:
             raise HTTPException(
                 status_code=400,
                 detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(settings.SUPPORTED_FORMATS)}"
             )
 
-        # 读取文件内容
-        file_content = await file.read()
-
-        # 检查文件大小
-        if len(file_content) > settings.MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件大小超过限制 ({settings.MAX_FILE_SIZE / 1024 / 1024:.0f}MB)"
-            )
+        # 读取文件内容，过程中超过上限即停止
+        file_content = await read_upload_file_limited(file, settings.MAX_FILE_SIZE)
 
         # 自动检测解析器类型
         if parser_type == "auto":
-            parser_type = unified_service.detect_parser_type(file.filename)
+            parser_type = unified_service.detect_parser_type(safe_filename)
         
         # 验证视觉解析器参数
         is_vision_parser = parser_type == "ppt"
@@ -348,7 +333,7 @@ async def parse_document(
 
         # 创建任务并加入队列
         task_id = await unified_service.document_parse_service.create_task(
-            filename=file.filename,
+            filename=safe_filename,
             file_content=file_content,
             chunk_config=chunk_config,
             embedding_config=embedding_config,
@@ -367,7 +352,7 @@ async def parse_document(
             message=f"文档解析任务已创建并加入队列，任务ID: {task_id}",
             data={
                 "task_id": task_id,
-                "filename": file.filename,
+                "filename": safe_filename,
                 "file_size": len(file_content),
                 "status": "queued",
                 "priority": priority.lower(),

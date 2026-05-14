@@ -4,6 +4,7 @@
  */
 
 import { noteAPI } from '@/shared/api/client';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 
 export interface Message {
   id: string;
@@ -126,11 +127,11 @@ export async function saveConversationToNote(
       success: true,
       noteId: response.id
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('保存对话到笔记失败:', error);
     return {
       success: false,
-      error: error.message || '保存失败'
+      error: getErrorMessage(error, '保存失败')
     };
   }
 }

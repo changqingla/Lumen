@@ -149,6 +149,15 @@ class Settings(BaseSettings):
     # 安全配置
     # ============================================================================
     MAX_PASSWORD_LENGTH: int = 72
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300
+    AUTH_RATE_LIMIT_LOGIN_MAX: int = 10
+    AUTH_RATE_LIMIT_SEND_CODE_MAX: int = 5
+    AUTH_RATE_LIMIT_REGISTER_MAX: int = 5
+    AUTH_RATE_LIMIT_RESET_PASSWORD_MAX: int = 5
+    AUTH_RATE_LIMIT_LOGIN_IP_MAX: int = 50
+    AUTH_RATE_LIMIT_SEND_CODE_IP_MAX: int = 20
+    AUTH_RATE_LIMIT_REGISTER_IP_MAX: int = 20
+    AUTH_RATE_LIMIT_RESET_PASSWORD_IP_MAX: int = 20
     
     # ============================================================================
     # 用户默认配置

@@ -13,6 +13,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema, type Options as RehypeSanitizeOptions } from 'rehype-sanitize';
 import 'katex/dist/katex.min.css'; // KaTeX样式
 import '../../styles/markdown.css';
 
@@ -27,6 +28,27 @@ interface OptimizedMarkdownProps {
 
 const STREAMING_CARET_HTML = '<span class="streaming-inline-caret" aria-hidden="true">▌</span>';
 const STREAMING_CODE_CARET_TOKEN = '[[__STREAMING_CODE_CARET__]]';
+
+const markdownSanitizeSchema: RehypeSanitizeOptions = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    span: [
+      ...(defaultSchema.attributes?.span || []),
+      ['className', 'streaming-inline-caret'],
+      ['className', 'streaming-code-caret'],
+    ],
+    a: [
+      ...(defaultSchema.attributes?.a || []),
+      ['rel', 'nofollow', 'noopener', 'noreferrer'],
+      ['target', '_blank'],
+    ],
+    code: [
+      ...(defaultSchema.attributes?.code || []),
+      'dataCopyContent',
+    ],
+  },
+};
 
 function getTextContent(children: ReactNode): string {
   if (Array.isArray(children)) {
@@ -662,7 +684,7 @@ export default function OptimizedMarkdown({
     <div className={`markdown-content ${className || ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex, rehypeRaw]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], rehypeKatex]}
         components={{
           pre: ({ children, ...props }) => {
             const blockData = findCodeBlockData(children);

@@ -15,8 +15,7 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI
 import uvicorn
 
 # 添加项目根目录到路径
@@ -44,6 +43,7 @@ from embed_store.store_utils import ChunkValidator
 from chunk_edit_service import ChunkEditService
 from common_utils import DeepRAGCommonUtils
 from document_parse_service import DocumentParseService, TaskStatus
+from file_security import normalize_upload_filename
 
 # 导入schemas
 from schemas import (
@@ -190,11 +190,13 @@ class UnifiedService:
     def save_temp_file(self, file_content: bytes, filename: str) -> str:
         """保存临时文件"""
         import uuid
+        safe_filename = normalize_upload_filename(filename)
         # 创建UUID子目录来避免文件名冲突，但保持原始文件名
         file_id = str(uuid.uuid4())
         temp_subdir = self.temp_dir / file_id
         temp_subdir.mkdir(exist_ok=True)
-        temp_file_path = temp_subdir / filename
+        temp_file_path = temp_subdir / safe_filename
+        temp_file_path.resolve().relative_to(temp_subdir.resolve())
         
         with open(temp_file_path, "wb") as f:
             f.write(file_content)
@@ -678,15 +680,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 添加CORS中间件
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # 全局变量
 executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 chunk_executor = ProcessPoolExecutor(max_workers=settings.CHUNK_PROCESS_WORKERS)
@@ -704,6 +697,7 @@ stats = {
 }
 
 # 注册所有路由
+from auth import require_internal_token
 from routes.health import router as health_router
 from routes.parse import router as parse_router
 from routes.embed import router as embed_router
@@ -714,13 +708,14 @@ from routes.chunk import router as chunk_router
 from routes.recall import router as recall_router
 
 app.include_router(health_router)
-app.include_router(parse_router)
-app.include_router(embed_router)
-app.include_router(store_router)
-app.include_router(delete_router)
-app.include_router(task_router)
-app.include_router(chunk_router)
-app.include_router(recall_router)
+internal_dependencies = [Depends(require_internal_token)]
+app.include_router(parse_router, dependencies=internal_dependencies)
+app.include_router(embed_router, dependencies=internal_dependencies)
+app.include_router(store_router, dependencies=internal_dependencies)
+app.include_router(delete_router, dependencies=internal_dependencies)
+app.include_router(task_router, dependencies=internal_dependencies)
+app.include_router(chunk_router, dependencies=internal_dependencies)
+app.include_router(recall_router, dependencies=internal_dependencies)
 
 
 def main():

@@ -2,10 +2,11 @@
  * 统计数据组件
  * 展示系统的各项统计数据
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Users, Building2, Database, RefreshCw, AlertCircle } from 'lucide-react';
 import { useToast } from '@/shared/hooks/useToast';
 import { adminAPI } from '@/shared/api/client';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 import styles from './Statistics.module.css';
 
 interface StatisticsData {
@@ -33,11 +34,7 @@ export default function Statistics() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
-    loadStatistics();
-  }, []);
-
-  const loadStatistics = async () => {
+  const loadStatistics = useCallback(async () => {
     setLoading(true);
     setErrorMessage('');
     try {
@@ -60,15 +57,19 @@ export default function Statistics() {
           shared: data.knowledge_bases.shared,
         },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to load statistics:', error);
-      const message = error.message || '加载统计数据失败';
+      const message = getErrorMessage(error, '加载统计数据失败');
       setErrorMessage(message);
       toast.error(message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    void loadStatistics();
+  }, [loadStatistics]);
 
   if (loading && !stats) {
     return (

@@ -12,7 +12,7 @@ from schemas.chunk_schemas import (
     ChunkEditRequest,
     ChunkBatchEditRequest,
 )
-from utils.external_services import get_http_client
+from utils.external_services import get_http_client, get_rag_internal_headers
 from utils.es_utils import get_user_es_index
 
 logger = logging.getLogger(__name__)
@@ -256,6 +256,7 @@ class ChunkService:
         response = await get_http_client().post(
             f"{settings.DOC_PROCESS_BASE_URL}/edit-chunk",
             json=payload,
+            headers=get_rag_internal_headers(),
         )
         response.raise_for_status()
         result = response.json()
@@ -303,6 +304,7 @@ class ChunkService:
         response = await get_http_client().post(
             f"{settings.DOC_PROCESS_BASE_URL}/batch-edit-chunks",
             json=payload,
+            headers=get_rag_internal_headers(),
         )
         response.raise_for_status()
         result = response.json()

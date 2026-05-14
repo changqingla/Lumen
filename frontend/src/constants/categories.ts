@@ -3,6 +3,7 @@
  * 包含所有预定义的学科分类及其图标和颜色配置
  */
 import { Book, Briefcase, GraduationCap, FlaskConical, Palette, Scale, Heart, Brain, Atom, Dna, Landmark, Microscope } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 // 知识库分类列表
 export const KNOWLEDGE_CATEGORIES = [
@@ -11,7 +12,7 @@ export const KNOWLEDGE_CATEGORIES = [
 ];
 
 // 分类图标映射
-export const CATEGORY_ICONS: { [key: string]: any } = {
+export const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "哲学": Book,
   "经济学": Briefcase,
   "法学": Scale,
@@ -43,5 +44,4 @@ export const CATEGORY_COLORS: { [key: string]: string } = {
   "艺术学": "#D946EF", // fuchsia
   "其它": "#9CA3AF", // coolGray
 };
-
 

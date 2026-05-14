@@ -9,6 +9,8 @@ from modules.organization.repositories.organization_member_repository import Org
 from repositories.user_repository import UserRepository
 from utils.external_services import DocumentProcessService
 from utils.es_utils import get_user_es_index
+from utils.avatar_security import validate_avatar_upload
+from config.settings import settings
 from typing import List, Tuple, Optional
 import logging
 import uuid
@@ -278,7 +280,6 @@ class KnowledgeBaseService:
     ) -> dict:
         """Upload knowledge base avatar."""
         from utils.minio_client import upload_file
-        import os
         
         # Verify KB ownership
         kb = await self.kb_repo.get_by_id(kb_id, user_id)
@@ -288,17 +289,24 @@ class KnowledgeBaseService:
                 detail={"error": {"code": "NOT_FOUND", "message": "Knowledge base not found"}}
             )
         
-        # Get file extension
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "VALIDATION_ERROR", "message": "仅支持 JPG、JPEG、PNG、GIF、WEBP、SVG 格式"}}
+        try:
+            file_extension, normalized_content_type = validate_avatar_upload(
+                file_data=file_data,
+                filename=filename,
+                content_type=content_type,
+                max_bytes=settings.MAX_AVATAR_SIZE,
             )
+        except HTTPException as exc:
+            if isinstance(exc.detail, dict) and "error" in exc.detail:
+                exc.detail["error"]["code"] = "VALIDATION_ERROR"
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from exc
         
         # Upload to MinIO
-        object_name = f"kb_avatars/{user_id}/{kb_id}{ext}"
-        file_path = await upload_file(object_name, file_data, content_type)
+        object_name = f"kb_avatars/{user_id}/{kb_id}.{file_extension}"
+        await upload_file(object_name, file_data, normalized_content_type)
         
         # Generate presigned URL for access (valid for 7 days)
         from utils.minio_client import get_file_url

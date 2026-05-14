@@ -2,10 +2,11 @@
  * 用户管理组件
  * 提供用户列表查看和管理员权限设置
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Search, Shield, ShieldOff, Crown, Award, User, RefreshCw } from 'lucide-react';
 import { useToast } from '@/shared/hooks/useToast';
 import { adminAPI } from '@/shared/api/client';
+import { getErrorMessage } from '@/shared/utils/errorMessage';
 import styles from './UserManagement.module.css';
 
 interface User {
@@ -25,22 +26,22 @@ export default function UserManagement() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    loadUsers();
-  }, []);
-
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     setLoading(true);
     try {
       const data = await adminAPI.listUsers(1, 100);
       setUsers(data.items);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to load users:', error);
-      toast.error(error.message || '加载用户列表失败');
+      toast.error(getErrorMessage(error, '加载用户列表失败'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
 
   const handleSetAdmin = async (userId: string, isAdmin: boolean) => {
     const action = isAdmin ? '设置' : '取消';
@@ -53,10 +54,10 @@ export default function UserManagement() {
         await adminAPI.removeUserAdmin(userId);
       }
       toast.success(`${action}管理员成功`);
-      loadUsers();
-    } catch (error: any) {
+      await loadUsers();
+    } catch (error: unknown) {
       console.error('Failed to set admin:', error);
-      toast.error(error.message || `${action}管理员失败`);
+      toast.error(getErrorMessage(error, `${action}管理员失败`));
     }
   };
 
