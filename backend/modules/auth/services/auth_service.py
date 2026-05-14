@@ -252,11 +252,11 @@ class AuthService:
             Dict with avatar_url
         """
         # Validate file type
-        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/svg+xml']
+        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
         if file.content_type not in allowed_types:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_FILE_TYPE", "message": "仅支持 JPG, PNG, WEBP, SVG 格式"}}
+                detail={"error": {"code": "INVALID_FILE_TYPE", "message": "仅支持 JPG、PNG、WEBP 格式"}}
             )
         
         # Read file data
@@ -271,7 +271,12 @@ class AuthService:
             )
         
         # Generate unique filename
-        file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+        file_extension = file.filename.split('.')[-1].lower() if file.filename and '.' in file.filename else 'jpg'
+        if file_extension not in {'jpg', 'jpeg', 'png', 'webp'}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": {"code": "INVALID_FILE_TYPE", "message": "仅支持 JPG、PNG、WEBP 格式"}}
+            )
         file_hash = hashlib.md5(file_data).hexdigest()
         object_name = f"avatars/{user_id}/{file_hash}.{file_extension}"
         

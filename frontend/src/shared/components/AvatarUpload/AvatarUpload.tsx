@@ -3,6 +3,9 @@ import { Camera } from 'lucide-react';
 import styles from './AvatarUpload.module.css';
 import defaultAvatar from '@/assets/default-avatar.svg';
 
+const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const AVATAR_ACCEPT = '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
+
 interface AvatarUploadProps {
   currentAvatar: string | null;
   onUpload: (file: File) => Promise<void>;
@@ -28,8 +31,8 @@ export default function AvatarUpload({
     if (!file) return;
 
     // Validate file type
-    if (!file.type.startsWith('image/')) {
-      alert('请上传图片文件');
+    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
+      alert('请上传 JPG、PNG 或 WEBP 图片');
       return;
     }
 
@@ -80,7 +83,7 @@ export default function AvatarUpload({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept={AVATAR_ACCEPT}
         onChange={handleFileChange}
         className={styles.hiddenInput}
       />

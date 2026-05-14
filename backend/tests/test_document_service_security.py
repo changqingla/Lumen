@@ -1,6 +1,6 @@
 import os
 
-os.environ.setdefault("DEBUG", "false")
+os.environ["DEBUG"] = "false"
 
 from types import SimpleNamespace
 from uuid import uuid4
@@ -125,3 +125,27 @@ async def test_move_document_requires_owner_of_both_kbs(monkeypatch):
         await service.move_document("doc-1", source_kb_id, target_kb_id, user_id)
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_kb_avatar_rejects_svg_upload(monkeypatch):
+    user_id = str(uuid4())
+    kb_id = str(uuid4())
+    service = kb_service_module.KnowledgeBaseService(db=object())
+    service.kb_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(id=kb_id, owner_id=user_id))
+    service.kb_repo.update = AsyncMock()
+    upload_file = AsyncMock()
+    monkeypatch.setattr(kb_service_module, "upload_file", upload_file, raising=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.upload_avatar(
+            kb_id=kb_id,
+            user_id=user_id,
+            file_data=b"<svg></svg>",
+            filename="avatar.svg",
+            content_type="image/svg+xml",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error"]["code"] == "VALIDATION_ERROR"
+    upload_file.assert_not_awaited()

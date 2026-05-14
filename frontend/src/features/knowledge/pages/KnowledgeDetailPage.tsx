@@ -89,6 +89,8 @@ import defaultAvatar from '@/assets/default-avatar.svg';
 
 const LazyPDFViewer = lazy(() => import('@/shared/components/PDFViewer/PDFViewer'));
 const LazyDocumentViewer = lazy(() => import('@/shared/components/DocumentViewer/DocumentViewer'));
+const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const AVATAR_ACCEPT = '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
 
 export default function KnowledgeDetail() {
   const { kbId } = useParams<{ kbId: string }>();
@@ -1012,8 +1014,8 @@ export default function KnowledgeDetail() {
     if (!file || !kbId || !currentKb?.isOwner) return;
     
     // 验证文件类型
-    if (!file.type.startsWith('image/')) {
-      toast.error('请选择图片文件');
+    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
+      toast.error('请选择 JPG、PNG 或 WEBP 图片');
       return;
     }
     
@@ -1523,7 +1525,7 @@ export default function KnowledgeDetail() {
                     <input
                       ref={avatarInputRef}
                       type="file"
-                      accept="image/*"
+                      accept={AVATAR_ACCEPT}
                       onChange={handleAvatarUpload}
                       style={{ display: 'none' }}
                     />

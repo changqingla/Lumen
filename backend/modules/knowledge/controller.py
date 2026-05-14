@@ -117,10 +117,11 @@ async def upload_kb_avatar(
 ):
     """Upload knowledge base avatar image."""
     # Validate file type
-    if not file.content_type or not file.content_type.startswith('image/'):
+    allowed_avatar_types = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
+    if file.content_type not in allowed_avatar_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "VALIDATION_ERROR", "message": "Only image files are allowed"}}
+            detail={"error": {"code": "VALIDATION_ERROR", "message": "Only JPG, PNG, and WEBP images are allowed"}}
         )
     
     # Read file

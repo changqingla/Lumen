@@ -290,10 +290,12 @@ class KnowledgeBaseService:
         
         # Get file extension
         ext = os.path.splitext(filename)[1].lower()
-        if ext not in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']:
+        allowed_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+        allowed_content_types = {'image/jpeg', 'image/jpg', 'image/png', 'image/webp'}
+        if ext not in allowed_extensions or content_type not in allowed_content_types:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "VALIDATION_ERROR", "message": "仅支持 JPG、JPEG、PNG、GIF、WEBP、SVG 格式"}}
+                detail={"error": {"code": "VALIDATION_ERROR", "message": "仅支持 JPG、JPEG、PNG、WEBP 格式"}}
             )
         
         # Upload to MinIO
