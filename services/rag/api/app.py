@@ -15,8 +15,7 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI
 import uvicorn
 
 # 添加项目根目录到路径
@@ -678,15 +677,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 添加CORS中间件
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # 全局变量
 executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 chunk_executor = ProcessPoolExecutor(max_workers=settings.CHUNK_PROCESS_WORKERS)
@@ -704,6 +694,7 @@ stats = {
 }
 
 # 注册所有路由
+from auth import require_internal_token
 from routes.health import router as health_router
 from routes.parse import router as parse_router
 from routes.embed import router as embed_router
@@ -714,13 +705,14 @@ from routes.chunk import router as chunk_router
 from routes.recall import router as recall_router
 
 app.include_router(health_router)
-app.include_router(parse_router)
-app.include_router(embed_router)
-app.include_router(store_router)
-app.include_router(delete_router)
-app.include_router(task_router)
-app.include_router(chunk_router)
-app.include_router(recall_router)
+internal_dependencies = [Depends(require_internal_token)]
+app.include_router(parse_router, dependencies=internal_dependencies)
+app.include_router(embed_router, dependencies=internal_dependencies)
+app.include_router(store_router, dependencies=internal_dependencies)
+app.include_router(delete_router, dependencies=internal_dependencies)
+app.include_router(task_router, dependencies=internal_dependencies)
+app.include_router(chunk_router, dependencies=internal_dependencies)
+app.include_router(recall_router, dependencies=internal_dependencies)
 
 
 def main():

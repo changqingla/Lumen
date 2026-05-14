@@ -8,7 +8,7 @@ import logging
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from config import settings
 from common_utils import DeepRAGCommonUtils
@@ -22,7 +22,6 @@ router = APIRouter()
 @router.post("/api/hybrid-recall", response_model=UnifiedResponse)
 async def hybrid_recall(
     request: RecallRequest,
-    x_rag_internal_token: str | None = Header(default=None, alias="X-RAG-Internal-Token"),
 ):
     """
     混合检索召回接口（文本 + 向量）。
@@ -43,12 +42,6 @@ async def hybrid_recall(
 
     if not request.doc_ids:
         raise HTTPException(status_code=400, detail="doc_ids 不能为空")
-
-    expected_token = (settings.RAG_INTERNAL_API_TOKEN or "").strip()
-    if not expected_token:
-        raise HTTPException(status_code=500, detail="RAG_INTERNAL_API_TOKEN 未配置")
-    if (x_rag_internal_token or "").strip() != expected_token:
-        raise HTTPException(status_code=401, detail="Unauthorized internal request")
 
     try:
         emb_model = DeepRAGCommonUtils.create_embedding_model(

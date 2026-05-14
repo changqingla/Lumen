@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 http_client: httpx.AsyncClient | None = None
 
 
+def get_rag_internal_headers() -> Dict[str, str]:
+    """Headers required by the internal RAG service."""
+    token = (settings.RAG_INTERNAL_API_TOKEN or "").strip()
+    if not token:
+        raise RuntimeError("RAG_INTERNAL_API_TOKEN is not configured")
+    return {"X-RAG-Internal-Token": token}
+
+
 def get_http_client() -> httpx.AsyncClient:
     """Get or lazily create the shared HTTP client."""
     global http_client
@@ -326,7 +334,8 @@ class DocumentProcessService:
             response = await get_http_client().post(
                 f"{settings.DOC_PROCESS_BASE_URL}/parse-document",
                 files=files,
-                data=data
+                data=data,
+                headers=get_rag_internal_headers(),
             )
             response.raise_for_status()
             result = response.json()
@@ -345,7 +354,8 @@ class DocumentProcessService:
         """Get document processing task status."""
         try:
             response = await get_http_client().get(
-                f"{settings.DOC_PROCESS_BASE_URL}/task-status/{task_id}"
+                f"{settings.DOC_PROCESS_BASE_URL}/task-status/{task_id}",
+                headers=get_rag_internal_headers(),
             )
             response.raise_for_status()
             result = response.json()
@@ -380,7 +390,8 @@ class DocumentProcessService:
             
             response = await get_http_client().post(
                 f"{settings.DOC_PROCESS_BASE_URL}/delete-document",
-                json=payload
+                json=payload,
+                headers=get_rag_internal_headers(),
             )
             response.raise_for_status()
             result = response.json()
