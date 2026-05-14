@@ -1,7 +1,14 @@
 """Authentication API endpoints with membership support."""
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, Request, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from config.database import get_db
+from modules.auth.rate_limiter import (
+    LOGIN_RATE_LIMIT,
+    REGISTER_RATE_LIMIT,
+    RESET_PASSWORD_RATE_LIMIT,
+    SEND_CODE_RATE_LIMIT,
+    enforce_auth_rate_limit,
+)
 from modules.auth.schemas import (
     LoginRequest,
     RegisterRequest,
@@ -30,10 +37,12 @@ def _create_auth_service(db: AsyncSession):
 
 @router.post("/login", response_model=AuthResponse)
 async def login(
+    http_request: Request,
     request: LoginRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """User login endpoint."""
+    await enforce_auth_rate_limit(http_request, LOGIN_RATE_LIMIT, request.email)
     service = _create_auth_service(db)
     token, user_data = await service.login(request.email, request.password)
     return {"token": token, "user": user_data}
@@ -41,6 +50,7 @@ async def login(
 
 @router.post("/send-code")
 async def send_code(
+    http_request: Request,
     request: SendVerificationCodeRequest,
     db: AsyncSession = Depends(get_db)
 ):
@@ -48,6 +58,11 @@ async def send_code(
     Send verification code to email.
     type: 'register' or 'reset'
     """
+    await enforce_auth_rate_limit(
+        http_request,
+        SEND_CODE_RATE_LIMIT,
+        f"{request.type}:{request.email}",
+    )
     service = _create_auth_service(db)
     success = await service.send_verification_code(request.email, request.type)
     if not success:
@@ -61,10 +76,12 @@ async def send_code(
 
 @router.post("/register", response_model=AuthResponse)
 async def register(
+    http_request: Request,
     request: RegisterRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """User registration endpoint."""
+    await enforce_auth_rate_limit(http_request, REGISTER_RATE_LIMIT, request.email)
     service = _create_auth_service(db)
     token, user_data = await service.register(
         request.email, 
@@ -77,10 +94,12 @@ async def register(
 
 @router.post("/reset-password")
 async def reset_password(
+    http_request: Request,
     request: ResetPasswordRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """Reset user password endpoint."""
+    await enforce_auth_rate_limit(http_request, RESET_PASSWORD_RATE_LIMIT, request.email)
     service = _create_auth_service(db)
     await service.reset_password(
         request.email,
