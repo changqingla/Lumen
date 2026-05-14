@@ -41,7 +41,7 @@ class DocPipelineSettings(BaseSettings):
     CHUNK_PROCESS_WORKERS: int = 4
 
     # 文件处理
-    MAX_FILE_SIZE: int = 5 * 1024 * 1024 * 1024  # 5GB
+    MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
 
     # 类属性（非环境变量）
     SUPPORTED_FORMATS: Set[str] = {

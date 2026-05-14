@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from config import settings
-from file_security import normalize_upload_filename
+from file_security import normalize_upload_filename, read_upload_file_limited
 from schemas import ChunkRequest, UnifiedResponse
 
 logger = logging.getLogger(__name__)
@@ -76,15 +76,8 @@ async def chunk_document(
                 detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(settings.SUPPORTED_FORMATS)}"
             )
 
-        # 读取文件内容
-        file_content = await file.read()
-
-        # 检查文件大小
-        if len(file_content) > settings.MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件大小超过限制 ({settings.MAX_FILE_SIZE / 1024 / 1024:.0f}MB)"
-            )
+        # 读取文件内容，过程中超过上限即停止
+        file_content = await read_upload_file_limited(file, settings.MAX_FILE_SIZE)
 
         # 确定解析器类型
         if parser_type == "auto":
@@ -242,15 +235,8 @@ async def parse_document(
                 detail=f"不支持的文件格式: {file_ext}。支持的格式: {', '.join(settings.SUPPORTED_FORMATS)}"
             )
 
-        # 读取文件内容
-        file_content = await file.read()
-
-        # 检查文件大小
-        if len(file_content) > settings.MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件大小超过限制 ({settings.MAX_FILE_SIZE / 1024 / 1024:.0f}MB)"
-            )
+        # 读取文件内容，过程中超过上限即停止
+        file_content = await read_upload_file_limited(file, settings.MAX_FILE_SIZE)
 
         # 自动检测解析器类型
         if parser_type == "auto":

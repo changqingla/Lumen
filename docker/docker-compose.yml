@@ -320,6 +320,7 @@ services:
       MAX_CONCURRENT_TASKS: ${RAG_MAX_CONCURRENT_TASKS:-4}
       MAX_WORKERS: ${RAG_MAX_WORKERS:-16}
       CHUNK_PROCESS_WORKERS: ${RAG_CHUNK_PROCESS_WORKERS:-4}
+      MAX_FILE_SIZE: ${RAG_MAX_FILE_SIZE:-104857600}
     command: ["python", "api.py"]
     volumes:
       - ../services/rag:/workspace/rag
