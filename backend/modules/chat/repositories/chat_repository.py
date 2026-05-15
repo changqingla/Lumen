@@ -420,13 +420,8 @@ class ChatRepository:
         assistant_tuple_messages: Optional[list[dict]] = None,
         truncation_metadata: Optional[dict] = None,
         interruption: Optional[dict] = None,
-    ) -> Optional[Any]:
-        """
-        构建消息扩展信息并兼容历史结构。
-
-        历史仅存 `document_summaries(list)`；
-        当有图片时升级为 dict 承载复合元数据。
-        """
+    ) -> Optional[dict]:
+        """构建标准消息扩展信息。"""
         return build_message_metadata(
             document_summaries=document_summaries,
             image_data_urls=image_data_urls,

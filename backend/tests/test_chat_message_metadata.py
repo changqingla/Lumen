@@ -2,6 +2,8 @@ import os
 
 os.environ["DEBUG"] = "false"
 
+import pytest
+
 from modules.chat.entities.chat_session import ChatMessage
 from modules.chat.message_metadata import build_message_metadata, parse_message_metadata
 
@@ -118,12 +120,23 @@ def test_message_metadata_round_trips_normalized_extension_payload():
     assert parse_message_metadata(metadata) == ChatMessage._parse_message_metadata(metadata)
 
 
-def test_message_metadata_preserves_legacy_document_summary_shape():
-    legacy_summaries = [{"doc_id": "doc-legacy"}]
+def test_message_metadata_uses_canonical_object_for_document_summaries():
+    document_summaries = [{"doc_id": "doc-1"}]
 
-    assert build_message_metadata(document_summaries=legacy_summaries) == legacy_summaries
-    assert parse_message_metadata(legacy_summaries) == (
-        legacy_summaries,
+    metadata = build_message_metadata(document_summaries=document_summaries)
+
+    assert metadata == {
+        "document_summaries": document_summaries,
+        "image_data_urls": [],
+        "artifacts": [],
+        "attachments": [],
+        "tool_traces": [],
+        "assistant_tuple_messages": [],
+        "truncation": None,
+        "interruption": None,
+    }
+    assert parse_message_metadata(metadata) == (
+        document_summaries,
         [],
         None,
         [],
@@ -132,3 +145,8 @@ def test_message_metadata_preserves_legacy_document_summary_shape():
         [],
         None,
     )
+
+
+def test_message_metadata_rejects_non_object_payloads():
+    with pytest.raises(ValueError, match="JSON object"):
+        parse_message_metadata([{"doc_id": "doc-1"}])

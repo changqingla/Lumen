@@ -253,11 +253,8 @@ def parse_message_metadata(raw: Any) -> ParsedMessageMetadata:
     if raw is None:
         return _empty_metadata()
 
-    if isinstance(raw, list):
-        return raw, [], None, [], [], [], [], None
-
     if not isinstance(raw, dict):
-        return _empty_metadata()
+        raise ValueError("Chat message metadata must be a JSON object")
 
     doc_summaries = raw.get("document_summaries")
     image_data_urls = raw.get("image_data_urls")
@@ -289,8 +286,9 @@ def build_message_metadata(
     assistant_tuple_messages: Optional[list[dict]] = None,
     truncation_metadata: Optional[dict] = None,
     interruption: Optional[dict] = None,
-) -> Optional[Any]:
-    """Build stored chat message extension metadata while preserving legacy shape."""
+) -> Optional[Dict[str, Any]]:
+    """Build stored chat message extension metadata."""
+    normalized_document_summaries = document_summaries if isinstance(document_summaries, list) else None
     normalized_images = [url for url in (image_data_urls or []) if isinstance(url, str) and url.strip()]
     normalized_artifacts = normalize_artifacts(artifacts)
     normalized_attachments = normalize_attachments(attachments)
@@ -300,7 +298,8 @@ def build_message_metadata(
     normalized_interruption = normalize_interruption(interruption)
 
     if (
-        normalized_images
+        normalized_document_summaries
+        or normalized_images
         or normalized_artifacts
         or normalized_attachments
         or normalized_tool_traces
@@ -309,7 +308,7 @@ def build_message_metadata(
         or normalized_interruption
     ):
         return {
-            "document_summaries": document_summaries if isinstance(document_summaries, list) else None,
+            "document_summaries": normalized_document_summaries,
             "image_data_urls": normalized_images,
             "artifacts": normalized_artifacts,
             "attachments": normalized_attachments,
@@ -318,4 +317,4 @@ def build_message_metadata(
             "truncation": normalized_truncation,
             "interruption": normalized_interruption,
         }
-    return document_summaries if isinstance(document_summaries, list) else None
+    return None

@@ -104,9 +104,8 @@ class ChatMessage(Base):
     thinking = Column(Text, nullable=True)  # AI 的思考过程
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
-    # 消息扩展信息（兼容历史结构）：
-    # - 历史: list[document_summary]
-    # - 新版: {"document_summaries": [...], "image_data_urls": [...], "artifacts": [...], "attachments": [...], "truncation": {...}}
+    # 消息扩展信息：
+    # {"document_summaries": [...], "image_data_urls": [...], "artifacts": [...], "attachments": [...], "truncation": {...}}
     document_summaries = Column(JSONB, nullable=True)
     
     # 关系
@@ -114,7 +113,7 @@ class ChatMessage(Base):
 
     @staticmethod
     def _parse_message_metadata(raw: Any) -> ParsedMessageMetadata:
-        """兼容解析消息扩展信息。"""
+        """解析消息扩展信息。"""
         return parse_message_metadata(raw)
 
     def to_dict(self):
