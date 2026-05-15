@@ -2,6 +2,7 @@
 聊天会话控制器
 """
 import hashlib
+import logging
 import mimetypes
 from typing import List, Literal, Optional
 from urllib.parse import quote
@@ -21,6 +22,7 @@ from schemas.workspace import WorkspaceAttachmentInput
 
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+logger = logging.getLogger(__name__)
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _ARTIFACT_URL_EXPIRES_SECONDS = 3600
 _GUEST_MESSAGE_LIMIT = 3
@@ -820,7 +822,8 @@ async def get_messages(
             user_id=str(current_user.id),
         )
         workspace_assets = list((await workspace_service.load_manifest()).assets)
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Failed to load workspace manifest for chat session {session_id}: {exc}")
         workspace_assets = []
 
     message_payloads = _merge_message_attachments_with_workspace_assets(

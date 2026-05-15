@@ -146,8 +146,8 @@ class TokenUsageQueueConsumer:
             for item in items:
                 try:
                     await self.redis.lpush(QUEUE_KEY, item)
-                except Exception:
-                    pass
+                except Exception as requeue_error:
+                    logger.warning(f"Failed to requeue token usage item: {requeue_error}")
     
     async def _flush_remaining(self):
         """Flush remaining items on shutdown."""

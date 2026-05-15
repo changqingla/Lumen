@@ -204,5 +204,5 @@ class SearchService:
             if retriever:
                 try:
                     await retriever.close()
-                except Exception:
-                    pass
+                except Exception as close_error:
+                    logger.warning(f"Failed to close retriever for KB {kb_id}: {close_error}")
