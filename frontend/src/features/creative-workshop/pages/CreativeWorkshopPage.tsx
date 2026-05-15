@@ -5,7 +5,6 @@ import {
   ImagePlus,
   Loader2,
   Menu,
-  Sparkles,
   WandSparkles,
 } from 'lucide-react';
 
@@ -265,12 +264,8 @@ export default function CreativeWorkshopPage() {
       <main className={styles.main}>
         <header className={styles.header}>
           <div>
-            <p className={styles.eyebrow}>创意工坊</p>
-            <h1 className={styles.title}>Image2 生图</h1>
-          </div>
-          <div className={styles.statusPill}>
-            <Sparkles size={16} />
-            <span>{PHASE_LABEL[phase]}</span>
+            <h1 className={styles.title}>创意工坊</h1>
+            <p className={styles.subtitle}>Image2 文生图</p>
           </div>
         </header>
 
