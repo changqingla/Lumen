@@ -1398,7 +1398,6 @@ export default function Home() {
       }
       return newSet;
     });
-    // TODO: 发送到后端记录
   };
 
   // 点踩消息
@@ -1418,7 +1417,6 @@ export default function Home() {
       }
       return newSet;
     });
-    // TODO: 发送到后端记录
   };
 
   // 保存对话到笔记
