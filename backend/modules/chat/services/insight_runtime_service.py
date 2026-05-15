@@ -141,28 +141,18 @@ class InsightRuntimeService:
             data = response.json()
             assistants = data if isinstance(data, list) else []
 
-            preferred_assistant_id: Optional[str] = None
-            fallback_assistant_id: Optional[str] = None
             for item in assistants:
                 if not isinstance(item, dict):
                     continue
                 assistant_id = str(item.get("assistant_id") or "").strip()
                 if not assistant_id:
                     continue
-                if fallback_assistant_id is None:
-                    fallback_assistant_id = assistant_id
 
                 name = str(item.get("name") or "").strip()
                 metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
                 created_by = str(metadata.get("created_by") or "").strip().lower()
                 if name == configured_assistant or created_by == "system":
-                    preferred_assistant_id = assistant_id
-                    break
-
-            if preferred_assistant_id:
-                return preferred_assistant_id
-            if fallback_assistant_id:
-                return fallback_assistant_id
+                    return assistant_id
 
             create_response = await client.post(
                 f"{self.langgraph_url}/assistants",

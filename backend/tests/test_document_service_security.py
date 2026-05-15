@@ -1,8 +1,10 @@
 import os
+import sys
 
 os.environ["DEBUG"] = "false"
 
 from types import SimpleNamespace
+from types import ModuleType
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,6 +21,37 @@ from utils.es_utils import get_user_es_index
 class _BackgroundTasks:
     def __init__(self):
         self.add_task = MagicMock()
+
+
+def test_normalize_filename_requires_explicit_filename():
+    service = DocumentService(db=object())
+
+    with pytest.raises(HTTPException) as exc_info:
+        service._normalize_filename("")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_normalize_filename_keeps_basename_without_generating_name():
+    service = DocumentService(db=object())
+
+    assert service._normalize_filename("../report.pdf") == "report.pdf"
+
+
+def test_extract_docx_content_raises_for_empty_docx(monkeypatch):
+    class _EmptyDocx:
+        paragraphs = []
+        tables = []
+
+    fake_docx = ModuleType("docx")
+    fake_docx.Document = lambda _stream: _EmptyDocx()
+    monkeypatch.setitem(sys.modules, "docx", fake_docx)
+
+    service = DocumentService(db=object())
+
+    with pytest.raises(ValueError, match="no extractable text"):
+        service._extract_docx_content(b"empty-docx")
 
 
 @pytest.mark.asyncio

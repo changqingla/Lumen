@@ -6,6 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Search, Copy, RefreshCw } from 'lucide-react';
 import { adminAPI } from '@/shared/api/client';
 import { useToast } from '@/shared/hooks/useToast';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import { getErrorMessage } from '@/shared/utils/errorMessage';
 import styles from './ActivationCodeManagement.module.css';
 
@@ -99,22 +100,8 @@ export default function ActivationCodeManagement() {
     e.stopPropagation();
     
     try {
-      // 尝试使用 Clipboard API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(code);
-        toast.success('激活码已复制到剪贴板');
-      } else {
-        // 降级方案：使用传统方法
-        const textArea = document.createElement('textarea');
-        textArea.value = code;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-        toast.success('激活码已复制到剪贴板');
-      }
+      await copyTextToClipboard(code);
+      toast.success('激活码已复制到剪贴板');
     } catch (error) {
       console.error('复制失败:', error);
       toast.error('复制失败，请手动复制');

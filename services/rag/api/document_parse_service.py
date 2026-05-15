@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 
 from embedding.chunk_embedder import ChunkEmbedder, EmbeddingConfig
+from chunk_worker import process_chunk_in_process
 from common_utils import DeepRAGCommonUtils
 from file_security import normalize_upload_filename
 
@@ -556,33 +557,6 @@ class DocumentParseService:
     async def _process_chunking(self, task: DocumentParseTask) -> Dict[str, Any]:
         """处理文档分块"""
         try:
-            # 使用现有的分块逻辑（从api.py中复制）
-            import sys
-            import os
-            import importlib
-            # 添加当前目录到路径以便导入
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            if current_dir not in sys.path:
-                sys.path.insert(0, current_dir)
-            
-            # 动态导入 process_chunk_in_process 函数
-            # 兼容不同部署形态：
-            # - 源码拆分后函数位于 app.py（module: app）
-            # - 向后兼容入口 api.py（module: api）
-            # - 历史/编译产物可能使用 api.app 或 api.api
-            process_chunk_in_process = None
-            for module_name in ['app', 'api', 'api.app', 'api.api']:
-                try:
-                    module = importlib.import_module(module_name)
-                    if hasattr(module, 'process_chunk_in_process'):
-                        process_chunk_in_process = getattr(module, 'process_chunk_in_process')
-                        break
-                except ImportError:
-                    continue
-            
-            if process_chunk_in_process is None:
-                raise ImportError("无法导入 process_chunk_in_process 函数")
-            
             # 保存临时文件
             temp_dir = Path("/tmp/deeprag_parse")
             temp_dir.mkdir(exist_ok=True)

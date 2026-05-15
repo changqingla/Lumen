@@ -20,7 +20,7 @@ export interface KnowledgeBaseSummary {
   description?: string;
   category?: string;
   isOwner?: boolean;
-  isPublic?: boolean;
+  visibility?: 'private' | 'organization' | 'public';
   isSubscribed?: boolean;
   subscribersCount?: number;
 }

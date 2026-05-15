@@ -7,7 +7,8 @@ from modules.knowledge.repositories.document_repository import DocumentRepositor
 from repositories.user_repository import UserRepository
 from modules.organization.repositories.organization_member_repository import OrganizationMemberRepository
 from utils.minio_client import upload_file, delete_file, download_file, object_exists, get_upload_url
-from utils.external_services import MineruService, DocumentProcessService
+from utils.document_process_service import DocumentProcessService
+from utils.mineru_service import MineruService
 from utils.es_utils import get_user_es_index
 from modules.knowledge.entities.document import Document
 from modules.knowledge.entities.knowledge_base import KnowledgeBase
@@ -133,7 +134,12 @@ class DocumentService:
     def _normalize_filename(self, filename: Optional[str]) -> str:
         """Normalize filename and remove path traversal segments."""
         safe_name = os.path.basename(filename or "").strip()
-        return safe_name or f"document-{uuid.uuid4().hex[:8]}.txt"
+        if not safe_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": {"code": "INVALID_REQUEST", "message": "filename is required"}},
+            )
+        return safe_name
 
     def _build_object_name(self, storage_owner_id: str, kb_id: str, filename: str) -> str:
         """Build a unique object name to avoid overwrite on duplicate filenames."""
@@ -162,7 +168,6 @@ class DocumentService:
     def _extract_docx_content(self, file_data: bytes) -> str:
         """
         Extract text content from .docx file.
-        First tries python-docx, falls back to Tika if that fails.
         
         Args:
             file_data: Binary content of the docx file
@@ -171,51 +176,26 @@ class DocumentService:
             Extracted text content as string
         """
         from io import BytesIO
+        from docx import Document as DocxDocument
         
-        # First, try python-docx
-        try:
-            from docx import Document as DocxDocument
-            
-            doc = DocxDocument(BytesIO(file_data))
-            paragraphs = []
-            
-            # Extract text from paragraphs
-            for para in doc.paragraphs:
-                text = para.text.strip()
-                if text:
-                    paragraphs.append(text)
-            
-            # Extract text from tables
-            for table in doc.tables:
-                for row in table.rows:
-                    row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                    if row_text:
-                        paragraphs.append(row_text)
-            
-            content = '\n\n'.join(paragraphs)
-            if content:
-                return content
-            
-            # If python-docx returned empty, try Tika
-            logger.warning("python-docx returned empty content, trying Tika...")
-            
-        except Exception as e:
-            # python-docx failed, try Tika as fallback
-            logger.warning(f"python-docx failed: {e}, trying Tika as fallback...")
-        
-        # Fallback to Tika
-        try:
-            from tika import parser
-            result = parser.from_buffer(BytesIO(file_data))
-            content = result.get('content', '')
-            
-            if content:
-                lines = [line.strip() for line in content.split('\n') if line.strip()]
-                return '\n\n'.join(lines)
-        except Exception as e:
-            logger.error(f"Tika also failed for DOCX: {e}")
-        
-        return ''
+        doc = DocxDocument(BytesIO(file_data))
+        paragraphs = []
+
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                paragraphs.append(text)
+
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                if row_text:
+                    paragraphs.append(row_text)
+
+        content = '\n\n'.join(paragraphs)
+        if not content:
+            raise ValueError("DOCX file contains no extractable text")
+        return content
     
     def _extract_doc_content(self, file_data: bytes) -> str:
         """
@@ -421,10 +401,16 @@ class DocumentService:
                 detail={"error": {"code": "UPLOAD_NOT_FINISHED", "message": "File not uploaded yet"}},
             )
 
+        if file_size <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": {"code": "INVALID_REQUEST", "message": "Invalid file size"}},
+            )
+
         document = await self.doc_repo.create(
             kb_id=kb_id,
             name=safe_filename,
-            size=max(int(file_size or 0), 0),
+            size=file_size,
             source=source,
             file_path=f"{settings.MINIO_BUCKET}/{normalized_object_path}",
         )
@@ -580,13 +566,10 @@ class DocumentService:
                         return
                 
                 elif ext == '.docx':
-                    # DOCX files: use python-docx to extract content
                     logger.info(f"[Doc {doc_id}] DOCX detected, extracting content with python-docx")
                     await doc_repo.update_status(doc, Document.STATUS_PROCESSING)
                     try:
                         markdown_content = self._extract_docx_content(file_data)
-                        if not markdown_content:
-                            raise Exception("DOCX file appears to be empty or contains no extractable text")
                         logger.info(f"[Doc {doc_id}] DOCX content extracted, got {len(markdown_content)} chars")
                     except Exception as e:
                         logger.error(f"[Doc {doc_id}] DOCX extraction failed: {e}")

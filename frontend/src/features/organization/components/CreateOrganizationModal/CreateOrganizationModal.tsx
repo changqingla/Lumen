@@ -3,6 +3,7 @@ import { X, Info, CheckCircle, Copy } from 'lucide-react';
 import styles from './CreateOrganizationModal.module.css';
 import { organizationAPI } from '@/shared/api/client';
 import { useToast } from '@/shared/hooks/useToast';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 
 interface CreateOrganizationModalProps {
   isOpen: boolean;
@@ -69,9 +70,10 @@ export default function CreateOrganizationModal({
 
   const handleCopyCode = async () => {
     try {
-      await navigator.clipboard.writeText(orgCode);
+      await copyTextToClipboard(orgCode);
       toast.success('组织码已复制');
-    } catch {
+    } catch (error) {
+      console.error('复制组织码失败:', error);
       toast.error('复制失败');
     }
   };

@@ -6,7 +6,6 @@ DeepRAG 统一服务 - FastAPI 应用入口
 
 import asyncio
 import logging
-import time
 import sys
 import os
 from datetime import datetime
@@ -34,13 +33,13 @@ logger = logging.getLogger(__name__)
 from config import settings
 
 # 导入依赖模块
-from chunk.document_chunker import DocumentChunker
 from core.utils import ParserType
 from embedding.chunk_embedder import ChunkEmbedder, EmbeddingConfig
 from embed_store.chunk_store import DocumentStore
 from embed_store.store_utils import ChunkValidator
 # 导入服务
 from chunk_edit_service import ChunkEditService
+from chunk_worker import process_chunk_in_process
 from common_utils import DeepRAGCommonUtils
 from document_parse_service import DocumentParseService, TaskStatus
 from file_security import normalize_upload_filename
@@ -51,125 +50,6 @@ from schemas import (
     DocumentDeleteRequest, DocumentParseRequest,
     VisionExtractRequest, TaskStatusResponse, UnifiedResponse,
 )
-
-
-# 进程池处理函数（必须在模块级别定义，以便pickle序列化）
-def process_chunk_in_process(file_path: str, parser_type: str, chunk_token_num: int, 
-                           delimiter: str, language: str, layout_recognize: str,
-                           zoomin: int, from_page: int, to_page: int, document_id: str = None,
-                           cv_model_config: dict = None, vision_kwargs: dict = None,
-                           ir_table_kwargs: dict = None):
-    """
-    在独立进程中执行文档分块处理
-    
-    这个函数运行在独立的进程中，拥有完全隔离的NLTK状态，
-    避免了WordNet等NLTK组件的线程安全问题。
-    
-    参数:
-        cv_model_config: 视觉模型配置（仅当 parser_type="ppt" 时需要）
-        vision_kwargs: 视觉解析的额外参数（dpi, batch_size等）
-        ir_table_kwargs: ir-table 解析器的额外参数（auto_unmerge, keep_title等）
-    
-    返回:
-        包含 chunks, full_content 等信息的字典
-    """
-    import sys
-    from pathlib import Path
-    import time
-    
-    # 确保进程中也能找到项目模块
-    current_dir = Path(__file__).parent.absolute()
-    project_root = current_dir.parent
-    sys.path.insert(0, str(project_root))
-    
-    try:
-        from chunk.document_chunker import DocumentChunker
-        
-        start_time = time.time()
-        
-        # 在独立进程中创建分块器（拥有独立的NLTK状态）
-        document_chunker = DocumentChunker(
-            parser_type=parser_type,
-            chunk_token_num=chunk_token_num,
-            delimiter=delimiter,
-            language=language,
-            layout_recognize=layout_recognize,
-            zoomin=zoomin,
-            from_page=from_page,
-            to_page=to_page,
-            cv_model_config=cv_model_config,
-            vision_batch_size=vision_kwargs.get('vision_batch_size', 10) if vision_kwargs else 10
-        )
-        
-        # 准备额外的kwargs
-        extra_kwargs = {}
-        
-        # 添加vision parser参数
-        if vision_kwargs:
-            extra_kwargs.update({
-                'dpi': vision_kwargs.get('vision_dpi', 50),
-                'keep_images': vision_kwargs.get('vision_keep_images', False),
-                'use_custom_prompt': vision_kwargs.get('vision_use_custom_prompt', False),
-                'custom_prompt': vision_kwargs.get('vision_custom_prompt', None)
-            })
-        
-        # 添加ir-table parser参数
-        if ir_table_kwargs:
-            extra_kwargs.update({
-                'auto_unmerge': ir_table_kwargs.get('auto_unmerge', True),
-                'keep_title': ir_table_kwargs.get('keep_title', True),
-                'unmerge_start_row': ir_table_kwargs.get('unmerge_start_row', 2),
-                'unmerge_end_row': ir_table_kwargs.get('unmerge_end_row', None),
-                'only_columns': ir_table_kwargs.get('only_columns', None),
-                'exclude_sheets': ir_table_kwargs.get('exclude_sheets', None),
-                'include_sheets': ir_table_kwargs.get('include_sheets', None)
-            })
-        
-        # 执行分块处理（无线程安全问题），同时获取完整内容
-        result = document_chunker.chunk_document(file_path=file_path, return_full_content=True, **extra_kwargs)
-        
-        # 处理返回结果
-        if isinstance(result, tuple):
-            chunks, full_content = result
-        else:
-            chunks = result
-            full_content = ""
-        
-        # 为每个chunk添加32位的chunk_id、document_id和available_int字段
-        import uuid
-        for i, chunk in enumerate(chunks):
-            # 使用UUID生成唯一的chunk_id，取前8位作为32位ID
-            chunk_id = str(uuid.uuid4()).replace('-', '')[:16]
-            chunk['chunk_id'] = chunk_id
-            # 添加document_id字段
-            if document_id:
-                chunk['document_id'] = document_id
-            # 添加available_int字段，默认值为1
-            chunk['available_int'] = 1
-        
-        processing_time = time.time() - start_time
-        
-        return {
-            "success": True,
-            "chunks": chunks,
-            "total_chunks": len(chunks),
-            "full_content": full_content,
-            "processing_time": processing_time,
-            "parser_type": parser_type,
-            "process_id": os.getpid()
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "chunks": None,
-            "total_chunks": 0,
-            "full_content": "",
-            "processing_time": time.time() - start_time,
-            "parser_type": parser_type,
-            "error": str(e),
-            "process_id": os.getpid()
-        }
 
 
 class UnifiedService:

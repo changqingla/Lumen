@@ -9,6 +9,7 @@ import heroImage5 from '@/assets/show/image-06e1d61b8d42.webp';
 import { authAPI } from '@/shared/api/client';
 import { dispatchAuthSessionReset } from '@/shared/lib/auth-runtime';
 import { disableGuestMode, enableGuestMode } from '@/shared/lib/guest-mode';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import { getErrorMessage } from '@/shared/utils/errorMessage';
 import {
   ArrowRight,
@@ -438,7 +439,7 @@ function QuickStart() {
 
   const handleCopy = async (text: string, id: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyTextToClipboard(text);
       setCopied(id);
       window.setTimeout(() => setCopied(null), 2000);
     } catch {

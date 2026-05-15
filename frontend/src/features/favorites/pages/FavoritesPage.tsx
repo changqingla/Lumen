@@ -22,6 +22,7 @@ import { useToast } from '@/shared/hooks/useToast';
 import { useRAGChat } from '@/features/chat/hooks/useRAGChat';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { useChatSessions } from '@/features/chat/hooks/useChatSessions';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import { getKnowledgeBaseAvatar } from '@/shared/utils/avatarUtils';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import { getFileIcon, pdfIconUrl } from '@/shared/utils/fileIcons';
@@ -320,10 +321,8 @@ export default function FavoritesPage() {
       return;
     }
 
-    console.log('handleUnfavoriteDoc called with docId:', docId);
     try {
       await favoriteAPI.unfavoriteDocument(docId);
-      console.log('unfavoriteDocument API call successful');
       toast.success('已取消收藏');
       // 如果当前正在预览这个文档，关闭预览
       if (previewDoc?.id === docId) {
@@ -463,28 +462,7 @@ export default function FavoritesPage() {
   // 复制消息内容
   const handleCopyMessage = async (content: string, messageId: string) => {
     try {
-      // 优先使用现代 Clipboard API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(content);
-      } else {
-        // 降级方案：使用传统方法
-        const textArea = document.createElement('textarea');
-        textArea.value = content;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          textArea.remove();
-        } catch (err) {
-          console.error('降级复制方法失败:', err);
-          textArea.remove();
-          throw err;
-        }
-      }
+      await copyTextToClipboard(content);
       // 显示复制成功状态
       setCopiedMessages(prev => new Set(prev).add(messageId));
       // 2秒后恢复
@@ -1031,7 +1009,6 @@ export default function FavoritesPage() {
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              console.log('Star clicked! Unfavoriting docId:', doc.id);
                               handleUnfavoriteDoc(doc.id);
                             }}
                             onMouseDown={(e) => {

@@ -27,11 +27,18 @@ import { type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { getKnowledgeBaseAvatar } from '@/shared/utils/avatarUtils';
-import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import { useRAGChat } from '@/features/chat/hooks/useRAGChat';
 import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/useChatModels';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { getFileIcon } from '@/shared/utils/fileIcons';
+import { useKnowledgeMessageActions } from '@/features/knowledge/hooks/useKnowledgeMessageActions';
+import {
+  AVATAR_ACCEPT,
+  AVATAR_FILE_SIZE_ERROR,
+  AVATAR_FILE_TYPE_ERROR,
+  isAllowedAvatarSize,
+  isAllowedAvatarType,
+} from '@/shared/utils/avatarUploadConstraints';
 import {
   Upload,
   FileText,
@@ -89,8 +96,6 @@ import defaultAvatar from '@/assets/default-avatar.svg';
 
 const LazyPDFViewer = lazy(() => import('@/shared/components/PDFViewer/PDFViewer'));
 const LazyDocumentViewer = lazy(() => import('@/shared/components/DocumentViewer/DocumentViewer'));
-const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const AVATAR_ACCEPT = '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
 
 export default function KnowledgeDetail() {
   const { kbId } = useParams<{ kbId: string }>();
@@ -127,6 +132,7 @@ export default function KnowledgeDetail() {
   // Data State
   const [myKnowledgeBases, setMyKnowledgeBases] = useState<KnowledgeBaseSummary[]>([]);
   const [currentKb, setCurrentKb] = useState<KnowledgeBaseDetail | null>(null);
+  const isCurrentKbPublic = currentKb?.visibility === 'public';
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -152,11 +158,6 @@ export default function KnowledgeDetail() {
   const [loadingPreview, setLoadingPreview] = useState(false);
   const previewRequestSequenceRef = useRef(0);
   
-  // 消息反馈状态
-  const [likedMessages, setLikedMessages] = useState<Set<string>>(new Set());
-  const [dislikedMessages, setDislikedMessages] = useState<Set<string>>(new Set());
-  const [savedToNotes, setSavedToNotes] = useState<Set<string>>(new Set()); // 已保存到笔记的消息ID
-  const [copiedMessages, setCopiedMessages] = useState<Set<string>>(new Set()); // 已复制的消息ID
   const [showRegenerateMenu, setShowRegenerateMenu] = useState<string | null>(null); // 显示重新生成菜单的消息ID
 
   // 配额超限弹窗状态
@@ -281,6 +282,22 @@ export default function KnowledgeDetail() {
   });
 
   const {
+    copiedMessages,
+    dislikedMessages,
+    likedMessages,
+    savedToNotes,
+    copyMessage: handleCopyMessage,
+    dislikeMessage: handleDislikeMessage,
+    likeMessage: handleLikeMessage,
+    saveMessageToNotes: handleSaveToNotes,
+  } = useKnowledgeMessageActions({
+    messages,
+    isGuestMode,
+    promptLogin,
+    toast,
+  });
+
+  const {
     models: chatModels,
     defaultModelName,
   } = useChatModels();
@@ -382,28 +399,6 @@ export default function KnowledgeDetail() {
     }
   }, [showRegenerateMenu]);
 
-  // 这些初始化请求只需要在页面挂载时执行一次。
-  /* eslint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    loadKnowledgeBases();
-    loadChatSessions();
-    loadUserInfo();
-  }, []);
-  /* eslint-enable react-hooks/exhaustive-deps */
-
-  useEffect(() => {
-    previewRequestSequenceRef.current += 1;
-    setHasRestoredSession(false);
-    setCurrentSessionId(undefined);
-    setPreviewDoc(null);
-    setPreviewUrl('');
-    setPreviewContent('');
-    setChatInput('');
-    clearMessages({ preserveSessionRuntime: true });
-    // 这里只应该在知识库路由切换时重置，不能跟随回调 identity 变化反复执行。
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [kbId]);
-
   const loadUserInfo = useCallback(async () => {
     try {
       const cached = localStorage.getItem('userProfile');
@@ -415,158 +410,6 @@ export default function KnowledgeDetail() {
       console.error('Failed to load user info:', error);
     }
   }, []);
-
-  // ✅ 验证并恢复 localStorage 中的 sessionId
-  useEffect(() => {
-    if (!hasRestoredSession && chatSessions.length > 0 && kbId) {
-      try {
-        const savedSessionId = readKnowledgeSessionId(kbId);
-        if (savedSessionId) {
-          const session = chatSessions.find(s => s.id === savedSessionId);
-          if (isKnowledgeChatSessionForKb(session, kbId)) {
-            setCurrentSessionId(savedSessionId);
-          } else {
-            clearKnowledgeSessionId(kbId);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to restore session from localStorage:', error);
-      }
-      setHasRestoredSession(true);
-    }
-  }, [chatSessions, hasRestoredSession, kbId]);
-
-  // ✅ 处理 URL 参数中的 chatId，添加验证逻辑
-  useEffect(() => {
-    const chatIdFromUrl = searchParams.get('chatId');
-    if (chatIdFromUrl && chatIdFromUrl !== currentSessionId && chatSessions.length > 0 && kbId) {
-      const session = chatSessions.find(s => s.id === chatIdFromUrl);
-      if (session) {
-        const isKnowledgeSession = isKnowledgeChatSessionForKb(session, kbId);
-        if (isKnowledgeSession) {
-          setCurrentSessionId(chatIdFromUrl);
-          saveKnowledgeSessionId(kbId, chatIdFromUrl);
-          console.log(`加载会话 ${chatIdFromUrl} (知识库会话)`);
-          setSearchParams({});
-          return;
-        }
-        console.warn(`会话 ${chatIdFromUrl} 不属于当前知识库 ${kbId}，跳转到首页继续查看`);
-        navigate(`/?chatId=${chatIdFromUrl}`, { replace: true });
-        return;
-      } else {
-        console.warn(`会话 ${chatIdFromUrl} 不存在，忽略 URL 参数`);
-      }
-      // 清除 URL 参数，保持 URL 干净
-      setSearchParams({});
-    }
-  }, [searchParams, currentSessionId, kbId, navigate, setSearchParams, chatSessions]);
-
-  // 这里按知识库路由切换重载数据，避免回调 identity 变化导致重复请求。
-  /* eslint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    if (kbId) {
-      loadCurrentKB();
-      loadDocuments();
-    }
-  }, [kbId]);
-  /* eslint-enable react-hooks/exhaustive-deps */
-
-  // 轮询检查文档处理状态
-  // 轮询只关心知识库和文档状态变化，不应被请求函数重建打断。
-  /* eslint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    // 清理之前的轮询
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    
-    if (!kbId) return;
-    
-    const hasProcessingDocs = documents.some(doc => PROCESSING_DOCUMENT_STATUSES.includes(doc.status));
-    
-    if (!hasProcessingDocs) {
-      console.log('[Polling] No processing documents, skip polling');
-      return;
-    }
-    
-    console.log('[Polling] Found processing documents, starting polling...');
-    
-    // 启动轮询
-    pollingRef.current = setInterval(async () => {
-      console.log('[Polling] Fetching document status...');
-      try {
-        const response = await kbAPI.listDocuments(kbId);
-        const prevStatuses = documents.map(d => d.status);
-        const nextDocuments = (response.items || []) as KnowledgeDocument[];
-        const newStatuses = nextDocuments.map((doc) => doc.status);
-        
-        setDocuments(nextDocuments);
-        
-        // 只提取 ready 状态的文档ID用于对话
-        const docIds = nextDocuments
-          .filter((doc) => doc.status === 'ready')
-          .map((doc) => doc.id);
-        setKbDocIds(docIds);
-        
-        // 检查是否有文档状态从处理中变为完成或失败
-        const statusChanged = prevStatuses.some((status, i) => 
-          PROCESSING_DOCUMENT_STATUSES.includes(status)
-          && !PROCESSING_DOCUMENT_STATUSES.includes(newStatuses[i])
-        );
-        
-        // 如果有状态变化，刷新知识库信息（更新文档计数）
-        if (statusChanged) {
-          console.log('[Polling] Document status changed, refreshing KB info...');
-          loadCurrentKB();
-          loadKnowledgeBases();
-        }
-        
-        // 检查是否还有处理中的文档
-        const stillProcessing = nextDocuments.some((doc) => 
-          PROCESSING_DOCUMENT_STATUSES.includes(doc.status)
-        );
-        
-        if (!stillProcessing && pollingRef.current) {
-          console.log('[Polling] All documents processed, stopping polling');
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-        }
-      } catch (error) {
-        console.error('[Polling] Error fetching documents:', error);
-      }
-    }, 3000);
-    
-    return () => {
-      if (pollingRef.current) {
-        console.log('[Polling] Cleanup on unmount');
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, [kbId, documents]);
-  /* eslint-enable react-hooks/exhaustive-deps */
-
-  // 自动滚动到最新消息
-  useEffect(() => {
-    if (isStreaming && shouldAutoScrollRef.current) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          scrollChatToBottom('auto');
-        });
-      });
-    }
-  }, [isStreaming, messages, scrollChatToBottom]);
-
-  useEffect(() => {
-    if (!isStreaming && messages.length > 0) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          scrollChatToBottom('smooth');
-        });
-      });
-    }
-  }, [isStreaming, messages.length, scrollChatToBottom]);
 
   const loadKnowledgeBases = useCallback(async () => {
     if (isGuestMode) {
@@ -611,20 +454,19 @@ export default function KnowledgeDetail() {
   }, [kbId, loadVisibilityStatus, navigate, toast]);
 
   const loadDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
-    if (!kbId) return;
-    
+    if (!kbId) return [];
+
     try {
       const response = await kbAPI.listDocuments(kbId);
       const nextDocuments = (response.items || []) as KnowledgeDocument[];
       setDocuments(nextDocuments);
-      
+
       // 只提取 ready 状态的文档ID用于对话
       const docIds = nextDocuments
         .filter((doc) => doc.status === 'ready')
         .map((doc) => doc.id);
       setKbDocIds(docIds);
-      console.log(`Loaded ${docIds.length} ready documents for KB ${kbId}`);
-      
+
       // 检查文档收藏状态
       if (!isGuestMode && nextDocuments.length > 0) {
         try {
@@ -643,7 +485,7 @@ export default function KnowledgeDetail() {
           console.error('Failed to check favorite status:', error);
         }
       }
-      
+
       // 返回文档列表，用于轮询判断
       return nextDocuments;
     } catch (error: unknown) {
@@ -652,6 +494,163 @@ export default function KnowledgeDetail() {
       return [];
     }
   }, [isGuestMode, kbId, toast]);
+
+  // 初始化或身份状态变化时刷新基础数据。
+  useEffect(() => {
+    loadKnowledgeBases();
+    loadChatSessions();
+    loadUserInfo();
+  }, [loadChatSessions, loadKnowledgeBases, loadUserInfo]);
+
+  useEffect(() => {
+    previewRequestSequenceRef.current += 1;
+    setHasRestoredSession(false);
+    setCurrentSessionId(undefined);
+    setPreviewDoc(null);
+    setPreviewUrl('');
+    setPreviewContent('');
+    setChatInput('');
+    clearMessages({ preserveSessionRuntime: true });
+  }, [clearMessages, kbId]);
+
+  // ✅ 验证并恢复 localStorage 中的 sessionId
+  useEffect(() => {
+    if (!hasRestoredSession && chatSessions.length > 0 && kbId) {
+      try {
+        const savedSessionId = readKnowledgeSessionId(kbId);
+        if (savedSessionId) {
+          const session = chatSessions.find(s => s.id === savedSessionId);
+          if (isKnowledgeChatSessionForKb(session, kbId)) {
+            setCurrentSessionId(savedSessionId);
+          } else {
+            clearKnowledgeSessionId(kbId);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to restore session from localStorage:', error);
+      }
+      setHasRestoredSession(true);
+    }
+  }, [chatSessions, hasRestoredSession, kbId]);
+
+  // ✅ 处理 URL 参数中的 chatId，添加验证逻辑
+  useEffect(() => {
+    const chatIdFromUrl = searchParams.get('chatId');
+    if (chatIdFromUrl && chatIdFromUrl !== currentSessionId && chatSessions.length > 0 && kbId) {
+      const session = chatSessions.find(s => s.id === chatIdFromUrl);
+      if (session) {
+        const isKnowledgeSession = isKnowledgeChatSessionForKb(session, kbId);
+        if (isKnowledgeSession) {
+          setCurrentSessionId(chatIdFromUrl);
+          saveKnowledgeSessionId(kbId, chatIdFromUrl);
+          setSearchParams({});
+          return;
+        }
+        console.warn(`会话 ${chatIdFromUrl} 不属于当前知识库 ${kbId}，跳转到首页继续查看`);
+        navigate(`/?chatId=${chatIdFromUrl}`, { replace: true });
+        return;
+      } else {
+        console.warn(`会话 ${chatIdFromUrl} 不存在，忽略 URL 参数`);
+      }
+      // 清除 URL 参数，保持 URL 干净
+      setSearchParams({});
+    }
+  }, [searchParams, currentSessionId, kbId, navigate, setSearchParams, chatSessions]);
+
+  // 这里按知识库路由切换重载数据。
+  useEffect(() => {
+    if (kbId) {
+      loadCurrentKB();
+      loadDocuments();
+    }
+  }, [kbId, loadCurrentKB, loadDocuments]);
+
+  // 轮询检查文档处理状态
+  useEffect(() => {
+    // 清理之前的轮询
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    
+    if (!kbId) return;
+    
+    const hasProcessingDocs = documents.some(doc => PROCESSING_DOCUMENT_STATUSES.includes(doc.status));
+    
+    if (!hasProcessingDocs) {
+      return;
+    }
+    
+    // 启动轮询
+    pollingRef.current = setInterval(async () => {
+      try {
+        const response = await kbAPI.listDocuments(kbId);
+        const prevStatuses = documents.map(d => d.status);
+        const nextDocuments = (response.items || []) as KnowledgeDocument[];
+        const newStatuses = nextDocuments.map((doc) => doc.status);
+        
+        setDocuments(nextDocuments);
+        
+        // 只提取 ready 状态的文档ID用于对话
+        const docIds = nextDocuments
+          .filter((doc) => doc.status === 'ready')
+          .map((doc) => doc.id);
+        setKbDocIds(docIds);
+        
+        // 检查是否有文档状态从处理中变为完成或失败
+        const statusChanged = prevStatuses.some((status, i) => 
+          PROCESSING_DOCUMENT_STATUSES.includes(status)
+          && !PROCESSING_DOCUMENT_STATUSES.includes(newStatuses[i])
+        );
+        
+        // 如果有状态变化，刷新知识库信息（更新文档计数）
+        if (statusChanged) {
+          loadCurrentKB();
+          loadKnowledgeBases();
+        }
+        
+        // 检查是否还有处理中的文档
+        const stillProcessing = nextDocuments.some((doc) => 
+          PROCESSING_DOCUMENT_STATUSES.includes(doc.status)
+        );
+        
+        if (!stillProcessing && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch (error) {
+        console.error('[Polling] Error fetching documents:', error);
+      }
+    }, 3000);
+    
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [kbId, documents, loadCurrentKB, loadKnowledgeBases]);
+
+  // 自动滚动到最新消息
+  useEffect(() => {
+    if (isStreaming && shouldAutoScrollRef.current) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scrollChatToBottom('auto');
+        });
+      });
+    }
+  }, [isStreaming, messages, scrollChatToBottom]);
+
+  useEffect(() => {
+    if (!isStreaming && messages.length > 0) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scrollChatToBottom('smooth');
+        });
+      });
+    }
+  }, [isStreaming, messages.length, scrollChatToBottom]);
 
   // ============ File Upload Handlers ============
 
@@ -701,116 +700,6 @@ export default function KnowledgeDetail() {
       return;
     }
     fileInputRef.current?.click();
-  };
-
-  // 复制消息内容
-  const handleCopyMessage = async (content: string, messageId: string) => {
-    try {
-      // 优先使用现代 Clipboard API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(content);
-      } else {
-        // 降级方案：使用传统方法
-        const textArea = document.createElement('textarea');
-        textArea.value = content;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          textArea.remove();
-        } catch (err) {
-          console.error('降级复制方法失败:', err);
-          textArea.remove();
-          throw err;
-        }
-      }
-      // 显示复制成功状态
-      setCopiedMessages(prev => new Set(prev).add(messageId));
-      // 2秒后恢复
-      setTimeout(() => {
-        setCopiedMessages(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(messageId);
-          return newSet;
-        });
-      }, 2000);
-    } catch (err) {
-      console.error('复制失败:', err);
-      toast.error('复制失败，请重试');
-    }
-  };
-
-  // 点赞消息
-  const handleLikeMessage = (messageId: string) => {
-    setLikedMessages(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(messageId)) {
-        newSet.delete(messageId);
-      } else {
-        newSet.add(messageId);
-        setDislikedMessages(prev => {
-          const newDisliked = new Set(prev);
-          newDisliked.delete(messageId);
-          return newDisliked;
-        });
-      }
-      return newSet;
-    });
-    // TODO: 发送到后端记录
-  };
-
-  // 点踩消息
-  const handleDislikeMessage = (messageId: string) => {
-    setDislikedMessages(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(messageId)) {
-        newSet.delete(messageId);
-      } else {
-        newSet.add(messageId);
-        setLikedMessages(prev => {
-          const newLiked = new Set(prev);
-          newLiked.delete(messageId);
-          return newLiked;
-        });
-      }
-      return newSet;
-    });
-    // TODO: 发送到后端记录
-  };
-
-  // 保存对话到笔记
-  const handleSaveToNotes = async (messageId: string) => {
-    if (isGuestMode) {
-      promptLogin({
-        title: '登录后可保存到笔记',
-        message: '游客模式下暂不支持保存内容，登录后可继续操作。',
-        confirmText: '去登录',
-      });
-      return;
-    }
-
-    if (savedToNotes.has(messageId)) {
-      toast.info('该对话已保存到笔记');
-      return;
-    }
-
-    try {
-      const result = await saveConversationToNoteById(messages, messageId);
-
-      if (result.success) {
-        setSavedToNotes(prev => new Set(prev).add(messageId));
-        toast.success('已保存到笔记');
-      } else {
-        toast.error(result.error || '保存失败');
-      }
-    } catch (error: unknown) {
-      console.error('保存到笔记失败:', error);
-      toast.error('保存失败，请重试');
-    }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1013,15 +902,13 @@ export default function KnowledgeDetail() {
     const file = e.target.files?.[0];
     if (!file || !kbId || !currentKb?.isOwner) return;
     
-    // 验证文件类型
-    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
-      toast.error('请选择 JPG、PNG 或 WEBP 图片');
+    if (!isAllowedAvatarType(file.type)) {
+      toast.error(AVATAR_FILE_TYPE_ERROR);
       return;
     }
-    
-    // 验证文件大小（最大 5MB）
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('图片大小不能超过 5MB');
+
+    if (!isAllowedAvatarSize(file.size)) {
+      toast.error(AVATAR_FILE_SIZE_ERROR);
       return;
     }
     
@@ -1142,7 +1029,7 @@ export default function KnowledgeDetail() {
     try {
       const result = await kbAPI.togglePublic(kbId);
       await loadCurrentKB();
-      const message = result.isPublic 
+      const message = result.visibility === 'public'
         ? '知识库已公开到论文广场！' 
         : '知识库已设为私有';
       toast.success(message);
@@ -1422,12 +1309,12 @@ export default function KnowledgeDetail() {
 
       <ConfirmModal
         isOpen={isTogglePublicModalOpen}
-        title={currentKb?.isPublic ? "设为私有" : "公开知识库"}
-        message={currentKb?.isPublic 
+        title={isCurrentKbPublic ? "设为私有" : "公开知识库"}
+        message={isCurrentKbPublic
           ? "设为私有后，其他用户将无法访问此知识库。确定继续吗？"
           : "公开后，所有用户都可以查看并订阅此知识库。其他用户无法修改或删除内容。确定公开吗？"
         }
-        type={currentKb?.isPublic ? "warning" : "info"}
+        type={isCurrentKbPublic ? "warning" : "info"}
         confirmText="确认"
         cancelText="取消"
         onConfirm={confirmTogglePublic}
@@ -1531,7 +1418,7 @@ export default function KnowledgeDetail() {
                     />
                     <div className={styles.kbMeta}>
                       <span>{currentKb?.contents || 0} 文档</span>
-                      {currentKb?.isPublic && (
+                      {isCurrentKbPublic && (
                         <>
                           <span>·</span>
                           <span className={styles.metaItem}><Users size={12} /> {currentKb.subscribersCount || 0} 订阅</span>
@@ -1565,9 +1452,9 @@ export default function KnowledgeDetail() {
                         <button 
                           className={styles.iconBtn}
                           onClick={handleTogglePublic}
-                          title={currentKb.isPublic ? "设为私有" : "公开知识库"}
+                          title={isCurrentKbPublic ? "设为私有" : "公开知识库"}
                         >
-                          {currentKb.isPublic ? <Globe size={18} /> : <GlobeLock size={18} />}
+                          {isCurrentKbPublic ? <Globe size={18} /> : <GlobeLock size={18} />}
                         </button>
                         )}
                         <button 
@@ -1595,7 +1482,7 @@ export default function KnowledgeDetail() {
                           <Settings size={18} />
                         </button>
                       </>
-                    ) : currentKb?.isPublic && (
+                    ) : isCurrentKbPublic && (
                       <button 
                         className={`${styles.subscribeBtn} ${currentKb.isSubscribed ? styles.subscribed : ''}`}
                         onClick={handleSubscribe}

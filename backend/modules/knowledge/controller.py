@@ -1,12 +1,22 @@
 """Knowledge Base API endpoints."""
-from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from config.database import get_db
 from config.settings import settings
 from middlewares.auth import get_current_user
 from models.user import User
-from schemas.schemas import UpdateKBVisibilityRequest, ShareToOrgsRequest
+from schemas.schemas import (
+    BatchDocumentMarkdownRequest,
+    CompleteDirectUploadRequest,
+    CreateKnowledgeBaseRequest,
+    InitDirectUploadRequest,
+    KnowledgeChatSearchRequest,
+    MoveDocumentRequest,
+    ShareToOrgsRequest,
+    UpdateKBVisibilityRequest,
+    UpdateKnowledgeBaseRequest,
+)
 from utils.avatar_security import read_avatar_upload_file
 
 router = APIRouter(prefix="/kb", tags=["Knowledge Base"])
@@ -51,7 +61,7 @@ async def list_knowledge_bases(
 
 @router.post("")
 async def create_knowledge_base(
-    request: dict,
+    request: CreateKnowledgeBaseRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -59,22 +69,23 @@ async def create_knowledge_base(
     service = _create_kb_service(db)
     return await service.create_kb(
         str(current_user.id),
-        request["name"],
-        request.get("description"),
-        request.get("category", "其它")
+        request.name,
+        request.description,
+        request.category
     )
 
 
 @router.patch("/{kbId}")
 async def update_knowledge_base(
     kbId: str,
-    request: dict,
+    request: UpdateKnowledgeBaseRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Update knowledge base."""
     service = _create_kb_service(db)
-    return await service.update_kb(kbId, str(current_user.id), **request)
+    update_data = request.model_dump(exclude_unset=True)
+    return await service.update_kb(kbId, str(current_user.id), **update_data)
 
 
 @router.delete("/{kbId}")
@@ -131,39 +142,17 @@ async def upload_kb_avatar(
     )
 
 
-@router.post("/{kbId}/documents")
-async def upload_document(
-    kbId: str
-):
-    """Deprecated legacy upload endpoint."""
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "error": {
-                "code": "UPLOAD_ENDPOINT_DEPRECATED",
-                "message": "Legacy upload endpoint is deprecated. Use /documents/direct-upload/init and /documents/direct-upload/complete."
-            }
-        }
-    )
-
-
 @router.post("/{kbId}/documents/direct-upload/init")
 async def init_direct_upload(
     kbId: str,
-    request: dict,
+    request: InitDirectUploadRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Initialize direct browser upload to MinIO."""
-    filename = request.get("filename", "")
-    file_size = int(request.get("size", 0) or 0)
-    content_type = request.get("contentType")
-
-    if not filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "filename is required"}}
-        )
+    filename = request.filename
+    file_size = int(request.size or 0)
+    content_type = request.contentType
 
     service = _create_document_service(db)
     return await service.init_direct_upload(
@@ -178,21 +167,14 @@ async def init_direct_upload(
 @router.post("/{kbId}/documents/direct-upload/complete")
 async def complete_direct_upload(
     kbId: str,
-    request: dict,
+    request: CompleteDirectUploadRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Complete direct upload and start background document processing."""
-    doc_id = request.get("docId", "")
-    if not doc_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "docId is required"}}
-        )
-
     service = _create_document_service(db)
-    return await service.complete_direct_upload(kbId, str(current_user.id), doc_id, background_tasks)
+    return await service.complete_direct_upload(kbId, str(current_user.id), request.docId, background_tasks)
 
 
 @router.get("/{kbId}/documents")
@@ -252,7 +234,7 @@ async def get_document_markdown(
 @router.post("/{kbId}/documents/batch-markdown")
 async def get_documents_markdown_batch(
     kbId: str,
-    request: dict,
+    request: BatchDocumentMarkdownRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -275,15 +257,7 @@ async def get_documents_markdown_batch(
         }
     """
     service = _create_document_service(db)
-    doc_ids = request.get("docIds", [])
-    
-    if not doc_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "docIds is required"}}
-        )
-    
-    result = await service.get_documents_markdown_batch(doc_ids, kbId, str(current_user.id))
+    result = await service.get_documents_markdown_batch(request.docIds, kbId, str(current_user.id))
     return result
 
 
@@ -317,7 +291,7 @@ async def delete_document(
 async def move_document(
     kbId: str,
     docId: str,
-    request: dict,
+    request: MoveDocumentRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -330,21 +304,14 @@ async def move_document(
             "targetKbId": "target-kb-uuid"
         }
     """
-    target_kb_id = request.get("targetKbId")
-    if not target_kb_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "targetKbId is required"}}
-        )
-    
     service = _create_document_service(db)
-    return await service.move_document(docId, kbId, target_kb_id, str(current_user.id))
+    return await service.move_document(docId, kbId, request.targetKbId, str(current_user.id))
 
 
 @router.post("/{kbId}/chat/messages")
 async def chat_with_kb(
     kbId: str,
-    request: dict,
+    request: KnowledgeChatSearchRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -353,8 +320,8 @@ async def chat_with_kb(
     Note: LLM answer generation is not implemented yet.
     """
     service = _create_search_service(db)
-    question = request.get("question", "")
-    top_n = request.get("top_n", 10)
+    question = request.question
+    top_n = request.top_n
     
     search_results = await service.search_in_kb(
         kbId,

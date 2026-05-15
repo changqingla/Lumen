@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation."""
 from pydantic import BaseModel, Field, constr
-from typing import Optional, List
+from typing import Any, Optional, List
 from enum import Enum
 
 
@@ -77,7 +77,49 @@ class CreateKnowledgeBaseRequest(BaseModel):
     """Create knowledge base request."""
     name: str
     description: Optional[str] = ""
+    category: str = "其它"
     tags: List[str] = []
+
+
+class UpdateKnowledgeBaseRequest(BaseModel):
+    """Update knowledge base request."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    avatar: Optional[str] = None
+
+
+class InitDirectUploadRequest(BaseModel):
+    """Initialize direct upload request."""
+    filename: str
+    size: int = 0
+    contentType: Optional[str] = None
+
+
+class CompleteDirectUploadRequest(BaseModel):
+    """Complete direct upload request."""
+    docId: str
+
+
+class BatchDocumentMarkdownRequest(BaseModel):
+    """Batch document markdown request."""
+    docIds: List[str]
+
+
+class MoveDocumentRequest(BaseModel):
+    """Move document request."""
+    targetKbId: str
+
+
+class KnowledgeChatSearchRequest(BaseModel):
+    """Knowledge base search request."""
+    question: str = ""
+    top_n: int = 10
+
+
+class FavoriteCheckRequest(BaseModel):
+    """Batch favorite check request."""
+    items: List[dict[str, Any]] = []
 
 
 # === Hub (TODO) ===

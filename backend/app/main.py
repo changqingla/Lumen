@@ -15,6 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+logger = logging.getLogger(__name__)
 from config.database import engine, AsyncSessionLocal
 from config.redis import get_redis_client, close_redis
 from utils.token_usage_queue import init_token_usage_queue, shutdown_token_usage_queue
@@ -37,7 +38,7 @@ from modules.organization import router as organization_router
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
-    print("🚀 Starting Lumen API...")
+    logger.info("Starting Lumen API...")
     
     # Initialize Redis
     redis_client = await get_redis_client()
@@ -45,19 +46,19 @@ async def lifespan(app: FastAPI):
     # Initialize token usage queue (async background worker)
     await init_token_usage_queue(redis_client, AsyncSessionLocal)
     
-    print("✅ Application started successfully")
+    logger.info("Application started successfully")
     
     yield
     
     # Shutdown
-    print("🛑 Shutting down...")
-    from utils.external_services import close_http_client
+    logger.info("Shutting down...")
+    from utils.http_client import close_http_client
 
     await shutdown_token_usage_queue()
     await close_http_client()
     await close_redis()
     await engine.dispose()
-    print("✅ Cleanup completed")
+    logger.info("Cleanup completed")
 
 
 # Create FastAPI app
@@ -84,7 +85,7 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Handle all uncaught exceptions."""
-    print(f"❌ Uncaught exception: {exc}")
+    logger.exception("Uncaught exception while handling %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={

@@ -3,7 +3,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from config.database import get_db
-from modules.notes.schemas import CreateNoteRequest, UpdateNoteRequest, NoteItem, NoteFolderItem
+from modules.notes.schemas import (
+    BatchDeleteNotesRequest,
+    CreateNoteRequest,
+    NoteFolderRequest,
+    NoteItem,
+    NoteFolderItem,
+    UpdateNoteRequest,
+)
 from middlewares.auth import get_current_user
 from models.user import User
 
@@ -29,26 +36,26 @@ async def list_folders(
 
 @router.post("/folders")
 async def create_folder(
-    request: dict,
+    request: NoteFolderRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new folder."""
     service = _create_note_service(db)
-    folder = await service.create_folder(str(current_user.id), request["name"])
+    folder = await service.create_folder(str(current_user.id), request.name)
     return {"id": str(folder["id"]), "name": folder["name"]}
 
 
 @router.patch("/folders/{folderId}")
 async def rename_folder(
     folderId: str,
-    request: dict,
+    request: NoteFolderRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Rename a folder."""
     service = _create_note_service(db)
-    await service.rename_folder(folderId, str(current_user.id), request["name"])
+    await service.rename_folder(folderId, str(current_user.id), request.name)
     return {"success": True}
 
 
@@ -137,14 +144,13 @@ async def delete_note(
 
 @router.post(":batchDelete")
 async def batch_delete_notes(
-    request: dict,
+    request: BatchDeleteNotesRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Batch delete notes."""
     service = _create_note_service(db)
-    note_ids = request.get("ids", [])
-    await service.batch_delete_notes(str(current_user.id), note_ids)
+    await service.batch_delete_notes(str(current_user.id), request.ids)
     return {"success": True}
 
 

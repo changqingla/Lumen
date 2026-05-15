@@ -9,6 +9,7 @@ from sqlalchemy import select, desc, func, update, delete
 from sqlalchemy.orm import joinedload
 
 from modules.chat.entities.chat_session import ChatSession, ChatMessage
+from modules.chat.message_metadata import build_message_metadata
 
 
 class ChatRepository:
@@ -408,6 +409,7 @@ class ChatRepository:
         await self.db.commit()
         
         return deleted_id
+
     @staticmethod
     def _build_message_metadata(
         document_summaries: Optional[list] = None,
@@ -418,239 +420,15 @@ class ChatRepository:
         assistant_tuple_messages: Optional[list[dict]] = None,
         truncation_metadata: Optional[dict] = None,
         interruption: Optional[dict] = None,
-    ) -> Optional[Any]:
-        """
-        构建消息扩展信息并兼容历史结构。
-
-        历史仅存 `document_summaries(list)`；
-        当有图片时升级为 dict 承载复合元数据。
-        """
-        normalized_images = [url for url in (image_data_urls or []) if isinstance(url, str) and url.strip()]
-        normalized_artifacts: List[Dict[str, Any]] = []
-        normalized_attachments: List[Dict[str, Any]] = []
-        normalized_tool_traces: List[Dict[str, Any]] = []
-        normalized_assistant_tuple_messages: List[Dict[str, Any]] = []
-        if isinstance(artifacts, list):
-            for item in artifacts:
-                if not isinstance(item, dict):
-                    continue
-                object_path = str(item.get("object_path", "")).strip()
-                if not object_path:
-                    continue
-                artifact: Dict[str, Any] = {"object_path": object_path}
-                name = item.get("name")
-                if isinstance(name, str) and name.strip():
-                    artifact["name"] = name.strip()
-                path = item.get("path")
-                if isinstance(path, str) and path.strip():
-                    artifact["path"] = path.strip()
-                mime_type = item.get("mime_type")
-                if isinstance(mime_type, str) and mime_type.strip():
-                    artifact["mime_type"] = mime_type.strip()
-                session_id = item.get("session_id")
-                if isinstance(session_id, str) and session_id.strip():
-                    artifact["session_id"] = session_id.strip()
-                size_bytes = item.get("size_bytes")
-                try:
-                    if size_bytes is not None:
-                        resolved_size = int(size_bytes)
-                        if resolved_size >= 0:
-                            artifact["size_bytes"] = resolved_size
-                except (TypeError, ValueError):
-                    pass
-                normalized_artifacts.append(artifact)
-
-        if isinstance(attachments, list):
-            for item in attachments:
-                if not isinstance(item, dict):
-                    continue
-                attachment_id = str(item.get("attachment_id", "")).strip()
-                name = str(item.get("name", "")).strip()
-                object_path = str(item.get("object_path", "")).strip()
-                workspace_path = str(item.get("workspace_path", "")).strip()
-                if not attachment_id or not name or not object_path or not workspace_path:
-                    continue
-                attachment: Dict[str, Any] = {
-                    "attachment_id": attachment_id,
-                    "name": name,
-                    "object_path": object_path,
-                    "workspace_path": workspace_path,
-                }
-                for key in (
-                    "mime_type",
-                    "source_kind",
-                    "role",
-                    "input_mode",
-                    "sha256",
-                    "created_at",
-                    "parent_attachment_id",
-                    "view_type",
-                    "parse_status",
-                ):
-                    value = item.get(key)
-                    if isinstance(value, str) and value.strip():
-                        attachment[key] = value.strip()
-                size_bytes = item.get("size_bytes")
-                try:
-                    if size_bytes is not None:
-                        resolved_size = int(size_bytes)
-                        if resolved_size >= 0:
-                            attachment["size_bytes"] = resolved_size
-                except (TypeError, ValueError):
-                    pass
-                available_views = item.get("available_views")
-                if isinstance(available_views, list):
-                    attachment["available_views"] = [
-                        str(value).strip()
-                        for value in available_views
-                        if isinstance(value, str) and value.strip()
-                    ]
-                capabilities = item.get("capabilities")
-                if isinstance(capabilities, list):
-                    attachment["capabilities"] = [
-                        str(value).strip()
-                        for value in capabilities
-                        if isinstance(value, str) and value.strip()
-                    ]
-                metadata = item.get("metadata")
-                if isinstance(metadata, dict):
-                    attachment["metadata"] = metadata
-                normalized_attachments.append(attachment)
-
-        if isinstance(tool_traces, list):
-            for item in tool_traces:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name", "")).strip()
-                if not name:
-                    continue
-                trace: Dict[str, Any] = {"name": name}
-                call_id = item.get("call_id")
-                if isinstance(call_id, str) and call_id.strip():
-                    trace["call_id"] = call_id.strip()
-                iteration = item.get("iteration")
-                try:
-                    if iteration is not None:
-                        resolved_iteration = int(iteration)
-                        if resolved_iteration > 0:
-                            trace["iteration"] = resolved_iteration
-                except (TypeError, ValueError):
-                    pass
-                if "args" in item:
-                    trace["args"] = item.get("args")
-                if "result" in item:
-                    trace["result"] = item.get("result")
-                success = item.get("success")
-                if isinstance(success, bool):
-                    trace["success"] = success
-                error = item.get("error")
-                if isinstance(error, str) and error.strip():
-                    trace["error"] = error.strip()
-                status = item.get("status")
-                if isinstance(status, str) and status.strip():
-                    trace["status"] = status.strip()
-                duration_ms = item.get("duration_ms")
-                try:
-                    if duration_ms is not None:
-                        resolved_duration = int(duration_ms)
-                        if resolved_duration >= 0:
-                            trace["duration_ms"] = resolved_duration
-                except (TypeError, ValueError):
-                    pass
-                normalized_tool_traces.append(trace)
-
-        if isinstance(assistant_tuple_messages, list):
-            for item in assistant_tuple_messages:
-                if not isinstance(item, dict):
-                    continue
-                tuple_type = str(item.get("type", "")).strip()
-                if tuple_type not in {"ai", "tool"}:
-                    continue
-                tuple_id = str(item.get("id", "")).strip()
-                if not tuple_id:
-                    continue
-
-                tuple_message: Dict[str, Any] = {
-                    "type": tuple_type,
-                    "id": tuple_id,
-                }
-
-                if "content" in item and isinstance(item.get("content"), str):
-                    tuple_message["content"] = item.get("content")
-
-                raw_tool_calls = item.get("tool_calls")
-                normalized_tool_calls: List[Dict[str, Any]] = []
-                if isinstance(raw_tool_calls, list):
-                    for tool_call in raw_tool_calls:
-                        if not isinstance(tool_call, dict):
-                            continue
-                        tool_name = str(tool_call.get("name", "")).strip()
-                        if not tool_name:
-                            continue
-                        normalized_tool_call: Dict[str, Any] = {"name": tool_name}
-                        tool_call_id = tool_call.get("id")
-                        if isinstance(tool_call_id, str) and tool_call_id.strip():
-                            normalized_tool_call["id"] = tool_call_id.strip()
-                        if "args" in tool_call:
-                            normalized_tool_call["args"] = tool_call.get("args")
-                        normalized_tool_calls.append(normalized_tool_call)
-                if normalized_tool_calls:
-                    tuple_message["tool_calls"] = normalized_tool_calls
-
-                tool_call_id = item.get("tool_call_id")
-                if isinstance(tool_call_id, str) and tool_call_id.strip():
-                    tuple_message["tool_call_id"] = tool_call_id.strip()
-                tool_name = item.get("name")
-                if isinstance(tool_name, str) and tool_name.strip():
-                    tuple_message["name"] = tool_name.strip()
-
-                if tuple_type == "ai":
-                    has_content = bool(str(tuple_message.get("content", "")).strip())
-                    has_tool_calls = bool(tuple_message.get("tool_calls"))
-                    if not has_content and not has_tool_calls:
-                        continue
-                if tuple_type == "tool":
-                    if not tuple_message.get("tool_call_id") or not tuple_message.get("name"):
-                        continue
-
-                normalized_assistant_tuple_messages.append(tuple_message)
-
-        normalized_truncation: Optional[dict] = None
-        if isinstance(truncation_metadata, dict) and truncation_metadata.get("was_truncated"):
-            normalized_truncation = {"was_truncated": True}
-            truncated_at = truncation_metadata.get("truncated_at")
-            if isinstance(truncated_at, str) and truncated_at.strip():
-                normalized_truncation["truncated_at"] = truncated_at.strip()
-
-        normalized_interruption: Optional[dict] = None
-        if isinstance(interruption, dict):
-            reason = str(interruption.get("reason", "")).strip()
-            if reason:
-                normalized_interruption = {
-                    "reason": reason,
-                    "retryable": bool(interruption.get("retryable", True)),
-                }
-                interrupted_at = interruption.get("interrupted_at")
-                if isinstance(interrupted_at, str) and interrupted_at.strip():
-                    normalized_interruption["interrupted_at"] = interrupted_at.strip()
-
-        if (
-            normalized_images
-            or normalized_artifacts
-            or normalized_attachments
-            or normalized_tool_traces
-            or normalized_assistant_tuple_messages
-            or normalized_truncation
-            or normalized_interruption
-        ):
-            return {
-                "document_summaries": document_summaries if isinstance(document_summaries, list) else None,
-                "image_data_urls": normalized_images,
-                "artifacts": normalized_artifacts,
-                "attachments": normalized_attachments,
-                "tool_traces": normalized_tool_traces,
-                "assistant_tuple_messages": normalized_assistant_tuple_messages,
-                "truncation": normalized_truncation,
-                "interruption": normalized_interruption,
-            }
-        return document_summaries if isinstance(document_summaries, list) else None
+    ) -> Optional[dict]:
+        """构建标准消息扩展信息。"""
+        return build_message_metadata(
+            document_summaries=document_summaries,
+            image_data_urls=image_data_urls,
+            artifacts=artifacts,
+            attachments=attachments,
+            tool_traces=tool_traces,
+            assistant_tuple_messages=assistant_tuple_messages,
+            truncation_metadata=truncation_metadata,
+            interruption=interruption,
+        )
