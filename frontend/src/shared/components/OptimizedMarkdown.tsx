@@ -14,6 +14,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema, type Options as RehypeSanitizeOptions } from 'rehype-sanitize';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import 'katex/dist/katex.min.css'; // KaTeX样式
 import '../../styles/markdown.css';
 
@@ -84,33 +85,6 @@ function findCodeBlockData(children: ReactNode): { copyText: string } | null {
   }
 
   return null;
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const textArea = document.createElement('textarea');
-  textArea.value = text;
-  textArea.setAttribute('readonly', 'true');
-  textArea.style.position = 'fixed';
-  textArea.style.left = '-999999px';
-  textArea.style.top = '-999999px';
-  textArea.style.opacity = '0';
-
-  document.body.appendChild(textArea);
-  textArea.focus();
-  textArea.select();
-
-  try {
-    if (!document.execCommand('copy')) {
-      throw new Error('document.execCommand("copy") returned false');
-    }
-  } finally {
-    textArea.remove();
-  }
 }
 
 interface CopyableCodeBlockProps extends ComponentPropsWithoutRef<'pre'> {

@@ -30,6 +30,7 @@ import {
   resolveArtifactName,
   type ChatArtifactPreviewTarget,
 } from '@/features/chat/lib/artifact-preview';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import { getFileIcon } from '@/shared/utils/fileIcons';
 import { Menu, ChevronDown, X, Check, Copy, ThumbsUp, ThumbsDown, FileText, Paperclip, RefreshCw, Presentation, PanelsTopLeft, Sparkles, Search, Sheet, ChartColumn, BookOpenText, ScrollText } from 'lucide-react';
@@ -1365,28 +1366,7 @@ export default function Home() {
   // 复制消息内容
   const handleCopyMessage = async (content: string, messageId: string) => {
     try {
-      // 优先使用现代 Clipboard API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(content);
-      } else {
-        // 降级方案：使用传统方法
-        const textArea = document.createElement('textarea');
-        textArea.value = content;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          textArea.remove();
-        } catch (err) {
-          console.error('降级复制方法失败:', err);
-          textArea.remove();
-          throw err;
-        }
-      }
+      await copyTextToClipboard(content);
       // 显示复制成功状态
       setCopiedMessages(prev => new Set(prev).add(messageId));
       // 2秒后恢复

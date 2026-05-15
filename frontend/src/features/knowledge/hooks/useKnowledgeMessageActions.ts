@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { ToastContextType } from '@/shared/hooks/toastContext';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import type { Message as NoteMessage } from '@/shared/utils/noteUtils';
 
@@ -23,27 +24,7 @@ export function useKnowledgeMessageActions<Message extends NoteMessage>({
 
   const copyMessage = useCallback(async (content: string, messageId: string) => {
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(content);
-      } else {
-        const textArea = document.createElement('textarea');
-        textArea.value = content;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          textArea.remove();
-        } catch (err) {
-          console.error('降级复制方法失败:', err);
-          textArea.remove();
-          throw err;
-        }
-      }
-
+      await copyTextToClipboard(content);
       setCopiedMessages(prev => new Set(prev).add(messageId));
       setTimeout(() => {
         setCopiedMessages(prev => {

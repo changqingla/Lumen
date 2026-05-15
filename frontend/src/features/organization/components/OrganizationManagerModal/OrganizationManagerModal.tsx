@@ -3,6 +3,7 @@ import { X, Copy, Plus, Users, User, LogOut, RefreshCw, Trash2, Building2, UserP
 import styles from './OrganizationManagerModal.module.css';
 import { organizationAPI, type OrganizationDetailResponse, type OrganizationListItem } from '@/shared/api/client';
 import { useToast } from '@/shared/hooks/useToast';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import {
   CreateOrganizationModal,
   JoinOrganizationModal,
@@ -155,23 +156,11 @@ export default function OrganizationManagerModal({
   const handleCopyCode = async () => {
     if (orgDetail?.org_code) {
       try {
-        await navigator.clipboard.writeText(orgDetail.org_code);
+        await copyTextToClipboard(orgDetail.org_code);
         toast.success('组织码已复制');
-      } catch {
-        // Fallback for non-secure contexts
-        const textArea = document.createElement('textarea');
-        textArea.value = orgDetail.org_code;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          toast.success('组织码已复制');
-        } catch {
-          toast.error('复制失败');
-        }
-        document.body.removeChild(textArea);
+      } catch (error) {
+        console.error('复制组织码失败:', error);
+        toast.error('复制失败');
       }
     }
   };

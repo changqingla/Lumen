@@ -3,6 +3,7 @@
  */
 import { X, Mail, Copy, Check, Send } from 'lucide-react';
 import { useState } from 'react';
+import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import styles from './ContactModal.module.css';
 
 interface ContactModalProps {
@@ -18,26 +19,11 @@ export default function ContactModal({ isOpen, onClose }: ContactModalProps) {
 
   const handleCopyEmail = async () => {
     try {
-      await navigator.clipboard.writeText(email);
+      await copyTextToClipboard(email);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {
       console.error('Failed to copy email:', error);
-      // 降级方案：使用传统方法复制
-      const textArea = document.createElement('textarea');
-      textArea.value = email;
-      textArea.style.position = 'fixed';
-      textArea.style.left = '-999999px';
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        console.error('Fallback copy failed:', err);
-      }
-      document.body.removeChild(textArea);
     }
   };
 
