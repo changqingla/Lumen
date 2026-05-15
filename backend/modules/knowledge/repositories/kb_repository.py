@@ -1,10 +1,10 @@
 """Knowledge Base repository for database operations with visibility control."""
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, or_, and_, any_
+from sqlalchemy import select, func, desc, or_, and_
 from typing import Optional, List, Tuple
 from modules.knowledge.entities.knowledge_base import KnowledgeBase, KNOWLEDGE_CATEGORIES
 from modules.knowledge.entities.document import Document
-from datetime import datetime, timedelta
+from datetime import datetime
 import uuid
 
 
@@ -159,15 +159,13 @@ class KnowledgeBaseRepository:
         Toggle public status of a knowledge base.
         Switches between private and public visibility.
         """
-        if kb.is_public or kb.visibility == 'public':
+        if kb.visibility == 'public':
             # 从公开改为私有
             kb.visibility = 'private'
-            kb.is_public = False
             kb.shared_to_orgs = []  # 清空组织共享
         else:
             # 从私有/组织 改为公开
             kb.visibility = 'public'
-            kb.is_public = True
             kb.shared_to_orgs = []  # 公开时清空组织共享
         
         await self.db.commit()
@@ -235,9 +233,8 @@ class KnowledgeBaseRepository:
             # Regular users: apply visibility filtering
             conditions = []
             
-            # 1. Public knowledge bases (admin shared or legacy is_public)
+            # 1. Public knowledge bases
             conditions.append(KnowledgeBase.visibility == 'public')
-            conditions.append(KnowledgeBase.is_public == True)  # 兼容旧数据
             
             # 2. Organization shared KBs that user has access to
             if user_org_ids:
@@ -322,9 +319,6 @@ class KnowledgeBaseRepository:
         
         kb.visibility = visibility
         
-        # Update is_public for backward compatibility
-        kb.is_public = (visibility == 'public')
-        
         # Clear shared_to_orgs if setting to private or public
         if visibility in ('private', 'public'):
             kb.shared_to_orgs = []
@@ -361,7 +355,6 @@ class KnowledgeBaseRepository:
         
         kb.visibility = 'organization'
         kb.shared_to_orgs = merged_orgs
-        kb.is_public = False  # Ensure is_public is False for organization sharing
         
         logger.info(f"Updated KB {kb_id} shared_to_orgs: {merged_orgs}")
         
@@ -399,10 +392,8 @@ class KnowledgeBaseRepository:
         # Set visibility based on org_ids
         if org_ids:
             kb.visibility = 'organization'
-            kb.is_public = False
         else:
             kb.visibility = 'private'
-            kb.is_public = False
         
         await self.db.commit()
         await self.db.refresh(kb)
@@ -451,9 +442,8 @@ class KnowledgeBaseRepository:
             # Regular users: apply visibility filtering
             conditions = []
             
-            # 1. Public knowledge bases (admin shared or legacy is_public)
+            # 1. Public knowledge bases
             conditions.append(KnowledgeBase.visibility == 'public')
-            conditions.append(KnowledgeBase.is_public == True)  # 兼容旧数据
             
             # 2. Organization shared KBs that user has access to
             if user_org_ids:
@@ -579,7 +569,6 @@ class KnowledgeBaseRepository:
             # 如果没有共享到任何组织了，改为私有
             if not new_shared_orgs:
                 kb.visibility = 'private'
-                kb.is_public = False
                 logger.info(f"KB {kb.id} no longer shared to any org, set to private")
             
             affected_count += 1
@@ -627,7 +616,6 @@ class KnowledgeBaseRepository:
             # 如果没有共享到任何组织了，改为私有
             if not new_shared_orgs:
                 kb.visibility = 'private'
-                kb.is_public = False
                 logger.info(f"KB {kb.id} no longer shared to any org, set to private")
             
             affected_count += 1

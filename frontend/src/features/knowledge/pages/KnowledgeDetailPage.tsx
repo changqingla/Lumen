@@ -132,6 +132,7 @@ export default function KnowledgeDetail() {
   // Data State
   const [myKnowledgeBases, setMyKnowledgeBases] = useState<KnowledgeBaseSummary[]>([]);
   const [currentKb, setCurrentKb] = useState<KnowledgeBaseDetail | null>(null);
+  const isCurrentKbPublic = currentKb?.visibility === 'public';
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -1028,7 +1029,7 @@ export default function KnowledgeDetail() {
     try {
       const result = await kbAPI.togglePublic(kbId);
       await loadCurrentKB();
-      const message = result.isPublic 
+      const message = result.visibility === 'public'
         ? '知识库已公开到论文广场！' 
         : '知识库已设为私有';
       toast.success(message);
@@ -1308,12 +1309,12 @@ export default function KnowledgeDetail() {
 
       <ConfirmModal
         isOpen={isTogglePublicModalOpen}
-        title={currentKb?.isPublic ? "设为私有" : "公开知识库"}
-        message={currentKb?.isPublic 
+        title={isCurrentKbPublic ? "设为私有" : "公开知识库"}
+        message={isCurrentKbPublic
           ? "设为私有后，其他用户将无法访问此知识库。确定继续吗？"
           : "公开后，所有用户都可以查看并订阅此知识库。其他用户无法修改或删除内容。确定公开吗？"
         }
-        type={currentKb?.isPublic ? "warning" : "info"}
+        type={isCurrentKbPublic ? "warning" : "info"}
         confirmText="确认"
         cancelText="取消"
         onConfirm={confirmTogglePublic}
@@ -1417,7 +1418,7 @@ export default function KnowledgeDetail() {
                     />
                     <div className={styles.kbMeta}>
                       <span>{currentKb?.contents || 0} 文档</span>
-                      {currentKb?.isPublic && (
+                      {isCurrentKbPublic && (
                         <>
                           <span>·</span>
                           <span className={styles.metaItem}><Users size={12} /> {currentKb.subscribersCount || 0} 订阅</span>
@@ -1451,9 +1452,9 @@ export default function KnowledgeDetail() {
                         <button 
                           className={styles.iconBtn}
                           onClick={handleTogglePublic}
-                          title={currentKb.isPublic ? "设为私有" : "公开知识库"}
+                          title={isCurrentKbPublic ? "设为私有" : "公开知识库"}
                         >
-                          {currentKb.isPublic ? <Globe size={18} /> : <GlobeLock size={18} />}
+                          {isCurrentKbPublic ? <Globe size={18} /> : <GlobeLock size={18} />}
                         </button>
                         )}
                         <button 
@@ -1481,7 +1482,7 @@ export default function KnowledgeDetail() {
                           <Settings size={18} />
                         </button>
                       </>
-                    ) : currentKb?.isPublic && (
+                    ) : isCurrentKbPublic && (
                       <button 
                         className={`${styles.subscribeBtn} ${currentKb.isSubscribed ? styles.subscribed : ''}`}
                         onClick={handleSubscribe}

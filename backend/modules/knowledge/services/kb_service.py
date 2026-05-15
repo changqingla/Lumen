@@ -329,9 +329,9 @@ class KnowledgeBaseService:
         kb = await self._verify_kb_write_access(kb_id, user_id)
         
         kb = await self.kb_repo.toggle_public(kb)
-        logger.info(f"KB {kb_id} public status: {kb.is_public}")
+        logger.info(f"KB {kb_id} visibility: {kb.visibility}")
         return {
-            "isPublic": kb.is_public,
+            "visibility": kb.visibility,
             "subscribersCount": kb.subscribers_count
         }
     
@@ -482,8 +482,7 @@ class KnowledgeBaseService:
             if creator:
                 kb_dict['creator_name'] = creator.name
                 kb_dict['creator_avatar'] = creator.avatar
-            # Add source info (兼容旧的is_public字段)
-            kb_dict['is_admin_recommended'] = kb.visibility == 'public' or kb.is_public
+            kb_dict['is_admin_recommended'] = kb.visibility == 'public'
             kb_dict['from_organization'] = kb.visibility == 'organization'
             if kb.visibility == 'organization' and kb.shared_to_orgs:
                 from modules.organization.repositories.organization_repository import OrganizationRepository
@@ -547,12 +546,11 @@ class KnowledgeBaseService:
                 kb_dict['creator_name'] = creator.name
                 kb_dict['creator_avatar'] = creator.avatar
             
-            # Add source info (兼容旧的is_public字段)
-            kb_dict['is_admin_recommended'] = kb.visibility == 'public' or kb.is_public
+            kb_dict['is_admin_recommended'] = kb.visibility == 'public'
             kb_dict['from_organization'] = kb.visibility == 'organization'
             
             # Add badge information
-            if kb.visibility == 'public' or kb.is_public:
+            if kb.visibility == 'public':
                 kb_dict['badge'] = 'admin_recommended'
                 kb_dict['badge_text'] = '管理员推荐'
             elif kb.visibility == 'organization' and kb.shared_to_orgs:
@@ -694,8 +692,7 @@ class KnowledgeBaseService:
         
         return {
             "kb_id": kb_id,
-            "visibility": kb.visibility or 'private',
-            "is_public": kb.is_public,  # Legacy field
+            "visibility": kb.visibility,
             "shared_to_orgs": shared_orgs,
             "is_owner": is_owner,
             "can_modify": is_owner

@@ -509,8 +509,7 @@ export interface KnowledgeBaseListItem {
   organization_name?: string;
   is_admin_recommended?: boolean;
   from_organization?: boolean;
-  isPublic?: boolean;
-  is_public?: boolean;
+  visibility?: 'private' | 'organization' | 'public';
   isOwner?: boolean;
   is_owner?: boolean;
   isSubscribed?: boolean;
@@ -886,7 +885,7 @@ export const kbAPI = {
       name: string;
       description: string;
       category: string;
-      isPublic: boolean;
+      visibility: 'private' | 'organization' | 'public';
       subscribersCount: number;
       viewCount: number;
       contents: number;
@@ -1135,7 +1134,7 @@ export const kbAPI = {
    * 切换知识库公开/私有状态
    */
   async togglePublic(kbId: string) {
-    return request<{ isPublic: boolean; subscribersCount: number }>(`/kb/${kbId}/toggle-public`, {
+    return request<{ visibility: 'private' | 'organization' | 'public'; subscribersCount: number }>(`/kb/${kbId}/toggle-public`, {
       method: 'POST',
     });
   },
@@ -1261,7 +1260,6 @@ export const kbAPI = {
     return request<{
       kb_id: string;
       visibility: string;
-      is_public: boolean;
       shared_to_orgs: Array<{ id: string; name: string; avatar: string | null }>;
       is_owner: boolean;
       can_modify: boolean;

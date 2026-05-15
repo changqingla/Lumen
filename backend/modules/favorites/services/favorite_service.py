@@ -197,7 +197,7 @@ class FavoriteService:
                 kb_dict['creator_avatar'] = creator.avatar
             
             # Add source info
-            kb_dict['is_admin_recommended'] = kb.visibility == 'public' or kb.is_public
+            kb_dict['is_admin_recommended'] = kb.visibility == 'public'
             kb_dict['from_organization'] = kb.visibility == 'organization'
             
             if kb.visibility == 'organization' and kb.shared_to_orgs:
