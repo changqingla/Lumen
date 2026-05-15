@@ -398,28 +398,6 @@ export default function KnowledgeDetail() {
     }
   }, [showRegenerateMenu]);
 
-  // 这些初始化请求只需要在页面挂载时执行一次。
-  /* eslint-disable react-hooks/exhaustive-deps */
-  useEffect(() => {
-    loadKnowledgeBases();
-    loadChatSessions();
-    loadUserInfo();
-  }, []);
-  /* eslint-enable react-hooks/exhaustive-deps */
-
-  useEffect(() => {
-    previewRequestSequenceRef.current += 1;
-    setHasRestoredSession(false);
-    setCurrentSessionId(undefined);
-    setPreviewDoc(null);
-    setPreviewUrl('');
-    setPreviewContent('');
-    setChatInput('');
-    clearMessages({ preserveSessionRuntime: true });
-    // 这里只应该在知识库路由切换时重置，不能跟随回调 identity 变化反复执行。
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [kbId]);
-
   const loadUserInfo = useCallback(async () => {
     try {
       const cached = localStorage.getItem('userProfile');
@@ -431,6 +409,108 @@ export default function KnowledgeDetail() {
       console.error('Failed to load user info:', error);
     }
   }, []);
+
+  const loadKnowledgeBases = useCallback(async () => {
+    if (isGuestMode) {
+      setMyKnowledgeBases([]);
+      return;
+    }
+
+    try {
+      const response = await kbAPI.listKnowledgeBases();
+      setMyKnowledgeBases((response.items || []) as KnowledgeBaseSummary[]);
+    } catch (error: unknown) {
+      console.error('Failed to load knowledge bases:', error);
+      toast.error(getKnowledgeDetailErrorMessage(error, '加载知识库失败'));
+    }
+  }, [isGuestMode, toast]);
+
+  const loadVisibilityStatus = useCallback(async () => {
+    if (!kbId) return;
+    try {
+      const status = await kbAPI.getSharedStatus(kbId) as SharedStatusResponse;
+      setSharedOrgs(status.shared_to_orgs?.map((org) => org.id) || []);
+    } catch (error) {
+      console.error('Failed to load visibility status:', error);
+    }
+  }, [kbId]);
+
+  const loadCurrentKB = useCallback(async () => {
+    if (!kbId) return;
+    try {
+      // 使用 getKnowledgeBaseInfo 支持公开和私有知识库
+      const kb = await kbAPI.getKnowledgeBaseInfo(kbId) as KnowledgeBaseDetail;
+      setCurrentKb(kb);
+      // 如果是自己的知识库，加载可见性状态
+      if (kb.isOwner) {
+        await loadVisibilityStatus();
+      }
+    } catch (error: unknown) {
+      console.error('Failed to load current KB:', error);
+      toast.error(getKnowledgeDetailErrorMessage(error, '无法访问该知识库'));
+      navigate('/knowledge');
+    }
+  }, [kbId, loadVisibilityStatus, navigate, toast]);
+
+  const loadDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
+    if (!kbId) return [];
+    
+    try {
+      const response = await kbAPI.listDocuments(kbId);
+      const nextDocuments = (response.items || []) as KnowledgeDocument[];
+      setDocuments(nextDocuments);
+      
+      // 只提取 ready 状态的文档ID用于对话
+      const docIds = nextDocuments
+        .filter((doc) => doc.status === 'ready')
+        .map((doc) => doc.id);
+      setKbDocIds(docIds);
+      
+      // 检查文档收藏状态
+      if (!isGuestMode && nextDocuments.length > 0) {
+        try {
+          const items = nextDocuments.map((doc) => ({ type: 'document', id: doc.id }));
+          const favoriteStatus = await favoriteAPI.checkFavorites(items);
+          const favoritedIds = new Set<string>();
+          for (const [key, isFavorited] of Object.entries(favoriteStatus)) {
+            if (isFavorited) {
+              // key format is "document:docId"
+              const docId = key.split(':')[1];
+              if (docId) favoritedIds.add(docId);
+            }
+          }
+          setFavoriteDocIds(favoritedIds);
+        } catch (error) {
+          console.error('Failed to check favorite status:', error);
+        }
+      }
+      
+      // 返回文档列表，用于轮询判断
+      return nextDocuments;
+    } catch (error: unknown) {
+      console.error('Failed to load documents:', error);
+      toast.error(getKnowledgeDetailErrorMessage(error, '加载文档失败'));
+      return [];
+    }
+  }, [isGuestMode, kbId, toast]);
+
+  // 初始化或身份状态变化时刷新基础数据。
+  useEffect(() => {
+    loadKnowledgeBases();
+    loadChatSessions();
+    loadUserInfo();
+  }, [loadChatSessions, loadKnowledgeBases, loadUserInfo]);
+
+  useEffect(() => {
+    previewRequestSequenceRef.current += 1;
+    setHasRestoredSession(false);
+    setCurrentSessionId(undefined);
+    setPreviewDoc(null);
+    setPreviewUrl('');
+    setPreviewContent('');
+    setChatInput('');
+    clearMessages({ preserveSessionRuntime: true });
+  }, [clearMessages, kbId]);
 
   // ✅ 验证并恢复 localStorage 中的 sessionId
   useEffect(() => {
@@ -476,19 +556,15 @@ export default function KnowledgeDetail() {
     }
   }, [searchParams, currentSessionId, kbId, navigate, setSearchParams, chatSessions]);
 
-  // 这里按知识库路由切换重载数据，避免回调 identity 变化导致重复请求。
-  /* eslint-disable react-hooks/exhaustive-deps */
+  // 这里按知识库路由切换重载数据。
   useEffect(() => {
     if (kbId) {
       loadCurrentKB();
       loadDocuments();
     }
-  }, [kbId]);
-  /* eslint-enable react-hooks/exhaustive-deps */
+  }, [kbId, loadCurrentKB, loadDocuments]);
 
   // 轮询检查文档处理状态
-  // 轮询只关心知识库和文档状态变化，不应被请求函数重建打断。
-  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     // 清理之前的轮询
     if (pollingRef.current) {
@@ -552,8 +628,7 @@ export default function KnowledgeDetail() {
         pollingRef.current = null;
       }
     };
-  }, [kbId, documents]);
-  /* eslint-enable react-hooks/exhaustive-deps */
+  }, [kbId, documents, loadCurrentKB, loadKnowledgeBases]);
 
   // 自动滚动到最新消息
   useEffect(() => {
@@ -575,90 +650,6 @@ export default function KnowledgeDetail() {
       });
     }
   }, [isStreaming, messages.length, scrollChatToBottom]);
-
-  const loadKnowledgeBases = useCallback(async () => {
-    if (isGuestMode) {
-      setMyKnowledgeBases([]);
-      return;
-    }
-
-    try {
-      const response = await kbAPI.listKnowledgeBases();
-      setMyKnowledgeBases((response.items || []) as KnowledgeBaseSummary[]);
-    } catch (error: unknown) {
-      console.error('Failed to load knowledge bases:', error);
-      toast.error(getKnowledgeDetailErrorMessage(error, '加载知识库失败'));
-    }
-  }, [isGuestMode, toast]);
-
-  const loadVisibilityStatus = useCallback(async () => {
-    if (!kbId) return;
-    try {
-      const status = await kbAPI.getSharedStatus(kbId) as SharedStatusResponse;
-      setSharedOrgs(status.shared_to_orgs?.map((org) => org.id) || []);
-    } catch (error) {
-      console.error('Failed to load visibility status:', error);
-    }
-  }, [kbId]);
-
-  const loadCurrentKB = useCallback(async () => {
-    if (!kbId) return;
-    try {
-      // 使用 getKnowledgeBaseInfo 支持公开和私有知识库
-      const kb = await kbAPI.getKnowledgeBaseInfo(kbId) as KnowledgeBaseDetail;
-      setCurrentKb(kb);
-      // 如果是自己的知识库，加载可见性状态
-      if (kb.isOwner) {
-        await loadVisibilityStatus();
-      }
-    } catch (error: unknown) {
-      console.error('Failed to load current KB:', error);
-      toast.error(getKnowledgeDetailErrorMessage(error, '无法访问该知识库'));
-      navigate('/knowledge');
-    }
-  }, [kbId, loadVisibilityStatus, navigate, toast]);
-
-  const loadDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
-    if (!kbId) return;
-    
-    try {
-      const response = await kbAPI.listDocuments(kbId);
-      const nextDocuments = (response.items || []) as KnowledgeDocument[];
-      setDocuments(nextDocuments);
-      
-      // 只提取 ready 状态的文档ID用于对话
-      const docIds = nextDocuments
-        .filter((doc) => doc.status === 'ready')
-        .map((doc) => doc.id);
-      setKbDocIds(docIds);
-      
-      // 检查文档收藏状态
-      if (!isGuestMode && nextDocuments.length > 0) {
-        try {
-          const items = nextDocuments.map((doc) => ({ type: 'document', id: doc.id }));
-          const favoriteStatus = await favoriteAPI.checkFavorites(items);
-          const favoritedIds = new Set<string>();
-          for (const [key, isFavorited] of Object.entries(favoriteStatus)) {
-            if (isFavorited) {
-              // key format is "document:docId"
-              const docId = key.split(':')[1];
-              if (docId) favoritedIds.add(docId);
-            }
-          }
-          setFavoriteDocIds(favoritedIds);
-        } catch (error) {
-          console.error('Failed to check favorite status:', error);
-        }
-      }
-      
-      // 返回文档列表，用于轮询判断
-      return nextDocuments;
-    } catch (error: unknown) {
-      console.error('Failed to load documents:', error);
-      toast.error(getKnowledgeDetailErrorMessage(error, '加载文档失败'));
-      return [];
-    }
-  }, [isGuestMode, kbId, toast]);
 
   // ============ File Upload Handlers ============
 
