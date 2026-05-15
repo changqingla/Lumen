@@ -12,7 +12,7 @@ from schemas.chunk_schemas import (
     ChunkEditRequest,
     ChunkBatchEditRequest,
 )
-from utils.external_services import get_http_client, get_rag_internal_headers
+from utils.http_client import get_http_client, get_rag_internal_headers
 from utils.es_utils import get_user_es_index
 
 logger = logging.getLogger(__name__)

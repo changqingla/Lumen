@@ -25,7 +25,7 @@ from modules.model_config.registry.model_provider_registry import (
 from modules.model_config.entities.user_model_config import UserModelBinding
 from modules.model_config.repositories.user_model_binding_repository import UserModelBindingRepository
 from modules.model_config.repositories.user_model_provider_repository import UserModelProviderRepository
-from utils.external_services import get_http_client
+from utils.http_client import get_http_client
 from modules.model_config.security.model_config_security import (
     create_runtime_model_binding_token,
     decode_runtime_model_binding_token,

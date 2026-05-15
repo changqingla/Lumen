@@ -7,7 +7,8 @@ from modules.knowledge.repositories.document_repository import DocumentRepositor
 from repositories.user_repository import UserRepository
 from modules.organization.repositories.organization_member_repository import OrganizationMemberRepository
 from utils.minio_client import upload_file, delete_file, download_file, object_exists, get_upload_url
-from utils.external_services import MineruService, DocumentProcessService
+from utils.document_process_service import DocumentProcessService
+from utils.mineru_service import MineruService
 from utils.es_utils import get_user_es_index
 from modules.knowledge.entities.document import Document
 from modules.knowledge.entities.knowledge_base import KnowledgeBase

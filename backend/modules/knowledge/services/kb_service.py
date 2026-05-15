@@ -7,7 +7,7 @@ from modules.knowledge.repositories.document_repository import DocumentRepositor
 from modules.knowledge.repositories.kb_subscription_repository import KBSubscriptionRepository
 from modules.organization.repositories.organization_member_repository import OrganizationMemberRepository
 from repositories.user_repository import UserRepository
-from utils.external_services import DocumentProcessService
+from utils.document_process_service import DocumentProcessService
 from utils.es_utils import get_user_es_index
 from utils.avatar_security import validate_avatar_upload
 from config.settings import settings

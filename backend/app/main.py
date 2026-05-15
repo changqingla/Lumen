@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down...")
-    from utils.external_services import close_http_client
+    from utils.http_client import close_http_client
 
     await shutdown_token_usage_queue()
     await close_http_client()
