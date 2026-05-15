@@ -11,4 +11,3 @@ __all__ = [
     "get_http_client",
     "get_rag_internal_headers",
 ]
-

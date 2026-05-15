@@ -454,18 +454,18 @@ export default function KnowledgeDetail() {
 
   const loadDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
     if (!kbId) return [];
-    
+
     try {
       const response = await kbAPI.listDocuments(kbId);
       const nextDocuments = (response.items || []) as KnowledgeDocument[];
       setDocuments(nextDocuments);
-      
+
       // 只提取 ready 状态的文档ID用于对话
       const docIds = nextDocuments
         .filter((doc) => doc.status === 'ready')
         .map((doc) => doc.id);
       setKbDocIds(docIds);
-      
+
       // 检查文档收藏状态
       if (!isGuestMode && nextDocuments.length > 0) {
         try {
@@ -484,7 +484,7 @@ export default function KnowledgeDetail() {
           console.error('Failed to check favorite status:', error);
         }
       }
-      
+
       // 返回文档列表，用于轮询判断
       return nextDocuments;
     } catch (error: unknown) {
