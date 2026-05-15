@@ -123,7 +123,6 @@ class ParserType(StrEnum):
     PRESENTATION = "presentation"
     LAWS = "laws"
     MANUAL = "manual"
-    RESUME = "resume"
     BOOK = "book"
     QA = "qa"
     TABLE = "table"
