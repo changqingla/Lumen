@@ -85,7 +85,7 @@ export default function CreativeWorkshopPage() {
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [prompt, setPrompt] = useState(EXAMPLE_PROMPTS[0]);
+  const [prompt, setPrompt] = useState('');
   const [size, setSize] = useState<CreativeImageSize>('1024x1024');
   const [quality, setQuality] = useState<CreativeImageQuality>('medium');
   const [outputFormat, setOutputFormat] = useState<CreativeImageOutputFormat>('jpeg');
