@@ -91,24 +91,24 @@ class UpdateKnowledgeBaseRequest(BaseModel):
 
 class InitDirectUploadRequest(BaseModel):
     """Initialize direct upload request."""
-    filename: Optional[str] = ""
+    filename: str
     size: int = 0
     contentType: Optional[str] = None
 
 
 class CompleteDirectUploadRequest(BaseModel):
     """Complete direct upload request."""
-    docId: Optional[str] = ""
+    docId: str
 
 
 class BatchDocumentMarkdownRequest(BaseModel):
     """Batch document markdown request."""
-    docIds: Optional[List[str]] = None
+    docIds: List[str]
 
 
 class MoveDocumentRequest(BaseModel):
     """Move document request."""
-    targetKbId: Optional[str] = ""
+    targetKbId: str
 
 
 class KnowledgeChatSearchRequest(BaseModel):

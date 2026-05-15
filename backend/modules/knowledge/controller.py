@@ -166,15 +166,9 @@ async def init_direct_upload(
     db: AsyncSession = Depends(get_db)
 ):
     """Initialize direct browser upload to MinIO."""
-    filename = request.filename or ""
+    filename = request.filename
     file_size = int(request.size or 0)
     content_type = request.contentType
-
-    if not filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "filename is required"}}
-        )
 
     service = _create_document_service(db)
     return await service.init_direct_upload(
@@ -195,15 +189,8 @@ async def complete_direct_upload(
     db: AsyncSession = Depends(get_db)
 ):
     """Complete direct upload and start background document processing."""
-    doc_id = request.docId or ""
-    if not doc_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "docId is required"}}
-        )
-
     service = _create_document_service(db)
-    return await service.complete_direct_upload(kbId, str(current_user.id), doc_id, background_tasks)
+    return await service.complete_direct_upload(kbId, str(current_user.id), request.docId, background_tasks)
 
 
 @router.get("/{kbId}/documents")
@@ -286,15 +273,7 @@ async def get_documents_markdown_batch(
         }
     """
     service = _create_document_service(db)
-    doc_ids = request.docIds or []
-    
-    if not doc_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "docIds is required"}}
-        )
-    
-    result = await service.get_documents_markdown_batch(doc_ids, kbId, str(current_user.id))
+    result = await service.get_documents_markdown_batch(request.docIds, kbId, str(current_user.id))
     return result
 
 
@@ -341,15 +320,8 @@ async def move_document(
             "targetKbId": "target-kb-uuid"
         }
     """
-    target_kb_id = request.targetKbId or ""
-    if not target_kb_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_REQUEST", "message": "targetKbId is required"}}
-        )
-    
     service = _create_document_service(db)
-    return await service.move_document(docId, kbId, target_kb_id, str(current_user.id))
+    return await service.move_document(docId, kbId, request.targetKbId, str(current_user.id))
 
 
 @router.post("/{kbId}/chat/messages")
