@@ -1,10 +1,14 @@
 import React, { useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
+import {
+  AVATAR_ACCEPT,
+  AVATAR_FILE_SIZE_ERROR,
+  AVATAR_FILE_TYPE_ERROR,
+  isAllowedAvatarSize,
+  isAllowedAvatarType,
+} from '@/shared/utils/avatarUploadConstraints';
 import styles from './AvatarUpload.module.css';
 import defaultAvatar from '@/assets/default-avatar.svg';
-
-const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const AVATAR_ACCEPT = '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
 
 interface AvatarUploadProps {
   currentAvatar: string | null;
@@ -30,15 +34,13 @@ export default function AvatarUpload({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
-    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
-      alert('请上传 JPG、PNG 或 WEBP 图片');
+    if (!isAllowedAvatarType(file.type)) {
+      alert(AVATAR_FILE_TYPE_ERROR);
       return;
     }
 
-    // Validate file size (e.g., 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('图片大小不能超过 5MB');
+    if (!isAllowedAvatarSize(file.size)) {
+      alert(AVATAR_FILE_SIZE_ERROR);
       return;
     }
 

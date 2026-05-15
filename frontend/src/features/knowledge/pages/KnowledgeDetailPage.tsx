@@ -33,6 +33,13 @@ import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { getFileIcon } from '@/shared/utils/fileIcons';
 import { useKnowledgeMessageActions } from '@/features/knowledge/hooks/useKnowledgeMessageActions';
 import {
+  AVATAR_ACCEPT,
+  AVATAR_FILE_SIZE_ERROR,
+  AVATAR_FILE_TYPE_ERROR,
+  isAllowedAvatarSize,
+  isAllowedAvatarType,
+} from '@/shared/utils/avatarUploadConstraints';
+import {
   Upload,
   FileText,
   Globe,
@@ -89,8 +96,6 @@ import defaultAvatar from '@/assets/default-avatar.svg';
 
 const LazyPDFViewer = lazy(() => import('@/shared/components/PDFViewer/PDFViewer'));
 const LazyDocumentViewer = lazy(() => import('@/shared/components/DocumentViewer/DocumentViewer'));
-const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const AVATAR_ACCEPT = '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
 
 export default function KnowledgeDetail() {
   const { kbId } = useParams<{ kbId: string }>();
@@ -914,15 +919,13 @@ export default function KnowledgeDetail() {
     const file = e.target.files?.[0];
     if (!file || !kbId || !currentKb?.isOwner) return;
     
-    // 验证文件类型
-    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
-      toast.error('请选择 JPG、PNG 或 WEBP 图片');
+    if (!isAllowedAvatarType(file.type)) {
+      toast.error(AVATAR_FILE_TYPE_ERROR);
       return;
     }
-    
-    // 验证文件大小（最大 5MB）
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('图片大小不能超过 5MB');
+
+    if (!isAllowedAvatarSize(file.size)) {
+      toast.error(AVATAR_FILE_SIZE_ERROR);
       return;
     }
     
