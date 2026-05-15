@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.database import get_db
 from middlewares.auth import get_current_user
 from models.user import User
+from schemas.schemas import FavoriteCheckRequest
 
 router = APIRouter(prefix="/favorites", tags=["Favorites"])
 
@@ -103,11 +104,10 @@ async def list_favorite_documents(
 
 @router.post("/check")
 async def check_favorites(
-    request: dict,
+    request: FavoriteCheckRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Batch check if items are favorited."""
     service = _create_favorite_service(db)
-    items = request.get("items", [])
-    return await service.check_favorites(str(current_user.id), items)
+    return await service.check_favorites(str(current_user.id), request.items)

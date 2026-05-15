@@ -27,6 +27,18 @@ class UpdateNoteRequest(BaseModel):
     tags: Optional[list[str]] = None
 
 
+class NoteFolderRequest(BaseModel):
+    """Create or rename note folder request."""
+
+    name: str
+
+
+class BatchDeleteNotesRequest(BaseModel):
+    """Batch delete notes request."""
+
+    ids: list[str] = []
+
+
 class NoteItem(BaseModel):
     """Note item response."""
 
