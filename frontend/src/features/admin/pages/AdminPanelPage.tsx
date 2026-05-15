@@ -2,7 +2,7 @@
  * 管理员后台页面
  * 提供激活码管理、用户管理、统计数据等功能
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Shield, Key, Users, BarChart3 } from 'lucide-react';
 import {
   ActivationCodeManagement,

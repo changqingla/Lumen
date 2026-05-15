@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ArrowUp, Square } from 'lucide-react';
 import styles from './SendStopButton.module.css';
 

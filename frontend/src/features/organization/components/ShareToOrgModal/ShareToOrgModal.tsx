@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { X, Building2 } from 'lucide-react';
 import styles from './ShareToOrgModal.module.css';
 import { organizationAPI, type OrganizationListItem } from '@/shared/api/client';

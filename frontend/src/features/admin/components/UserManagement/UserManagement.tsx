@@ -2,7 +2,7 @@
  * 用户管理组件
  * 提供用户列表查看和管理员权限设置
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Search, Shield, ShieldOff, Crown, Award, User, RefreshCw } from 'lucide-react';
 import { useToast } from '@/shared/hooks/useToast';
 import { adminAPI } from '@/shared/api/client';
