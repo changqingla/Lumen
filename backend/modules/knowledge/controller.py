@@ -1,5 +1,5 @@
 """Knowledge Base API endpoints."""
-from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from config.database import get_db
@@ -139,22 +139,6 @@ async def upload_kb_avatar(
         file_data,
         file.filename,
         file.content_type
-    )
-
-
-@router.post("/{kbId}/documents")
-async def upload_document(
-    kbId: str
-):
-    """Deprecated legacy upload endpoint."""
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail={
-            "error": {
-                "code": "UPLOAD_ENDPOINT_DEPRECATED",
-                "message": "Legacy upload endpoint is deprecated. Use /documents/direct-upload/init and /documents/direct-upload/complete."
-            }
-        }
     )
 
 
