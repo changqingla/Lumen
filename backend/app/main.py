@@ -26,6 +26,7 @@ from modules.auth import router as auth_router
 from modules.chat import router as chat_router
 from modules.chat.model_controller import router as chat_model_router
 from modules.chat.runtime_router import router as chat_runtime_router
+from modules.creative_workshop import router as creative_workshop_router
 from modules.favorites import router as favorite_router
 from modules.knowledge import router as knowledge_router
 from modules.knowledge.chunk_controller import router as knowledge_chunk_router
@@ -151,6 +152,7 @@ app.include_router(knowledge_router, prefix=settings.API_PREFIX)
 app.include_router(chat_router, prefix=settings.API_PREFIX)
 app.include_router(chat_model_router, prefix=settings.API_PREFIX)
 app.include_router(chat_runtime_router, prefix=settings.API_PREFIX)
+app.include_router(creative_workshop_router, prefix=settings.API_PREFIX)
 app.include_router(model_config_router, prefix=settings.API_PREFIX)
 app.include_router(model_config_internal_router, prefix=settings.API_PREFIX)
 app.include_router(knowledge_chunk_router, prefix=settings.API_PREFIX)

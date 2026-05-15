@@ -12,6 +12,7 @@ const KnowledgeDetail = lazy(() => import("@/features/knowledge/pages/KnowledgeD
 const Auth = lazy(() => import("@/features/auth/pages/AuthPage"));
 const Favorites = lazy(() => import("@/features/favorites/pages/FavoritesPage"));
 const Notes = lazy(() => import("@/features/notes/pages/NotesPage"));
+const CreativeWorkshop = lazy(() => import("@/features/creative-workshop/pages/CreativeWorkshopPage"));
 const AdminPanel = lazy(() => import("@/features/admin/pages/AdminPanelPage"));
 
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/knowledge/:kbId" element={<ProtectedRoute><KnowledgeDetail /></ProtectedRoute>} />
             <Route path="/favorites" element={<ProtectedRoute><Favorites /></ProtectedRoute>} />
             <Route path="/notes" element={<ProtectedRoute><Notes /></ProtectedRoute>} />
+            <Route path="/creative-workshop" element={<ProtectedRoute><CreativeWorkshop /></ProtectedRoute>} />
 
             {/* 管理员路由 - 需要管理员权限 */}
             <Route path="/admin" element={<ProtectedRoute><AdminRoute><AdminPanel /></AdminRoute></ProtectedRoute>} />

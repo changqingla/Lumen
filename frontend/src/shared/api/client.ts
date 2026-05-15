@@ -603,6 +603,35 @@ export interface AdminUserSummary {
   weekly_token_total: number;
 }
 
+export type CreativeImageSize =
+  | '1024x1024'
+  | '1536x1024'
+  | '1024x1536'
+  | '2048x2048'
+  | '3840x2160'
+  | '2160x3840'
+  | 'auto';
+
+export type CreativeImageQuality = 'low' | 'medium' | 'high' | 'auto';
+export type CreativeImageOutputFormat = 'png' | 'jpeg' | 'webp';
+
+export interface CreativeImageGenerationRequest {
+  prompt: string;
+  size: CreativeImageSize;
+  quality: CreativeImageQuality;
+  output_format: CreativeImageOutputFormat;
+  output_compression?: number;
+}
+
+export interface CreativeImageGenerationResponse {
+  b64_json: string;
+  mime_type: string;
+  model: string;
+  size: CreativeImageSize;
+  quality: CreativeImageQuality;
+  output_format: CreativeImageOutputFormat;
+}
+
 // 认证相关 API
 export const authAPI = {
   /**
@@ -2031,6 +2060,19 @@ export const adminAPI = {
   },
 };
 
+// 创意工坊相关 API
+export const creativeWorkshopAPI = {
+  /**
+   * 使用 Image2 生成图片
+   */
+  async generateImage(data: CreativeImageGenerationRequest) {
+    return request<CreativeImageGenerationResponse>('/creative-workshop/images/generations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+};
+
 // ==================== 统一导出所有 API ====================
 export const api = {
   ...authAPI,
@@ -2040,4 +2082,5 @@ export const api = {
   ...chatAPI,
   ...organizationAPI,
   ...adminAPI,
+  ...creativeWorkshopAPI,
 };
