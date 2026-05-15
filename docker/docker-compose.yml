@@ -321,7 +321,7 @@ services:
       MAX_WORKERS: ${RAG_MAX_WORKERS:-16}
       CHUNK_PROCESS_WORKERS: ${RAG_CHUNK_PROCESS_WORKERS:-4}
       MAX_FILE_SIZE: ${RAG_MAX_FILE_SIZE:-104857600}
-    command: ["python", "api.py"]
+    command: ["python", "app.py"]
     volumes:
       - ../services/rag:/workspace/rag
       - /etc/localtime:/etc/localtime:ro
