@@ -27,11 +27,11 @@ import { type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { getKnowledgeBaseAvatar } from '@/shared/utils/avatarUtils';
-import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import { useRAGChat } from '@/features/chat/hooks/useRAGChat';
 import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/useChatModels';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { getFileIcon } from '@/shared/utils/fileIcons';
+import { useKnowledgeMessageActions } from '@/features/knowledge/hooks/useKnowledgeMessageActions';
 import {
   Upload,
   FileText,
@@ -152,11 +152,6 @@ export default function KnowledgeDetail() {
   const [loadingPreview, setLoadingPreview] = useState(false);
   const previewRequestSequenceRef = useRef(0);
   
-  // 消息反馈状态
-  const [likedMessages, setLikedMessages] = useState<Set<string>>(new Set());
-  const [dislikedMessages, setDislikedMessages] = useState<Set<string>>(new Set());
-  const [savedToNotes, setSavedToNotes] = useState<Set<string>>(new Set()); // 已保存到笔记的消息ID
-  const [copiedMessages, setCopiedMessages] = useState<Set<string>>(new Set()); // 已复制的消息ID
   const [showRegenerateMenu, setShowRegenerateMenu] = useState<string | null>(null); // 显示重新生成菜单的消息ID
 
   // 配额超限弹窗状态
@@ -278,6 +273,22 @@ export default function KnowledgeDetail() {
     onError: handleError,
     onSessionCreated: handleSessionCreated,
     onStopComplete: handleStopComplete
+  });
+
+  const {
+    copiedMessages,
+    dislikedMessages,
+    likedMessages,
+    savedToNotes,
+    copyMessage: handleCopyMessage,
+    dislikeMessage: handleDislikeMessage,
+    likeMessage: handleLikeMessage,
+    saveMessageToNotes: handleSaveToNotes,
+  } = useKnowledgeMessageActions({
+    messages,
+    isGuestMode,
+    promptLogin,
+    toast,
   });
 
   const {
@@ -701,116 +712,6 @@ export default function KnowledgeDetail() {
       return;
     }
     fileInputRef.current?.click();
-  };
-
-  // 复制消息内容
-  const handleCopyMessage = async (content: string, messageId: string) => {
-    try {
-      // 优先使用现代 Clipboard API
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(content);
-      } else {
-        // 降级方案：使用传统方法
-        const textArea = document.createElement('textarea');
-        textArea.value = content;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          textArea.remove();
-        } catch (err) {
-          console.error('降级复制方法失败:', err);
-          textArea.remove();
-          throw err;
-        }
-      }
-      // 显示复制成功状态
-      setCopiedMessages(prev => new Set(prev).add(messageId));
-      // 2秒后恢复
-      setTimeout(() => {
-        setCopiedMessages(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(messageId);
-          return newSet;
-        });
-      }, 2000);
-    } catch (err) {
-      console.error('复制失败:', err);
-      toast.error('复制失败，请重试');
-    }
-  };
-
-  // 点赞消息
-  const handleLikeMessage = (messageId: string) => {
-    setLikedMessages(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(messageId)) {
-        newSet.delete(messageId);
-      } else {
-        newSet.add(messageId);
-        setDislikedMessages(prev => {
-          const newDisliked = new Set(prev);
-          newDisliked.delete(messageId);
-          return newDisliked;
-        });
-      }
-      return newSet;
-    });
-    // TODO: 发送到后端记录
-  };
-
-  // 点踩消息
-  const handleDislikeMessage = (messageId: string) => {
-    setDislikedMessages(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(messageId)) {
-        newSet.delete(messageId);
-      } else {
-        newSet.add(messageId);
-        setLikedMessages(prev => {
-          const newLiked = new Set(prev);
-          newLiked.delete(messageId);
-          return newLiked;
-        });
-      }
-      return newSet;
-    });
-    // TODO: 发送到后端记录
-  };
-
-  // 保存对话到笔记
-  const handleSaveToNotes = async (messageId: string) => {
-    if (isGuestMode) {
-      promptLogin({
-        title: '登录后可保存到笔记',
-        message: '游客模式下暂不支持保存内容，登录后可继续操作。',
-        confirmText: '去登录',
-      });
-      return;
-    }
-
-    if (savedToNotes.has(messageId)) {
-      toast.info('该对话已保存到笔记');
-      return;
-    }
-
-    try {
-      const result = await saveConversationToNoteById(messages, messageId);
-
-      if (result.success) {
-        setSavedToNotes(prev => new Set(prev).add(messageId));
-        toast.success('已保存到笔记');
-      } else {
-        toast.error(result.error || '保存失败');
-      }
-    } catch (error: unknown) {
-      console.error('保存到笔记失败:', error);
-      toast.error('保存失败，请重试');
-    }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
