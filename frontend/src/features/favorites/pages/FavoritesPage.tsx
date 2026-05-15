@@ -321,10 +321,8 @@ export default function FavoritesPage() {
       return;
     }
 
-    console.log('handleUnfavoriteDoc called with docId:', docId);
     try {
       await favoriteAPI.unfavoriteDocument(docId);
-      console.log('unfavoriteDocument API call successful');
       toast.success('已取消收藏');
       // 如果当前正在预览这个文档，关闭预览
       if (previewDoc?.id === docId) {
@@ -1011,7 +1009,6 @@ export default function FavoritesPage() {
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              console.log('Star clicked! Unfavoriting docId:', doc.id);
                               handleUnfavoriteDoc(doc.id);
                             }}
                             onMouseDown={(e) => {

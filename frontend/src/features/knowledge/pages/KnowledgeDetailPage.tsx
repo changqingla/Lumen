@@ -462,7 +462,6 @@ export default function KnowledgeDetail() {
         if (isKnowledgeSession) {
           setCurrentSessionId(chatIdFromUrl);
           saveKnowledgeSessionId(kbId, chatIdFromUrl);
-          console.log(`加载会话 ${chatIdFromUrl} (知识库会话)`);
           setSearchParams({});
           return;
         }
@@ -502,15 +501,11 @@ export default function KnowledgeDetail() {
     const hasProcessingDocs = documents.some(doc => PROCESSING_DOCUMENT_STATUSES.includes(doc.status));
     
     if (!hasProcessingDocs) {
-      console.log('[Polling] No processing documents, skip polling');
       return;
     }
     
-    console.log('[Polling] Found processing documents, starting polling...');
-    
     // 启动轮询
     pollingRef.current = setInterval(async () => {
-      console.log('[Polling] Fetching document status...');
       try {
         const response = await kbAPI.listDocuments(kbId);
         const prevStatuses = documents.map(d => d.status);
@@ -533,7 +528,6 @@ export default function KnowledgeDetail() {
         
         // 如果有状态变化，刷新知识库信息（更新文档计数）
         if (statusChanged) {
-          console.log('[Polling] Document status changed, refreshing KB info...');
           loadCurrentKB();
           loadKnowledgeBases();
         }
@@ -544,7 +538,6 @@ export default function KnowledgeDetail() {
         );
         
         if (!stillProcessing && pollingRef.current) {
-          console.log('[Polling] All documents processed, stopping polling');
           clearInterval(pollingRef.current);
           pollingRef.current = null;
         }
@@ -555,7 +548,6 @@ export default function KnowledgeDetail() {
     
     return () => {
       if (pollingRef.current) {
-        console.log('[Polling] Cleanup on unmount');
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
@@ -639,7 +631,6 @@ export default function KnowledgeDetail() {
         .filter((doc) => doc.status === 'ready')
         .map((doc) => doc.id);
       setKbDocIds(docIds);
-      console.log(`Loaded ${docIds.length} ready documents for KB ${kbId}`);
       
       // 检查文档收藏状态
       if (!isGuestMode && nextDocuments.length > 0) {

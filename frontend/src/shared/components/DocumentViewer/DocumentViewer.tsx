@@ -209,8 +209,6 @@ export default function DocumentViewer({
       const selection = window.getSelection();
       const text = selection?.toString().trim();
       
-      console.log('[DocumentViewer] Mouse up, selected text:', text?.substring(0, 50));
-      
       if (text && text.length > 0 && onTextSelect) {
         setSelectedText(text);
         
@@ -224,7 +222,6 @@ export default function DocumentViewer({
             y: rect.top - 5
           });
           setShowAddButton(true);
-          console.log('[DocumentViewer] Show add button at:', rect.right + 10, rect.top - 5);
         }
       }
     }, 10);

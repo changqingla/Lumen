@@ -1228,7 +1228,6 @@ export default function Home() {
           docIds: selectedDocIds,
           isKBLocked: true
         });
-        console.log('📝 已同步更新会话配置');
       } catch (error) {
         console.error('Failed to update session config:', error);
         // 继续发送消息，不阻塞用户操作
@@ -1258,7 +1257,6 @@ export default function Home() {
     // 🔒 如果选择了知识库且还未锁定，发送第一条消息后锁定
     if (selectedKBs.length > 0 && !isKBLocked) {
       setIsKBLocked(true);
-      console.log('🔒 知识库配置已锁定');
     }
   };
 
