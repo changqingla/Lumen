@@ -252,12 +252,14 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-reader}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      AUDIT_LOG_DIR: /audit-logs
     ports:
       - "${LUMEN_LOCAL_BIND_HOST:-127.0.0.1}:${API_HOST_PORT:-13000}:13000"
     volumes:
       - ../backend:/app:ro
       - ../shared:/app/shared:ro
       - ../services/rag/core:/workspace/rag/core:ro
+      - ${API_AUDIT_LOG_DIR:-/root/Lumen/logs}:/audit-logs
     working_dir: /app
     command: ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port 13000"]
     healthcheck:

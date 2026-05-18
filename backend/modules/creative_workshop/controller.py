@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from config.settings import settings
 from middlewares.auth import get_current_user
 from models.user import User
+from utils.audit_logger import record_user_prompt_event
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,18 @@ async def generate_image(
     current_user: User = Depends(get_current_user),
 ):
     """Generate an image through the configured image model provider."""
+    await record_user_prompt_event(
+        event_type="image2_prompt",
+        user=current_user,
+        prompt=request.prompt,
+        metadata={
+            "model": settings.CREATIVE_WORKSHOP_IMAGE_MODEL,
+            "size": request.size,
+            "quality": request.quality,
+            "output_format": request.output_format,
+            "output_compression": request.output_compression,
+        },
+    )
     data = await _post_image_provider_json(
         path="/images/generations",
         payload=_build_provider_payload(request),

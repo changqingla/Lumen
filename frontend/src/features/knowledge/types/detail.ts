@@ -35,7 +35,7 @@ export interface KnowledgeDocument {
   errorMessage?: string | null;
 }
 
-export interface KnowledgeChatSessionConfig {
+interface KnowledgeChatSessionConfig {
   uiMode: ChatUIMode;
   sourceType?: string;
   kbIds?: string[];
@@ -51,7 +51,7 @@ export interface KnowledgeChatSession {
   config?: KnowledgeChatSessionConfig;
 }
 
-export interface SharedOrgStatus {
+interface SharedOrgStatus {
   id: string;
 }
 
@@ -59,7 +59,7 @@ export interface SharedStatusResponse {
   shared_to_orgs?: SharedOrgStatus[];
 }
 
-export interface QuotaExceededLikeErrorDetails {
+interface QuotaExceededLikeErrorDetails {
   user_level?: string;
   used_tokens?: number;
   quota_limit?: number;

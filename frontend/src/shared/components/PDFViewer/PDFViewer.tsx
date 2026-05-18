@@ -5,7 +5,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { PdfLoader, PdfHighlighter } from 'react-pdf-highlighter';
 import type { Content, ScaledPosition } from 'react-pdf-highlighter';
-import pdfjsPkg from 'react-pdf-highlighter/node_modules/pdfjs-dist/package.json';
+import pdfjsPkg from 'pdfjs-dist/package.json';
 import { FileText, Star, X } from 'lucide-react';
 import { getFileIcon } from '@/shared/utils/fileIcons';
 import styles from './PDFViewer.module.css';

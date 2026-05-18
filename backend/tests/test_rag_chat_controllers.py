@@ -1,8 +1,9 @@
 import os
 
-os.environ.setdefault("DEBUG", "false")
+os.environ["DEBUG"] = "false"
 
 import base64
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -13,10 +14,14 @@ from fastapi import HTTPException
 
 from middlewares.auth import AuthenticatedIdentity
 from modules.chat import controller as chat_controller
+from utils import audit_logger
 
 
 def _identity(user_id):
-    return AuthenticatedIdentity(user=SimpleNamespace(id=user_id), is_guest=False)
+    return AuthenticatedIdentity(
+        user=SimpleNamespace(id=user_id, name="tester", email="tester@example.com"),
+        is_guest=False,
+    )
 
 
 class _FakeMessage:
@@ -273,6 +278,7 @@ async def test_add_message_registers_chat_inline_images_into_workspace_attachmen
         return_value=[_FakeWorkspaceAsset(image_asset_payload)]
     )
 
+    monkeypatch.setattr(chat_controller, "record_user_prompt_event", AsyncMock())
     monkeypatch.setattr(chat_controller, "_create_chat_service", lambda db: chat_service)
     monkeypatch.setattr(chat_controller, "_create_workspace_service", lambda session_id, user_id: workspace_service)
 
@@ -300,6 +306,40 @@ async def test_add_message_registers_chat_inline_images_into_workspace_attachmen
     assert persisted_attachments[0]["name"] == "report.pdf"
     assert persisted_attachments[1]["attachment_id"] == "att_inline_image"
     assert persisted_attachments[1]["metadata"]["origin"] == "image_data_url"
+    chat_controller.record_user_prompt_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_add_message_records_user_question_to_audit_log(monkeypatch, tmp_path):
+    session_id = uuid4()
+    user_id = uuid4()
+    monkeypatch.setattr(audit_logger.settings, "AUDIT_LOG_DIR", str(tmp_path))
+
+    session = SimpleNamespace(id=session_id, user_id=user_id, config={"runtime": "lumen"})
+    chat_service = MagicMock()
+    chat_service.get_session = AsyncMock(return_value=session)
+    chat_service.add_message = AsyncMock(
+        return_value=_FakeMessage({"id": "msg-1", "role": "user", "content": "帮我总结这篇文章"})
+    )
+
+    monkeypatch.setattr(chat_controller, "_create_chat_service", lambda db: chat_service)
+
+    response = await chat_controller.add_message(
+        session_id=session_id,
+        request=chat_controller.AddMessageRequest(role="user", content="帮我总结这篇文章"),
+        db=object(),
+        identity=_identity(user_id),
+    )
+
+    assert response["id"] == "msg-1"
+    [log_file] = list(tmp_path.glob("*/user-*.jsonl"))
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["event_type"] == "chat_question"
+    assert record["user"]["id"] == str(user_id)
+    assert record["prompt"] == "帮我总结这篇文章"
+    assert record["metadata"]["session_id"] == str(session_id)
+    assert record["metadata"]["message_id"] == "msg-1"
+    assert record["metadata"]["attachment_count"] == 0
 
 
 @pytest.mark.asyncio

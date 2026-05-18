@@ -1,5 +1,7 @@
 import os
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 os.environ["DEBUG"] = "false"
@@ -13,6 +15,7 @@ from modules.creative_workshop import controller
 @pytest.mark.asyncio
 async def test_generate_image_requires_configured_api_key(monkeypatch):
     monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_API_KEY", "")
+    monkeypatch.setattr(controller, "record_user_prompt_event", AsyncMock())
 
     with pytest.raises(HTTPException) as exc_info:
         await controller.generate_image(
@@ -22,6 +25,7 @@ async def test_generate_image_requires_configured_api_key(monkeypatch):
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail["error"]["code"] == "IMAGE_API_NOT_CONFIGURED"
+    controller.record_user_prompt_event.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -56,6 +60,8 @@ async def test_generate_image_posts_openai_compatible_payload(monkeypatch):
 
     monkeypatch.setattr(controller.httpx, "AsyncClient", _Client)
 
+    monkeypatch.setattr(controller, "record_user_prompt_event", AsyncMock())
+
     result = await controller.generate_image(
         request=controller.ImageGenerationRequest(
             prompt="  minimal icon  ",
@@ -80,3 +86,54 @@ async def test_generate_image_posts_openai_compatible_payload(monkeypatch):
         "output_format": "jpeg",
         "output_compression": 80,
     }
+    controller.record_user_prompt_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_image_records_image_prompt(monkeypatch, tmp_path):
+    user_id = uuid4()
+    monkeypatch.setattr(controller.settings, "AUDIT_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_BASE_URL", "https://example.test/v1")
+    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_API_KEY", "test-key")
+    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_MODEL", "gpt-image-2")
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"b64_json": "ZmFrZS1pbWFnZQ=="}]}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, json):
+            return _Response()
+
+    monkeypatch.setattr(controller.httpx, "AsyncClient", _Client)
+
+    await controller.generate_image(
+        request=controller.ImageGenerationRequest(
+            prompt="赛博城市夜景",
+            size="1024x1536",
+            quality="high",
+            output_format="png",
+            output_compression=None,
+        ),
+        current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+    )
+
+    [log_file] = list(tmp_path.glob("*/user-*.jsonl"))
+    record = json.loads(log_file.read_text(encoding="utf-8"))
+    assert record["event_type"] == "image2_prompt"
+    assert record["user"]["id"] == str(user_id)
+    assert record["prompt"] == "赛博城市夜景"
+    assert record["metadata"]["model"] == "gpt-image-2"
+    assert record["metadata"]["size"] == "1024x1536"

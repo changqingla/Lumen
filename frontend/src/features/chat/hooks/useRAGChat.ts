@@ -42,14 +42,6 @@ import type {
 } from '@/features/chat/lib/task-runtime';
 import { generateUUID } from '@/shared/lib/uuid';
 
-export type {
-  TaskActivationLevel,
-  TaskModeDecisionState,
-  TaskSnapshotState,
-  TaskSnapshotTask,
-  TaskStatus,
-} from '@/features/chat/lib/task-runtime';
-
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -196,7 +188,7 @@ const cleanupSessionRuntimeTimers = (runtime: SessionRuntime) => {
   }
 };
 
-export const clearAllSessionRuntimes = (): void => {
+const clearAllSessionRuntimes = (): void => {
   sessionRuntimes.forEach((runtime) => {
     cleanupSessionRuntimeTimers(runtime);
     runtime.abortController?.abort();

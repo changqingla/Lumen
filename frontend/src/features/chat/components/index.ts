@@ -6,14 +6,6 @@ export { default as ChatModelSelector } from "./ChatModelSelector/ChatModelSelec
 export { default as ChatUIModeSwitch } from "./ChatUIModeSwitch/ChatUIModeSwitch";
 export { ChatImagePreviewList } from "./ChatImageAttachments";
 export { KnowledgeBaseSelector } from "./KnowledgeBaseSelector";
-export type {
-  KnowledgeBase,
-  Document,
-  SelectionState,
-  KnowledgeBaseSelectorProps,
-} from "./KnowledgeBaseSelector";
+export type { SelectionState } from "./KnowledgeBaseSelector";
 export { default as QuotaExceededModal } from "./QuotaExceededModal/QuotaExceededModal";
 export { default as SendStopButton } from "./SendStopButton";
-export type { SendStopButtonProps } from "./SendStopButton";
-export { default as ThinkingTrace } from "./ThinkingTrace/ThinkingTrace";
-export { default as ToolTraceList } from "./ToolTraceList/ToolTraceList";

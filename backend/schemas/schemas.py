@@ -1,78 +1,10 @@
 """Pydantic schemas for request/response validation."""
-from pydantic import BaseModel, Field, constr
 from typing import Any, Optional, List
-from enum import Enum
+
+from pydantic import BaseModel, Field, constr
 
 
-# === Common ===
-class ErrorCode(str, Enum):
-    """Standard error codes."""
-    UNAUTHORIZED = "UNAUTHORIZED"
-    FORBIDDEN = "FORBIDDEN"
-    NOT_FOUND = "NOT_FOUND"
-    CONFLICT = "CONFLICT"
-    VALIDATION_ERROR = "VALIDATION_ERROR"
-    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
-    RATE_LIMITED = "RATE_LIMITED"
-    INTERNAL_ERROR = "INTERNAL_ERROR"
-
-
-class ErrorResponse(BaseModel):
-    """Standard error response."""
-    error: dict = Field(
-        ...,
-        json_schema_extra={
-            "example": {
-                "code": "VALIDATION_ERROR",
-                "message": "参数不合法",
-                "details": {},
-            }
-        },
-    )
-
-
-class PaginationMeta(BaseModel):
-    """Pagination metadata."""
-    total: int
-    page: int
-    pageSize: int
-
-
-# === Favorites ===
-class FavoriteType(str, Enum):
-    """Favorite item type."""
-    PAPER = "paper"
-    KNOWLEDGE = "knowledge"
-
-
-class CreateFavoriteRequest(BaseModel):
-    """Create favorite request."""
-    type: FavoriteType
-    targetId: str
-    tags: List[str] = []
-
-
-class FavoriteItem(BaseModel):
-    """Favorite item response."""
-    id: str
-    type: FavoriteType
-    title: str
-    description: Optional[str] = None
-    author: Optional[str] = None
-    date: str
-    source: Optional[str] = None
-    tags: List[str] = []
-
-
-class FavoritesResponse(BaseModel):
-    """Favorites list response."""
-    total: int
-    page: int
-    pageSize: int
-    items: List[FavoriteItem]
-
-
-# === Knowledge Base (TODO) ===
+# === Knowledge Base ===
 class CreateKnowledgeBaseRequest(BaseModel):
     """Create knowledge base request."""
     name: str
@@ -120,17 +52,6 @@ class KnowledgeChatSearchRequest(BaseModel):
 class FavoriteCheckRequest(BaseModel):
     """Batch favorite check request."""
     items: List[dict[str, Any]] = []
-
-
-# === Hub (TODO) ===
-class HubItem(BaseModel):
-    """Hub item for knowledge plaza."""
-    id: str
-    title: str
-    desc: str
-    icon: str
-    subs: int
-    contents: int
 
 
 # === Activation Code (Admin) ===

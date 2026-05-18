@@ -530,7 +530,7 @@ def hierarchical_merge(bull, sections, depth):
 
 
 def naive_merge(sections, chunk_token_num=128, delimiter="\n。；！？"):
-    print(f"🚀 naive_merge 被调用，chunk_token_num={chunk_token_num}, sections数量={len(sections) if sections else 0}")
+    logging.debug("naive_merge called, chunk_token_num=%s, sections=%s", chunk_token_num, len(sections) if sections else 0)
     if not sections:
         return []
     if isinstance(sections[0], type("")):

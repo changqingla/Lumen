@@ -17,6 +17,7 @@ from schemas.schemas import (
     UpdateKBVisibilityRequest,
     UpdateKnowledgeBaseRequest,
 )
+from utils.audit_logger import record_user_prompt_event
 from utils.avatar_security import read_avatar_upload_file
 
 router = APIRouter(prefix="/kb", tags=["Knowledge Base"])
@@ -322,6 +323,16 @@ async def chat_with_kb(
     service = _create_search_service(db)
     question = request.question
     top_n = request.top_n
+
+    await record_user_prompt_event(
+        event_type="knowledge_chat_question",
+        user=current_user,
+        prompt=question,
+        metadata={
+            "kb_id": kbId,
+            "top_n": top_n,
+        },
+    )
     
     search_results = await service.search_in_kb(
         kbId,

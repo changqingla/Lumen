@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     CREATIVE_WORKSHOP_IMAGE_API_KEY: str = ""
     CREATIVE_WORKSHOP_IMAGE_MODEL: str = "gpt-image-2"
     CREATIVE_WORKSHOP_IMAGE_TIMEOUT: float = 180.0
+
+    # ============================================================================
+    # 审计日志配置
+    # ============================================================================
+    AUDIT_LOG_DIR: str = "logs"
     
     # ============================================================================
     # 安全配置

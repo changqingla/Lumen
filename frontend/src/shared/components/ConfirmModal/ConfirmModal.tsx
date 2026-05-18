@@ -1,7 +1,7 @@
 import { AlertTriangle, Info, CheckCircle, XCircle } from 'lucide-react';
 import styles from './ConfirmModal.module.css';
 
-export type ConfirmModalType = 'warning' | 'danger' | 'info' | 'success';
+type ConfirmModalType = 'warning' | 'danger' | 'info' | 'success';
 
 interface ConfirmModalProps {
   isOpen: boolean;

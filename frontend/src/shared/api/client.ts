@@ -7,7 +7,7 @@ import { safeLocalStorageRemove } from '@/shared/utils/localStorage';
 // API 基础配置
 // 开发环境使用相对路径，通过 Vite 代理
 // 生产环境使用环境变量配置的完整 URL
-export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const attachGuestHeaders = (headers: Headers, token: string | null) => {
   if (token || !isGuestModeEnabled() || headers.has('X-Guest-Id')) {
@@ -189,7 +189,7 @@ export interface ChatAttachment {
   metadata?: Record<string, unknown>;
 }
 
-export const serializeChatAttachments = (attachments?: ChatAttachment[]) => (
+const serializeChatAttachments = (attachments?: ChatAttachment[]) => (
   (attachments || []).map((attachment) => ({
     attachment_id: attachment.attachment_id,
     name: attachment.name,
@@ -241,7 +241,7 @@ export interface ChatModelOption {
   source?: 'system' | 'user';
 }
 
-export interface ModelProviderCatalogModel {
+interface ModelProviderCatalogModel {
   name: string;
   display_name: string;
   description?: string | null;
@@ -291,12 +291,12 @@ export interface ProviderRemoteModelsResponse {
   base_url: string;
   models: ModelProviderCatalogModel[];
 }
-export interface ChatAssistantTupleToolCall {
+interface ChatAssistantTupleToolCall {
   id?: string;
   name: string;
   args?: unknown;
 }
-export interface ChatAssistantTupleMessage {
+interface ChatAssistantTupleMessage {
   type: 'ai' | 'tool';
   id: string;
   content?: string;
@@ -364,7 +364,7 @@ export interface ChatTaskModeDecisionEvent {
   [key: string]: unknown;
 }
 
-export interface ChatRuntimePrepareRequest {
+interface ChatRuntimePrepareRequest {
   model_name?: string;
   plan_mode?: boolean;
   sync_workspace_assets?: boolean;
@@ -408,7 +408,7 @@ export interface ChatRuntimeThreadUploadFile {
   markdown_artifact_url?: string | null;
 }
 
-export interface ChatRuntimeThreadUploadsResponse {
+interface ChatRuntimeThreadUploadsResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
@@ -419,7 +419,7 @@ export interface ChatRuntimeThreadUploadsResponse {
   kb_materialized_files: Record<string, unknown>[];
 }
 
-export interface ChatRuntimeThreadUploadMutationResponse {
+interface ChatRuntimeThreadUploadMutationResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
@@ -429,7 +429,7 @@ export interface ChatRuntimeThreadUploadMutationResponse {
   message: string;
 }
 
-export interface ChatRuntimeThreadUploadDeleteResponse {
+interface ChatRuntimeThreadUploadDeleteResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
@@ -437,7 +437,7 @@ export interface ChatRuntimeThreadUploadDeleteResponse {
   message: string;
 }
 
-export interface ChatSessionConfigEditableFields {
+interface ChatSessionConfigEditableFields {
   kbIds?: string[];
   docIds?: string[];
   sourceType?: 'home' | 'knowledge' | 'favorites';
@@ -445,7 +445,7 @@ export interface ChatSessionConfigEditableFields {
   modelName?: string;
 }
 
-export interface ChatSessionRuntimeMeta {
+interface ChatSessionRuntimeMeta {
   runtime?: string;
   threadId?: string;
   assistantId?: string;
@@ -456,7 +456,7 @@ export interface ChatSessionConfig extends ChatSessionConfigEditableFields, Chat
   uiMode: ChatUIMode;
 }
 
-export type ChatSessionConfigUpdate = Partial<ChatSessionConfigEditableFields> & {
+type ChatSessionConfigUpdate = Partial<ChatSessionConfigEditableFields> & {
   uiMode: ChatUIMode;
 };
 
@@ -581,7 +581,7 @@ export interface NoteListItem {
   createdAt: string;
 }
 
-export interface ChatSessionSummary {
+interface ChatSessionSummary {
   id: string;
   title: string;
   lastMessage: string;
@@ -615,7 +615,7 @@ export type CreativeImageSize =
 export type CreativeImageQuality = 'low' | 'medium' | 'high' | 'auto';
 export type CreativeImageOutputFormat = 'png' | 'jpeg' | 'webp';
 
-export interface CreativeImageGenerationRequest {
+interface CreativeImageGenerationRequest {
   prompt: string;
   size: CreativeImageSize;
   quality: CreativeImageQuality;
@@ -623,7 +623,7 @@ export interface CreativeImageGenerationRequest {
   output_compression?: number;
 }
 
-export interface CreativeImageGenerationResponse {
+interface CreativeImageGenerationResponse {
   b64_json: string;
   mime_type: string;
   model: string;
@@ -1480,7 +1480,7 @@ export const favoriteAPI = {
 };
 
 // ==================== 聊天会话相关 API ====================
-export const chatAPI = {
+const chatAPI = {
 
   /**
    * 获取用户的所有聊天会话
@@ -2061,7 +2061,7 @@ export const adminAPI = {
 };
 
 // 创意工坊相关 API
-export const creativeWorkshopAPI = {
+const creativeWorkshopAPI = {
   /**
    * 使用 Image2 生成图片
    */
