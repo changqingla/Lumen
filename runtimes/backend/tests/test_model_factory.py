@@ -363,6 +363,108 @@ def test_runtime_overrides_take_precedence_over_model_config(monkeypatch):
     assert captured.get("reasoning_effort") == "high"
 
 
+def test_openai_compatible_models_use_lumen_user_agent_by_default(monkeypatch):
+    cfg = _make_app_config([_make_model("openai-compatible")])
+    _patch_factory(monkeypatch, cfg)
+
+    captured: dict = {}
+
+    class CapturingModel(FakeChatModel):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            BaseChatModel.__init__(self, **kwargs)
+
+    monkeypatch.setattr(factory_module, "resolve_class", lambda path, base: CapturingModel)
+
+    factory_module.create_chat_model(name="openai-compatible")
+
+    assert captured.get("default_headers") == {"User-Agent": "Lumen/1.0"}
+
+
+def test_patched_openai_compatible_models_use_lumen_user_agent_by_default(monkeypatch):
+    cfg = _make_app_config(
+        [
+            _make_model(
+                "patched-openai-compatible",
+                use="src.models.patched_openai:PatchedChatOpenAI",
+            )
+        ]
+    )
+    _patch_factory(monkeypatch, cfg)
+
+    captured: dict = {}
+
+    class CapturingModel(FakeChatModel):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            BaseChatModel.__init__(self, **kwargs)
+
+    monkeypatch.setattr(factory_module, "resolve_class", lambda path, base: CapturingModel)
+
+    factory_module.create_chat_model(name="patched-openai-compatible")
+
+    assert captured.get("default_headers") == {"User-Agent": "Lumen/1.0"}
+
+
+def test_openai_compatible_models_preserve_configured_user_agent(monkeypatch):
+    cfg = _make_app_config(
+        [
+            _make_model(
+                "openai-compatible",
+                default_headers={
+                    "User-Agent": "CustomGateway/2.0",
+                    "X-Gateway": "custom",
+                },
+            )
+        ]
+    )
+    _patch_factory(monkeypatch, cfg)
+
+    captured: dict = {}
+
+    class CapturingModel(FakeChatModel):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            BaseChatModel.__init__(self, **kwargs)
+
+    monkeypatch.setattr(factory_module, "resolve_class", lambda path, base: CapturingModel)
+
+    factory_module.create_chat_model(name="openai-compatible")
+
+    assert captured.get("default_headers") == {
+        "User-Agent": "CustomGateway/2.0",
+        "X-Gateway": "custom",
+    }
+
+
+def test_openai_compatible_models_merge_default_headers_without_user_agent(monkeypatch):
+    cfg = _make_app_config(
+        [
+            _make_model(
+                "openai-compatible",
+                default_headers={"X-Gateway": "custom"},
+            )
+        ]
+    )
+    _patch_factory(monkeypatch, cfg)
+
+    captured: dict = {}
+
+    class CapturingModel(FakeChatModel):
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            BaseChatModel.__init__(self, **kwargs)
+
+    monkeypatch.setattr(factory_module, "resolve_class", lambda path, base: CapturingModel)
+
+    factory_module.create_chat_model(name="openai-compatible")
+
+    assert captured.get("default_headers") == {
+        "X-Gateway": "custom",
+        "User-Agent": "Lumen/1.0",
+    }
+
+
 def test_unsupported_model_config_keys_are_filtered(monkeypatch):
     cfg = _make_app_config(
         [
