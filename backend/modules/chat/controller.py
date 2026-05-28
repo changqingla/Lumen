@@ -92,6 +92,12 @@ def _build_session_prefix(user_id: UUID, session_id: UUID) -> str:
     tenant_key = _compute_tenant_key(user_id)
     return f"v2/tenants/{tenant_key}/sessions/{session_id}/"
 
+
+def _get_session_model_name(session) -> str:
+    session_config = dict(getattr(session, "config", {}) or {})
+    return str(session_config.get("modelName") or "").strip()
+
+
 def _is_allowed_artifact_object_path(user_id: UUID, session_id: UUID, object_path: str) -> bool:
     """
     校验 object_path 是否属于当前用户当前会话可访问的产物路径。
@@ -974,6 +980,7 @@ async def add_message(
                 "message_id": str(persisted_message_id),
                 "is_guest": identity.is_guest,
                 "guest_id": identity.guest_id,
+                "model": _get_session_model_name(session),
                 "image_count": len(request.image_data_urls or []),
                 "attachment_count": len(validated_attachments or []),
             },

@@ -315,7 +315,11 @@ async def test_add_message_records_user_question_to_audit_log(monkeypatch, tmp_p
     user_id = uuid4()
     monkeypatch.setattr(audit_logger.settings, "AUDIT_LOG_DIR", str(tmp_path))
 
-    session = SimpleNamespace(id=session_id, user_id=user_id, config={"runtime": "lumen"})
+    session = SimpleNamespace(
+        id=session_id,
+        user_id=user_id,
+        config={"runtime": "lumen", "modelName": "gpt-5.4"},
+    )
     chat_service = MagicMock()
     chat_service.get_session = AsyncMock(return_value=session)
     chat_service.add_message = AsyncMock(
@@ -339,6 +343,7 @@ async def test_add_message_records_user_question_to_audit_log(monkeypatch, tmp_p
     assert record["prompt"] == "帮我总结这篇文章"
     assert record["metadata"]["session_id"] == str(session_id)
     assert record["metadata"]["message_id"] == "msg-1"
+    assert record["metadata"]["model"] == "gpt-5.4"
     assert record["metadata"]["attachment_count"] == 0
 
 
