@@ -239,7 +239,7 @@ services:
     <<: *json-logging
 
   lumen_api:
-    image: ${BACKEND_IMAGE:-crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/knowledge-retrieval:v1.2}
+    image: ${BACKEND_IMAGE:-lumen-backend:paper-translation}
     container_name: lumen_api
     env_file:
       - ../backend/.env
@@ -253,6 +253,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-reader}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
       AUDIT_LOG_DIR: /audit-logs
+      CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR: /audit-logs/creative-workshop/paper-translation
     ports:
       - "${LUMEN_LOCAL_BIND_HOST:-127.0.0.1}:${API_HOST_PORT:-13000}:13000"
     volumes:
@@ -286,7 +287,7 @@ services:
     <<: *json-logging
 
   lumen_api_migrations:
-    image: ${BACKEND_IMAGE:-crpi-wh1i56a4x558rrhm.cn-hangzhou.personal.cr.aliyuncs.com/changqinga/knowledge-retrieval:v1.2}
+    image: ${BACKEND_IMAGE:-lumen-backend:paper-translation}
     container_name: lumen_api_migrations
     env_file:
       - ../backend/.env

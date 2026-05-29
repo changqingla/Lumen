@@ -14,6 +14,7 @@ interface ChatModelSelectorProps {
   disabled?: boolean;
   requireVision?: boolean;
   defaultModelName?: string;
+  placement?: 'top' | 'bottom';
 }
 
 export default function ChatModelSelector({
@@ -23,13 +24,15 @@ export default function ChatModelSelector({
   disabled = false,
   requireVision = false,
   defaultModelName,
+  placement = 'top',
 }: ChatModelSelectorProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [panelStyle, setPanelStyle] = useState<{
     left: number;
-    bottom: number;
+    top?: number;
+    bottom?: number;
     width: number;
     maxHeight: number;
   } | null>(null);
@@ -89,6 +92,27 @@ export default function ChatModelSelector({
         Math.max(horizontalPadding, rect.left),
         viewportWidth - panelWidth - horizontalPadding,
       );
+      if (placement === 'bottom') {
+        const availableBelow = viewportHeight - rect.bottom - horizontalPadding;
+        if (availableBelow >= 160) {
+          setPanelStyle({
+            left,
+            top: rect.bottom + gap,
+            width: panelWidth,
+            maxHeight: Math.min(280, availableBelow),
+          });
+          return;
+        }
+        const availableAbove = Math.min(280, Math.max(160, rect.top - horizontalPadding));
+        setPanelStyle({
+          left,
+          bottom: viewportHeight - rect.top + gap,
+          width: panelWidth,
+          maxHeight: availableAbove,
+        });
+        return;
+      }
+
       const availableAbove = Math.min(280, Math.max(160, rect.top - horizontalPadding));
       setPanelStyle({
         left,
@@ -105,7 +129,7 @@ export default function ChatModelSelector({
       window.removeEventListener('resize', updatePanelPosition);
       window.removeEventListener('scroll', updatePanelPosition, true);
     };
-  }, [isOpen]);
+  }, [isOpen, placement]);
 
   const getModelLabel = (item?: ChatModelOption) => {
     const displayName = item?.display_name?.trim();
@@ -153,7 +177,8 @@ export default function ChatModelSelector({
             panelStyle
               ? {
                 left: `${panelStyle.left}px`,
-                bottom: `${panelStyle.bottom}px`,
+                top: panelStyle.top !== undefined ? `${panelStyle.top}px` : undefined,
+                bottom: panelStyle.bottom !== undefined ? `${panelStyle.bottom}px` : undefined,
                 width: `${panelStyle.width}px`,
                 maxHeight: `${panelStyle.maxHeight}px`,
               }

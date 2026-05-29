@@ -1,20 +1,20 @@
-# generate_fishbone_diagram — 鱼骨图
+# generate_fishbone_diagram - Fishbone Diagram
 
-## 功能概述
-用于根因分析，将中心问题放在主干，左右分支展示不同类别的原因及其细化节点，常见于质量管理、流程优化。
+## Overview
+Used for root-cause analysis. The central problem is placed on the spine, and branches on both sides show categories of causes and detailed subcauses. Common in quality management and process optimization.
 
-## 输入字段
-### 必填
-- `data`: object，必填，至少提供根节点 `name`，可通过 `children`（array<object>）递归拓展，最大建议 3 层。
+## Input Fields
+### Required
+- `data`: object. Required. Must provide at least the root node `name`; expand recursively with `children` (array<object>). Maximum recommended depth is 3.
 
-### 可选
-- `style.texture`: string，默认 `default`，可选 `default`/`rough` 以切换线条风格。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
+### Optional
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
 
-## 使用建议
-主干节点描述问题陈述；一级分支命名原因类别（人、机、料、法等）；叶子节点写具体现象，保持短语式表达。
+## Usage Tips
+Use the spine node for the problem statement. Use first-level branches for cause categories, such as people, machines, materials, and methods. Use leaf nodes for specific observations and keep them as short phrases.
 
-## 返回结果
-- 返回鱼骨图 URL，并在 `_meta.spec` 中保存树形结构，便于后续增删节点。
+## Return Value
+- Returns a fishbone diagram URL and saves the tree structure in `_meta.spec` for later node edits.

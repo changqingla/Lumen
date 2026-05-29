@@ -7,7 +7,7 @@ compatibility: Requires Python 3 and network access to hfw-api.hifly.cc
 
 # Avatar Video Generation Skill
 
-This skill allows you to generate videos using Flyworks (a.k.a HiFly 飞影数字人) Digital Humans. Available features:
+This skill allows you to generate videos using Flyworks (a.k.a HiFly Digital Humans). Available features:
 1.  **Public Avatar Video**: Create video from text or audio using pre-made highly realistic avatars.
 2.  **Talking Photo**: Create a "talking photo" video from a single image and text/audio.
 3.  **Voice Cloning**: Clone a voice from an audio sample to use in TTS.

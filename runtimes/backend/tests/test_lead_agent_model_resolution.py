@@ -228,6 +228,58 @@ def test_make_lead_agent_passes_explicit_reasoning_effort(monkeypatch):
     assert captured["reasoning_effort"] == "low"
 
 
+def test_make_lead_agent_can_disable_model_streaming(monkeypatch):
+    app_config = _make_app_config([_make_model("safe-model", supports_thinking=False)])
+
+    import src.tools as tools_module
+
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(tools_module, "get_available_tools", lambda **kwargs: [])
+    monkeypatch.setattr(
+        lead_agent_module,
+        "_build_middlewares",
+        lambda config, model_name, supports_vision=False, agent_name=None: [],
+    )
+    monkeypatch.setattr(
+        lead_agent_module,
+        "resolve_chat_model_spec",
+        lambda model_name, dynamic_model_token=None, thread_id=None: ResolvedChatModelSpec(
+            name=model_name,
+            display_name=model_name,
+            description=None,
+            use="langchain_openai:ChatOpenAI",
+            config={"model": model_name},
+            supports_vision=False,
+            supports_thinking=False,
+            supports_reasoning_effort=False,
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_create_chat_model_from_spec(spec, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(lead_agent_module, "create_chat_model_from_spec", _fake_create_chat_model_from_spec)
+    monkeypatch.setattr(lead_agent_module, "create_agent", lambda **kwargs: kwargs)
+
+    config = {
+        "configurable": {
+            "model_name": "safe-model",
+            "thinking_enabled": False,
+            "disable_model_streaming": True,
+            "is_plan_mode": False,
+            "subagent_enabled": False,
+        }
+    }
+
+    lead_agent_module.make_lead_agent(config)
+
+    assert captured["disable_streaming"] is True
+    assert config["metadata"]["disable_model_streaming"] is True
+
+
 def test_build_middlewares_uses_resolved_model_name_for_vision(monkeypatch):
     app_config = _make_app_config(
         [

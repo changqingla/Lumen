@@ -1,20 +1,20 @@
-# generate_path_map — 路径地图（中国）
+# generate_path_map - Route Map (China)
 
-## 功能概述
-基于高德地图展示中国境内的路线或行程，按顺序连接一系列 POI，适用于物流路线、旅游规划、配送轨迹等。
+## Overview
+Displays routes or trips within China using Amap, connecting a sequence of POIs in order. Suitable for logistics routes, travel planning, and delivery tracks.
 
-## 输入字段
-### 必填
-- `title`: string，必填且≤16 字，描述路线主题。
-- `data`: array<object>，至少 1 个路线对象。
-- `data[].data`: string[]，必填，包含该路线上按顺序排列的中国境内 POI 名称。
+## Input Fields
+### Required
+- `title`: string. Required and no more than 16 characters. Describes the route topic.
+- `data`: array<object>. At least 1 route object.
+- `data[].data`: string[]. Required. Contains POI names within China arranged in route order.
 
-### 可选
-- `width`: number，默认 `1600`。
-- `height`: number，默认 `1000`。
+### Optional
+- `width`: number, default `1600`.
+- `height`: number, default `1000`.
 
-## 使用建议
-POI 名称必须具体且位于中国（如“西安市钟楼”“杭州西湖苏堤春晓”）；若需多条线路，可在 `data` 中添加多段对象。
+## Usage Tips
+POI names must be specific and located in China, such as `Xi'an Bell Tower` or `Su Causeway at West Lake, Hangzhou`. For multiple routes, add multiple route objects to `data`.
 
-## 返回结果
-- 返回路径地图 URL，并在 `_meta.spec` 中保留标题与 POI 列表；若配置 `SERVICE_ID`，还会记录到“我的地图”。
+## Return Value
+- Returns a route map URL and keeps the title and POI list in `_meta.spec`. If `SERVICE_ID` is configured, the result is also recorded in the map app.

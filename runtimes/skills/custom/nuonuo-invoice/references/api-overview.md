@@ -85,7 +85,7 @@ Example response:
 ```json
 {
   "code": "E0000",
-  "describe": "开票提交成功",
+  "describe": "Invoice submission succeeded",
   "result": {
     "invoiceSerialNum": "20160108165823395151"
   }

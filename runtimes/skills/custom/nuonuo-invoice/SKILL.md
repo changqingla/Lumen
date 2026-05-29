@@ -3,7 +3,7 @@ name: nuonuo-invoice
 description: |
   Integrate Nuonuo/JSS invoice APIs for issuing invoices, querying invoice status,
   and re-delivering invoices.
-  Use when: (1) User asks to build or maintain 诺诺/诺税通/JSS 发票接口,
+  Use when: (1) User asks to build or maintain Nuonuo / Nuoshuitong / JSS invoice APIs,
   (2) Implementing direct invoice issuance via nuonuo.OpeMplatform.requestBillingNew,
   (3) Implementing legacy scan-to-invoice via nuonuo.ElectronInvoice.saveScanTemp,
   (4) Querying invoice results, invoice lists, or re-delivery flows.
@@ -17,8 +17,8 @@ Build or maintain Nuonuo invoice integrations using the public JSS API documenta
 
 ## Choose The Right Route First
 
-Default to the **诺税通 SaaS** route unless the user explicitly says they are using
-极速开票 / 扫码开票 / 老诺诺发票流程.
+Default to the **Nuoshuitong SaaS** route unless the user explicitly says they are using
+the fast invoicing, scan-to-invoice, or legacy Nuonuo invoice flow.
 
 ### Preferred route: direct invoice issuance
 
@@ -73,7 +73,7 @@ Decide between:
 - **SaaS direct issuance**: `100607`
 - **Legacy scan flow**: `100489`
 
-If the user only says "开发票", assume `100607`.
+If the user only says "issue an invoice", assume `100607`.
 
 ### Step 2: Reuse any existing Nuonuo client
 
@@ -169,4 +169,3 @@ Load them from environment variables, secret stores, or an existing config syste
 - you need the minimal fields for `100607`
 - you need the legacy flow for `100489`
 - you need query or re-delivery endpoints
-

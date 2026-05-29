@@ -1,79 +1,79 @@
 ---
 name: doc-comparison
-description: 对多篇文档进行高质量结构化对比分析。用户要求“对比/比较/异同分析/横向评估”多篇文档或论文时使用；优先使用 KB 直读工具，不依赖 reader_kb 本地副本路径。
+description: Perform high-quality structured comparative analysis across multiple documents. Use when the user asks to compare, contrast, analyze similarities and differences, or horizontally evaluate multiple documents or papers. Prefer direct KB reading tools and do not depend on local reader_kb copy paths.
 ---
 
 # Multi-Document Comparison Skill
 
-## 执行规则
+## Execution Rules
 
-1. 优先使用当前运行时里已启用的 KB 直读工具先确认文档范围；若本轮可用工具中存在 `kb_list_docs`、`kb_read_doc`、`kb_read_doc_lines`、`kb_search_doc`，优先使用它们。
-2. 统一对比维度后再阅读，避免边读边改口径。
-3. 文档数量 >= 3 且本轮可用 `task` 工具时，可委派子代理并行读取，每个子代理负责 1-2 篇。
-4. 若 `task` 不可用或文档数量 < 3，则主 Agent 直接读取。
-5. 输出必须给出证据映射，禁止无依据结论。
+1. Prefer direct KB reading tools enabled in the current runtime to confirm the document scope first. If `kb_list_docs`, `kb_read_doc`, `kb_read_doc_lines`, or `kb_search_doc` are available in this turn, use them first.
+2. Define a unified set of comparison dimensions before reading, so the criteria do not shift mid-analysis.
+3. If there are 3 or more documents and the `task` tool is available in this turn, delegate parallel reading to subagents, with each subagent responsible for 1-2 documents.
+4. If `task` is unavailable or there are fewer than 3 documents, the main agent should read directly.
+5. The output must include evidence mapping. Do not make unsupported conclusions.
 
-## 子代理委派要求（文档数量 >= 3 且 `task` 可用）
+## Subagent Delegation Requirements (3+ Documents and `task` Available)
 
-调用 `task` 时：
-- `subagent_type` 使用 `general-purpose`
-- 在 `prompt` 中明确限定只做文档阅读与证据抽取，不负责最终成稿和文件发布
+When calling `task`:
+- Use `general-purpose` as `subagent_type`.
+- In the `prompt`, clearly restrict the subagent to document reading and evidence extraction only. The subagent must not draft the final report or publish files.
 
-对子代理的 `prompt` 至少要求提取：
-- 研究目标/问题定义
-- 方法与技术路线
-- 数据来源与实验设置
-- 关键结果与指标
-- 局限性与适用边界
-- 可引用的证据句（带文档名称与定位信息；若只有文档 ID 可得，可先记录 ID，最终成稿时再统一替换为文档名称）
+Each subagent `prompt` should require extraction of at least:
+- Research goals / problem definition
+- Methods and technical route
+- Data sources and experimental setup
+- Key results and metrics
+- Limitations and applicability boundaries
+- Quotable evidence sentences with document names and location information. If only document IDs are available, record the IDs first and replace them with document names in the final draft.
 
-若 KB 直读工具可用，优先要求子代理仅使用：
+If direct KB reading tools are available, preferably require subagents to use only:
 - `kb_list_docs`
 - `kb_read_doc`
 - `kb_read_doc_lines`
 - `kb_search_doc`
 
-不要在子代理中调用 `present_files`；最终文件发布由主 Agent 统一完成。
+Do not call `present_files` from subagents. Final file publishing is handled only by the main agent.
 
-## 对比维度基线
+## Baseline Comparison Dimensions
 
-建议至少覆盖以下维度（可按文档类型或者用户需求进行扩展和调整）：
-- 问题定义
-- 方法范式
-- 数据与样本
-- 指标与评估方式
-- 关键结论
-- 创新点
-- 局限性
-- 适用场景
+Cover at least the following dimensions when applicable. Expand or adjust them based on document type and user needs:
+- Problem definition
+- Method paradigm
+- Data and samples
+- Metrics and evaluation approach
+- Key conclusions
+- Novel contributions
+- Limitations
+- Applicable scenarios
 
-## 输出结构（必须完整）
+## Output Structure (Required)
 
 ```markdown
-# {对比报告标题}
+# {Comparison Report Title}
 
-## 一句话结论（3-5 条）
-## 对比矩阵（表格）
-## 共识点
-## 关键差异与冲突证据
-## 各方案优劣与适用条件
-## 选型建议（按场景给建议）
-## 证据来源清单
+## One-Sentence Conclusions (3-5 Items)
+## Comparison Matrix (Table)
+## Consensus Points
+## Key Differences and Conflicting Evidence
+## Strengths, Weaknesses, and Applicability Conditions
+## Selection Recommendations by Scenario
+## Evidence Source List
 ```
 
-## 质量门槛
+## Quality Bar
 
-1. 对比矩阵必须覆盖 >= 6 个维度。
-2. 每条关键结论必须绑定来源文档；跨文档结论优先使用 >= 2 个来源支撑。
-3. 必须明确“冲突结论”及其可能原因（数据差异、指标口径差异、实验条件差异）。
-4. 不得输出“逐篇摘要拼接版对比”。
-5. 若信息不足，先说明缺口再给暂定判断，不得臆测补全。
-6. 输出的最终报告中不要使用文档id，如果需要应该使用文档名称。
+1. The comparison matrix must cover at least 6 dimensions.
+2. Every key conclusion must be tied to source documents. Cross-document conclusions should preferably be supported by at least 2 sources.
+3. Explicitly identify conflicting conclusions and possible causes, such as data differences, metric-definition differences, or experimental-condition differences.
+4. Do not produce a comparison that is merely a stitched sequence of per-document summaries.
+5. If information is insufficient, state the gap first and then provide a tentative judgment. Do not invent missing information.
+6. Do not use document IDs in the final report. Use document names instead when references are needed.
 
-## 最终交付要求
+## Final Delivery Requirements
 
-1. 将最终结果整理为完整的 Markdown 文档；草稿可先写到 `/mnt/user-data/workspace`，最终交付文件必须写到 `/mnt/user-data/outputs`，例如 `/mnt/user-data/outputs/文档对比报告-{主题}.md`。
-2. 使用 `write_file` 写入最终 Markdown 文件。
-3. 文件生成后必须调用 `present_files` 发布，例如传入最终 Markdown 文件路径；不要只调用 `write_file` 后就结束。
-4. 如需自检，可使用 `read_file` 或 `ls` 检查文件内容与输出目录。
-5. 最终答复必须包含已交付文件的信息，明确告诉用户 Markdown 文件已可下载，不能只说“已经生成”或只粘贴正文。
+1. Organize the final result as a complete Markdown document. Drafts may be written under `/mnt/user-data/workspace`, but the final deliverable must be written under `/mnt/user-data/outputs`, for example `/mnt/user-data/outputs/document-comparison-report-{topic}.md`.
+2. Use `write_file` to write the final Markdown file.
+3. After generating the file, call `present_files` to publish it, passing the final Markdown file path. Do not stop after only calling `write_file`.
+4. If self-checking is needed, use `read_file` or `ls` to inspect the file content and output directory.
+5. The final response must include delivery information for the generated file and clearly tell the user that the Markdown file is available for download. Do not only say that it has been generated, and do not only paste the body text.

@@ -1,79 +1,79 @@
 ---
 name: literature-review
-description: 基于多篇文献生成高质量文献综述（survey/related work），输出研究脉络、方法比较、争议与研究空白。用户要求“写文献综述/related work/survey/综述报告”时使用；优先使用 KB 直读工具，不依赖 reader_kb 本地副本路径。
+description: Generate a high-quality literature review, survey, or related-work report from multiple papers. The output should cover research trajectories, method comparisons, controversies, and research gaps. Use when the user asks for a literature review, related work, survey, or review report. Prefer direct KB reading tools and do not depend on local reader_kb copy paths.
 ---
 
 # Literature Review Skill
 
-## 执行规则
+## Execution Rules
 
-1. 明确综述主题、时间范围、研究对象与输出语言。
-2. 文档数量 >= 2 且本轮可用 `task` 工具时，可委派子代理并行阅读提取结构化证据。
-3. 若 `task` 不可用或文档数量 < 2，则主 Agent 直接阅读。
-4. 必须按主题或方法线索组织综述，禁止按文档顺序堆砌。
+1. Clarify the review topic, time range, research object, and output language.
+2. If there are 2 or more documents and the `task` tool is available in this turn, delegate parallel reading and structured evidence extraction to subagents.
+3. If `task` is unavailable or there are fewer than 2 documents, the main agent should read directly.
+4. Organize the review by themes or methodological threads. Do not pile up summaries in document order.
 
-## 子代理抽取要求（文档数量 >= 2 且 `task` 可用）
+## Subagent Extraction Requirements (2+ Documents and `task` Available)
 
-调用 `task` 时：
-- `subagent_type` 使用 `general-purpose`
-- 在 `prompt` 中明确限定只做证据抽取，不负责最终综述写作和文件发布
+When calling `task`:
+- Use `general-purpose` as `subagent_type`.
+- In the `prompt`, clearly restrict the subagent to evidence extraction only. The subagent must not write the final review or publish files.
 
-每个子代理的 `prompt` 至少要求提取：
-- 文档基础信息（标题、作者、年份、来源；缺失时至少保留文档名称）
-- 研究问题与研究目标
-- 理论框架/方法范式
-- 数据与实验设计
-- 关键发现与证据强度（尽量保留可量化结果、关键数字、核心对比结论）
-- 局限性与适用边界
-- 与当前综述主题的关系（属于哪个主题分支、支持/反驳了什么观点）
-- 可直接复用的引用信息（作者-年份、文档名称、关键证据句）
+Each subagent `prompt` should require extraction of at least:
+- Basic document information, including title, authors, year, and source. If metadata is missing, preserve at least the document name.
+- Research questions and goals
+- Theoretical framework / method paradigm
+- Data and experimental design
+- Key findings and evidence strength, preserving quantitative results, key numbers, and core comparative conclusions whenever possible
+- Limitations and applicability boundaries
+- Relationship to the current review topic, including which thematic branch it belongs to and what claims it supports or challenges
+- Reusable citation information, such as author-year, document name, and key evidence sentences
 
-若 KB 直读工具可用，优先要求子代理仅使用：
+If direct KB reading tools are available, preferably require subagents to use only:
 - `kb_list_docs`
 - `kb_read_doc`
 - `kb_read_doc_lines`
 - `kb_search_doc`
 
-若需要临时整理抽取结果，由主 Agent 在自己的推理中汇总，或写入 `/mnt/user-data/workspace` 中的临时文件。
+If temporary organization of extraction results is needed, the main agent should summarize them in its own reasoning or write a temporary file under `/mnt/user-data/workspace`.
 
-## 输出结构（必须完整，以下结构只是建议，具体结构取决于参考文档类型）
+## Output Structure (Required; Adapt to Source Document Type)
 
 ```markdown
-# {综述标题}
+# {Review Title}
 
-## 摘要
-## 1. 研究范围与纳入标准
-## 2. 研究脉络与主题化综合
-## 3. 方法学比较与证据评估
-## 4. 关键争议与不一致结论
-## 5. 研究空白与未来议程
-## 参考文献与证据来源
+## Abstract
+## 1. Research Scope and Inclusion Criteria
+## 2. Research Trajectory and Thematic Synthesis
+## 3. Methodological Comparison and Evidence Assessment
+## 4. Key Controversies and Inconsistent Conclusions
+## 5. Research Gaps and Future Agenda
+## References and Evidence Sources
 ```
 
-## 质量门槛
+## Quality Bar
 
-1. 至少给出 3 个主题化综合小节。
-2. 每个核心结论必须绑定来源证据；单一来源需明确标注。
-3. 必须包含“争议/分歧”与“研究空白”，不能只给正向总结。
-4. 用术语和证据说话，避免空泛表述。
-5. 信息不足时先披露缺口，再给保守结论。
-6. 输出的最终报告中不要使用文档id，如果需要应该使用文档名称。
+1. Provide at least 3 thematic synthesis sections.
+2. Every core conclusion must be tied to source evidence. Single-source claims must be clearly labeled.
+3. Include controversies / disagreements and research gaps. Do not only provide positive summaries.
+4. Use terms and evidence rather than vague phrasing.
+5. If information is insufficient, disclose the gap first and then provide a conservative conclusion.
+6. Do not use document IDs in the final report. Use document names instead when references are needed.
 
-## 引用规范
+## Citation Rules
 
-1. 正文统一采用**顺序编码制**行内引用，格式为 `【1】`、`【2】`、`【3】`；不要使用 `（文档名-作者-年份）` 作为正文主引用格式。
-2. 编号按“首次出现顺序”分配并全篇复用：同一来源始终使用同一编号，禁止在后文重新编号。
-3. 多来源共同支撑同一结论时，使用并列编号，如 `【1】【2】【3】`；连续编号可简写为 `【1-3】`。
-4. 关键判断、数据、方法归纳、争议结论与研究空白，必须在对应句子或段落内给出行内引用，不能只在文末统一列来源。
-5. 直接转述单篇文献的独特观点、实验结果或数值时，必须给出该文献的唯一对应编号，避免把单篇结论写成领域共识。
-6. 文末“参考文献与证据来源”必须与正文编号一一对应，按 `【1】…`、`【2】…` 列出；至少包含作者、年份、标题、来源。若元数据不足，也需保留文档名称与可识别来源。
-7. 若使用联网搜索补充证据，需单独标注为“网络补充来源”，并与学术文献编号体系区分，避免把网页内容误写成论文结论。
-8. 严禁虚构引用：正文每个编号都必须能在已读取文档或已检索来源中定位到对应证据。
+1. Use sequential numeric inline citations throughout the body, formatted as `[1]`, `[2]`, `[3]`. Do not use document-name-author-year strings as the main inline citation format.
+2. Assign numbers by first appearance and reuse them throughout the entire document. The same source must always use the same number and must not be renumbered later.
+3. When multiple sources support one conclusion, use parallel numbers such as `[1][2][3]`; consecutive numbers may be shortened as `[1-3]`.
+4. Key judgments, data, method syntheses, controversial conclusions, and research gaps must include inline citations in the relevant sentence or paragraph. Do not list sources only at the end.
+5. When paraphrasing a unique view, experimental result, or numerical finding from a single paper, provide that paper's unique corresponding number so a single-paper conclusion is not presented as field consensus.
+6. The final "References and Evidence Sources" section must correspond one-to-one with body citation numbers, listed as `[1] ...`, `[2] ...`. Include at least authors, year, title, and source. If metadata is insufficient, preserve the document name and identifiable source.
+7. If web search is used to supplement evidence, mark it separately as web supplementary sources and keep it distinct from the academic literature numbering system to avoid treating web content as paper evidence.
+8. Never fabricate citations. Every body citation number must be traceable to evidence in read documents or retrieved sources.
 
-## 最终交付要求
+## Final Delivery Requirements
 
-1. 将最终结果整理为完整的 Markdown 文档；草稿可先写到 `/mnt/user-data/workspace`，最终交付文件必须写到 `/mnt/user-data/outputs`，例如 `/mnt/user-data/outputs/文献综述-{主题}.md`。
-2. 使用 `write_file` 写入最终 Markdown 文件。
-3. 文件生成后必须调用 `present_files` 发布，例如传入最终 Markdown 文件路径；不要只调用 `write_file` 后就结束。
-4. 如需自检，可使用 `read_file` 或 `ls` 检查文件内容与输出目录。
-5. 最终答复必须包含已交付文件的信息，明确告诉用户 Markdown 文件已可下载，不能只说“已经生成”或只粘贴正文。
+1. Organize the final result as a complete Markdown document. Drafts may be written under `/mnt/user-data/workspace`, but the final deliverable must be written under `/mnt/user-data/outputs`, for example `/mnt/user-data/outputs/literature-review-{topic}.md`.
+2. Use `write_file` to write the final Markdown file.
+3. After generating the file, call `present_files` to publish it, passing the final Markdown file path. Do not stop after only calling `write_file`.
+4. If self-checking is needed, use `read_file` or `ls` to inspect the file content and output directory.
+5. The final response must include delivery information for the generated file and clearly tell the user that the Markdown file is available for download. Do not only say that it has been generated, and do not only paste the body text.

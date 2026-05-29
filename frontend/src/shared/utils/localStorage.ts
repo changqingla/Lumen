@@ -15,3 +15,28 @@ export const safeLocalStorageRemove = (key: string): boolean => {
     return false;
   }
 };
+
+/**
+ * 安全地读取 localStorage 项
+ */
+export const safeLocalStorageGet = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch (error) {
+    console.error(`Failed to read localStorage item "${key}":`, error);
+    return null;
+  }
+};
+
+/**
+ * 安全地写入 localStorage 项
+ */
+export const safeLocalStorageSet = (key: string, value: string): boolean => {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    console.error(`Failed to write localStorage item "${key}":`, error);
+    return false;
+  }
+};

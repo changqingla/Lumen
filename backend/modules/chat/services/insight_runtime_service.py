@@ -88,6 +88,7 @@ class InsightRuntimeService:
         thinking_enabled: bool,
         is_plan_mode: bool,
         subagent_enabled: bool = False,
+        disable_model_streaming: bool = False,
     ) -> dict[str, Any]:
         normalized_thread_id = self.build_thread_id(thread_id)
         return {
@@ -103,6 +104,7 @@ class InsightRuntimeService:
                 "thinking_enabled": thinking_enabled,
                 "is_plan_mode": is_plan_mode,
                 "subagent_enabled": subagent_enabled,
+                "disable_model_streaming": bool(disable_model_streaming),
             },
             "config": {
                 "recursion_limit": self.recursion_limit,
@@ -222,6 +224,25 @@ class InsightRuntimeService:
             if not isinstance(files, list):
                 return []
             return [item for item in files if isinstance(item, dict)]
+
+    async def download_thread_artifact_bytes(self, thread_id: str, virtual_path: str) -> bytes:
+        normalized_thread_id = self.build_thread_id(thread_id)
+        normalized_path = str(virtual_path or "").strip().lstrip("/")
+        if not normalized_path:
+            raise ValueError("artifact path 不能为空")
+        if "\\" in normalized_path or ".." in normalized_path.split("/"):
+            raise ValueError("artifact path 非法")
+
+        encoded_path = quote(normalized_path, safe="/")
+        url = f"{self.gateway_url}{self.build_thread_artifacts_base_path(normalized_thread_id)}/{encoded_path}?download=true"
+        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.content
+
+    async def download_thread_artifact_text(self, thread_id: str, virtual_path: str) -> str:
+        content = await self.download_thread_artifact_bytes(thread_id, virtual_path)
+        return content.decode("utf-8")
 
     async def upload_bytes(
         self,

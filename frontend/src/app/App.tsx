@@ -32,7 +32,7 @@ export default function App() {
             <Route path="/knowledge/:kbId" element={<ProtectedRoute><KnowledgeDetail /></ProtectedRoute>} />
             <Route path="/favorites" element={<ProtectedRoute><Favorites /></ProtectedRoute>} />
             <Route path="/notes" element={<ProtectedRoute><Notes /></ProtectedRoute>} />
-            <Route path="/creative-workshop" element={<ProtectedRoute><CreativeWorkshop /></ProtectedRoute>} />
+            <Route path="/creative-workshop/*" element={<ProtectedRoute><CreativeWorkshop /></ProtectedRoute>} />
 
             {/* 管理员路由 - 需要管理员权限 */}
             <Route path="/admin" element={<ProtectedRoute><AdminRoute><AdminPanel /></AdminRoute></ProtectedRoute>} />

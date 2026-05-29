@@ -18,7 +18,7 @@ python scripts/hifly_client.py list_public_avatars
 Returns avatar IDs and names. Example output:
 ```
 ID: TnaRN9Z3CLxpLVuDXvVlmA | Name: single_right
-ID: l_aDkE8HtOl5poFGpBha1w | Name: 徐皓然
+ID: l_aDkE8HtOl5poFGpBha1w | Name: Example Avatar
 ```
 
 ### Using an Avatar

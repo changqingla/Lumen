@@ -18,6 +18,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 from config.database import engine, AsyncSessionLocal
 from config.redis import get_redis_client, close_redis
+from modules.creative_workshop.paper_translation_service import (
+    init_paper_translation_queue,
+    shutdown_paper_translation_queue,
+)
 from utils.token_usage_queue import init_token_usage_queue, shutdown_token_usage_queue
 
 # Import routers through domain module entrypoints where available.
@@ -46,6 +50,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize token usage queue (async background worker)
     await init_token_usage_queue(redis_client, AsyncSessionLocal)
+    await init_paper_translation_queue(
+        redis_client,
+        concurrency=settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_WORKER_CONCURRENCY,
+    )
     
     logger.info("Application started successfully")
     
@@ -55,6 +63,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     from utils.http_client import close_http_client
 
+    await shutdown_paper_translation_queue()
     await shutdown_token_usage_queue()
     await close_http_client()
     await close_redis()

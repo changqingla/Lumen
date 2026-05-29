@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
+from config.redis import get_redis_client
 from config.settings import settings
 from middlewares.auth import get_current_user
 from models.user import User
 from utils.audit_logger import record_user_prompt_event
+from .paper_translation_service import PaperTranslationQueueItem, PaperTranslationStatus, paper_translation_service
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +65,23 @@ class ImageGenerationResponse(BaseModel):
     size: str
     quality: str
     output_format: str
+
+
+class PaperTranslationTaskResponse(BaseModel):
+    """Paper translation task state returned to the web app."""
+
+    task_id: str
+    status: PaperTranslationStatus
+    filename: str
+    thread_id: str
+    model_name: str | None = None
+    created_at: str
+    updated_at: str
+    error: str | None = None
+
+
+def _get_paper_translation_service():
+    return paper_translation_service
 
 
 def _image_api_url(path: str) -> str:
@@ -204,3 +228,306 @@ async def generate_image(
         user_id=current_user.id,
     )
     return _extract_image_response(data, request)
+
+
+async def _save_pdf_upload(file: UploadFile, destination: Path) -> int:
+    filename = str(file.filename or "").strip()
+    content_type = str(file.content_type or "").lower()
+    is_pdf = filename.lower().endswith(".pdf") or content_type == "application/pdf"
+    if not is_pdf:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"code": "UNSUPPORTED_FORMAT", "message": "仅支持上传 PDF 文件"}},
+        )
+
+    total_size = 0
+    header = b""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as target:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total_size += len(chunk)
+            if total_size > settings.MAX_UPLOAD_SIZE:
+                target.close()
+                destination.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": {
+                            "code": "FILE_TOO_LARGE",
+                            "message": f"文件过大，最大支持 {settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB",
+                        }
+                    },
+                )
+            if len(header) < 1024:
+                header += chunk[: 1024 - len(header)]
+            target.write(chunk)
+
+    if total_size == 0:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"code": "EMPTY_FILE", "message": "PDF 文件为空"}},
+        )
+    if not header.lstrip().startswith(b"%PDF"):
+        destination.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": {"code": "INVALID_PDF", "message": "无法识别 PDF 文件"}},
+        )
+    return total_size
+
+
+def _download_headers(filename: str) -> dict[str, str]:
+    return {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "Cache-Control": "no-store",
+    }
+
+
+def _paper_translation_temp_pdf_path(service: object) -> Path:
+    storage_root = Path(getattr(service, "storage_root", settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR))
+    temp_dir = storage_root / "_incoming"
+    try:
+        temp_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.exception("Paper translation storage is not writable: %s", temp_dir)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": {"code": "STORAGE_UNAVAILABLE", "message": "论文翻译存储目录不可写，请检查服务配置"}},
+        ) from exc
+    return temp_dir / f"{uuid4().hex}.pdf"
+
+
+@router.post("/paper-translation/tasks", response_model=PaperTranslationTaskResponse)
+async def create_paper_translation_task(
+    file: UploadFile = File(...),
+    model_name: str | None = Form(default=None, max_length=255),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a paper translation task and run it in the background."""
+    service = _get_paper_translation_service()
+    owner_id = str(current_user.id)
+    filename = file.filename or "paper.pdf"
+    normalized_model_name = model_name.strip() if isinstance(model_name, str) else ""
+    normalized_model_name = normalized_model_name or None
+    temp_pdf_path = _paper_translation_temp_pdf_path(service)
+    task = None
+
+    try:
+        size_bytes = await _save_pdf_upload(file, temp_pdf_path)
+        task = await service.create_task(
+            owner_id=owner_id,
+            filename=filename,
+            model_name=normalized_model_name,
+        )
+        source_pdf_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
+        source_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_pdf_path.replace(source_pdf_path)
+        await service.attach_source_pdf(owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path)
+    except HTTPException:
+        temp_pdf_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        temp_pdf_path.unlink(missing_ok=True)
+        if task is not None:
+            with contextlib.suppress(Exception):
+                await service.mark_task_failed(owner_id=owner_id, task_id=task.task_id, error="上传文件保存失败，请重新上传")
+        logger.exception("Failed to create paper translation task for user=%s", owner_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": {"code": "UPLOAD_SAVE_FAILED", "message": "上传文件保存失败，请重新上传"}},
+        ) from exc
+
+    await record_user_prompt_event(
+        event_type="paper_translation_upload",
+        user=current_user,
+        prompt=filename,
+        metadata={
+            "task_id": task.task_id,
+            "filename": filename,
+            "size_bytes": size_bytes,
+            "model_name": normalized_model_name,
+        },
+    )
+
+    try:
+        redis_client = await get_redis_client()
+        await service.enqueue_translation_task(
+            redis_client,
+            PaperTranslationQueueItem(
+                owner_id=owner_id,
+                task_id=task.task_id,
+                filename=filename,
+                source_pdf_path=str(source_pdf_path),
+                model_name=normalized_model_name,
+            ),
+        )
+    except Exception as exc:
+        logger.exception("Failed to enqueue paper translation task: task_id=%s owner=%s", task.task_id, owner_id)
+        await service.mark_task_failed(owner_id=owner_id, task_id=task.task_id, error="翻译任务入队失败，请稍后重试")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": {"code": "QUEUE_UNAVAILABLE", "message": "翻译任务暂时无法启动，请稍后重试"}},
+        ) from exc
+
+    task = await service.get_task(owner_id=owner_id, task_id=task.task_id) or task
+    return PaperTranslationTaskResponse(**service.build_response_payload(task))
+
+
+@router.get("/paper-translation/tasks/active/latest", response_model=PaperTranslationTaskResponse)
+async def get_latest_active_paper_translation_task(
+    current_user: User = Depends(get_current_user),
+):
+    """Get the latest unfinished paper translation task for the current user."""
+    service = _get_paper_translation_service()
+    task = await service.get_latest_active_task(owner_id=str(current_user.id))
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "没有进行中的翻译任务"}},
+        )
+    return PaperTranslationTaskResponse(**service.build_response_payload(task))
+
+
+@router.get("/paper-translation/tasks/{task_id}", response_model=PaperTranslationTaskResponse)
+async def get_paper_translation_task(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Get paper translation task status."""
+    service = _get_paper_translation_service()
+    task = await service.get_task(owner_id=str(current_user.id), task_id=task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "翻译任务不存在"}},
+        )
+    return PaperTranslationTaskResponse(**service.build_response_payload(task))
+
+
+@router.get("/paper-translation/tasks/{task_id}/result")
+async def get_paper_translation_result(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return translated Markdown text for rendering."""
+    service = _get_paper_translation_service()
+    try:
+        _, content = await service.get_translated_markdown(
+            owner_id=str(current_user.id),
+            task_id=task_id,
+            inline_assets=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "Markdown 译文尚不可用"}},
+        ) from exc
+
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/paper-translation/tasks/{task_id}/source")
+async def get_paper_translation_source_pdf(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Return the uploaded source PDF for preview restore."""
+    service = _get_paper_translation_service()
+    try:
+        filename, content = await service.get_source_pdf(owner_id=str(current_user.id), task_id=task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "PDF 原文尚不可用"}},
+        ) from exc
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/paper-translation/tasks/{task_id}/markdown")
+async def download_paper_translation_markdown(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Download translated Markdown."""
+    service = _get_paper_translation_service()
+    try:
+        filename, content = await service.get_translated_markdown(
+            owner_id=str(current_user.id),
+            task_id=task_id,
+            inline_assets=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "Markdown 译文尚不可用"}},
+        ) from exc
+
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers=_download_headers(filename),
+    )
+
+
+@router.get("/paper-translation/tasks/{task_id}/markdown/knowledge-base")
+async def download_paper_translation_markdown_for_knowledge_base(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Download translated Markdown optimized for knowledge base ingestion."""
+    service = _get_paper_translation_service()
+    try:
+        filename, content = await service.get_translated_markdown(
+            owner_id=str(current_user.id),
+            task_id=task_id,
+            inline_assets=False,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "Markdown 译文尚不可用"}},
+        ) from exc
+
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers=_download_headers(filename),
+    )
+
+
+@router.get("/paper-translation/tasks/{task_id}/pdf")
+async def download_paper_translation_pdf(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Export and download translated PDF."""
+    service = _get_paper_translation_service()
+    try:
+        filename, content = await service.get_translated_pdf(owner_id=str(current_user.id), task_id=task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "PDF 译文尚不可用"}},
+        ) from exc
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers=_download_headers(filename),
+    )

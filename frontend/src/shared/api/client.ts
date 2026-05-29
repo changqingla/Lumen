@@ -118,6 +118,38 @@ async function request<T>(
   return data as T;
 }
 
+async function requestText(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<string> {
+  const token = localStorage.getItem('auth_token');
+  const headers = new Headers(options.headers || undefined);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  attachGuestHeaders(headers, token);
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    let errorMessage = responseText || `请求失败 (${response.status})`;
+    try {
+      const parsed = JSON.parse(responseText);
+      const error = parsed?.detail?.error || parsed?.error || parsed;
+      errorMessage = error?.message || parsed?.detail || errorMessage;
+    } catch {
+      // Keep plain text error.
+    }
+    throw new Error(errorMessage);
+  }
+
+  return responseText;
+}
+
 async function requestBlob(
   endpoint: string,
   options: RequestInit = {}
@@ -148,7 +180,7 @@ async function requestBlob(
   }
 
   const contentDisposition = response.headers.get('content-disposition') || '';
-  const utf8Match = contentDisposition.match(/filename\\*=UTF-8''([^;]+)/i);
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
   const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
   const fileName = utf8Match?.[1]
     ? decodeURIComponent(utf8Match[1])
@@ -614,6 +646,7 @@ export type CreativeImageSize =
 
 export type CreativeImageQuality = 'low' | 'medium' | 'high' | 'auto';
 export type CreativeImageOutputFormat = 'png' | 'jpeg' | 'webp';
+export type PaperTranslationStatus = 'queued' | 'converting' | 'translating' | 'completed' | 'failed';
 
 interface CreativeImageGenerationRequest {
   prompt: string;
@@ -630,6 +663,17 @@ interface CreativeImageGenerationResponse {
   size: CreativeImageSize;
   quality: CreativeImageQuality;
   output_format: CreativeImageOutputFormat;
+}
+
+export interface PaperTranslationTaskResponse {
+  task_id: string;
+  status: PaperTranslationStatus;
+  filename: string;
+  thread_id: string;
+  model_name?: string | null;
+  created_at: string;
+  updated_at: string;
+  error?: string | null;
 }
 
 // 认证相关 API
@@ -2069,6 +2113,72 @@ const creativeWorkshopAPI = {
     return request<CreativeImageGenerationResponse>('/creative-workshop/images/generations', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * 创建论文翻译任务
+   */
+  async createPaperTranslationTask(file: File, options?: { signal?: AbortSignal; modelName?: string }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const modelName = options?.modelName?.trim();
+    if (modelName) {
+      formData.append('model_name', modelName);
+    }
+    return request<PaperTranslationTaskResponse>('/creative-workshop/paper-translation/tasks', {
+      method: 'POST',
+      body: formData,
+      signal: options?.signal,
+    });
+  },
+
+  /**
+   * 获取论文翻译任务状态
+   */
+  async getPaperTranslationTask(taskId: string, options?: { signal?: AbortSignal }) {
+    return request<PaperTranslationTaskResponse>(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async getLatestActivePaperTranslationTask(options?: { signal?: AbortSignal }) {
+    return request<PaperTranslationTaskResponse>('/creative-workshop/paper-translation/tasks/active/latest', {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async getPaperTranslationResult(taskId: string, options?: { signal?: AbortSignal }) {
+    return requestText(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/result`, {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async getPaperTranslationSourcePdf(taskId: string, options?: { signal?: AbortSignal }) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/source`, {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async downloadPaperTranslationMarkdown(taskId: string) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/markdown`, {
+      method: 'GET',
+    });
+  },
+
+  async downloadPaperTranslationMarkdownForKnowledgeBase(taskId: string) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/markdown/knowledge-base`, {
+      method: 'GET',
+    });
+  },
+
+  async downloadPaperTranslationPdf(taskId: string) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/pdf`, {
+      method: 'GET',
     });
   },
 };
