@@ -343,6 +343,11 @@
   background: #f8fbff;
 }
 
+.markdown-content .markdown-image-card-error {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
 .markdown-content .markdown-image-meta {
   min-width: 0;
   flex: 1;

@@ -845,7 +845,7 @@ def test_mineru_extracts_markdown_and_image_assets_from_zip():
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_inlines_assets_for_result_preview(tmp_path):
+async def test_paper_translation_rewrites_assets_to_urls_for_result_preview(tmp_path):
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
@@ -861,11 +861,12 @@ async def test_paper_translation_inlines_assets_for_result_preview(tmp_path):
     _, preview_markdown = await service.get_translated_markdown(
         owner_id=owner_id,
         task_id=task.task_id,
-        inline_assets=True,
+        asset_url_prefix=f"/api/creative-workshop/paper-translation/tasks/{task.task_id}/assets",
     )
     _, download_markdown = await service.get_translated_markdown(owner_id=owner_id, task_id=task.task_id)
 
-    assert "data:image/jpeg;base64,aW1hZ2UtYnl0ZXM=" in preview_markdown
+    assert f"![](/api/creative-workshop/paper-translation/tasks/{task.task_id}/assets/images/fig.jpg)" in preview_markdown
+    assert "data:image" not in preview_markdown
     assert download_markdown == "# 标题\n\n![](images/fig.jpg)"
 
 
@@ -1369,10 +1370,18 @@ async def test_download_paper_translation_markdown_response(monkeypatch):
     user_id = uuid4()
 
     class _Service:
-        async def get_translated_markdown(self, *, owner_id, task_id, inline_assets=False):
+        async def get_translated_markdown(
+            self,
+            *,
+            owner_id,
+            task_id,
+            inline_assets=False,
+            asset_url_prefix=None,
+        ):
             assert owner_id == str(user_id)
             assert task_id == "task-1"
             assert inline_assets is True
+            assert asset_url_prefix is None
             return "demo.zh.md", "# 标题"
 
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
@@ -1392,10 +1401,18 @@ async def test_download_paper_translation_markdown_for_knowledge_base_uses_plain
     user_id = uuid4()
 
     class _Service:
-        async def get_translated_markdown(self, *, owner_id, task_id, inline_assets=False):
+        async def get_translated_markdown(
+            self,
+            *,
+            owner_id,
+            task_id,
+            inline_assets=False,
+            asset_url_prefix=None,
+        ):
             assert owner_id == str(user_id)
             assert task_id == "task-1"
             assert inline_assets is False
+            assert asset_url_prefix is None
             return "demo.zh.md", "# 标题\n\n![](images/fig.jpg)"
 
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
@@ -1415,11 +1432,25 @@ async def test_get_paper_translation_result_response(monkeypatch):
     user_id = uuid4()
 
     class _Service:
-        async def get_translated_markdown(self, *, owner_id, task_id, inline_assets=False):
+        async def get_translated_markdown(
+            self,
+            *,
+            owner_id,
+            task_id,
+            inline_assets=False,
+            asset_url_prefix=None,
+            sign_asset_url=None,
+        ):
             assert owner_id == str(user_id)
             assert task_id == "task-1"
-            assert inline_assets is True
-            return "demo.zh.md", "# 标题"
+            assert inline_assets is False
+            assert asset_url_prefix == "/api/creative-workshop/paper-translation/tasks/task-1/assets"
+            assert sign_asset_url is not None
+            signed_url = sign_asset_url(
+                "/api/creative-workshop/paper-translation/tasks/task-1/assets/images/fig.jpg",
+                "images/fig.jpg",
+            )
+            return "demo.zh.md", f"# 标题\n\n![]({signed_url})"
 
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
 
@@ -1429,8 +1460,78 @@ async def test_get_paper_translation_result_response(monkeypatch):
     )
 
     assert response.media_type == "text/markdown; charset=utf-8"
-    assert response.body == "# 标题".encode("utf-8")
+    body = response.body.decode("utf-8")
+    assert body.startswith("# 标题\n\n![](/api/creative-workshop/paper-translation/tasks/task-1/assets/images/fig.jpg?asset_token=")
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_get_paper_translation_asset_response(monkeypatch, tmp_path):
+    user_id = uuid4()
+    asset_path = tmp_path / "fig.jpg"
+    asset_path.write_bytes(b"image-bytes")
+
+    class _Service:
+        async def get_task(self, *, owner_id, task_id):
+            assert owner_id == str(user_id)
+            assert task_id == "task-1"
+            return SimpleNamespace(status="completed")
+
+        def resolve_asset_file(self, *, owner_id, task_id, asset_path):
+            assert owner_id == str(user_id)
+            assert task_id == "task-1"
+            assert asset_path == "images/fig.jpg"
+            return asset_path_fixture
+
+    asset_path_fixture = asset_path
+    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+
+    response = await controller.get_paper_translation_asset(
+        task_id="task-1",
+        asset_path="images/fig.jpg",
+        current_user=SimpleNamespace(id=user_id),
+    )
+
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"image-bytes"
+    assert response.headers["cache-control"] == "private, max-age=3600"
+
+
+@pytest.mark.asyncio
+async def test_get_paper_translation_asset_accepts_signed_token(monkeypatch, tmp_path):
+    user_id = uuid4()
+    asset_path = tmp_path / "fig.jpg"
+    asset_path.write_bytes(b"image-bytes")
+    token = controller._create_paper_translation_asset_token(
+        owner_id=str(user_id),
+        task_id="task-1",
+        asset_path="images/fig.jpg",
+    )
+
+    class _Service:
+        async def get_task(self, *, owner_id, task_id):
+            assert owner_id == str(user_id)
+            assert task_id == "task-1"
+            return SimpleNamespace(status="completed")
+
+        def resolve_asset_file(self, *, owner_id, task_id, asset_path):
+            assert owner_id == str(user_id)
+            assert task_id == "task-1"
+            assert asset_path == "images/fig.jpg"
+            return asset_path_fixture
+
+    asset_path_fixture = asset_path
+    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+
+    response = await controller.get_paper_translation_asset(
+        task_id="task-1",
+        asset_path="images/fig.jpg",
+        asset_token=token,
+        current_user=None,
+    )
+
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"image-bytes"
 
 
 @pytest.mark.asyncio

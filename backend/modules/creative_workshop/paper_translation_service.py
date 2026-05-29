@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4
 
 import httpx
@@ -798,6 +798,8 @@ class PaperTranslationService:
         owner_id: str,
         task_id: str,
         inline_assets: bool = False,
+        asset_url_prefix: str | None = None,
+        sign_asset_url=None,
     ) -> tuple[str, str]:
         task = await self.get_task(owner_id=owner_id, task_id=task_id)
         if task is None or task.status != "completed" or not task.translated_markdown_path:
@@ -811,6 +813,14 @@ class PaperTranslationService:
         markdown = _remove_mermaid_diagram_blocks(path.read_text(encoding="utf-8"))
         if inline_assets:
             markdown = self._inline_markdown_assets(owner_id=owner_id, task_id=task_id, markdown=markdown)
+        elif asset_url_prefix:
+            markdown = self._rewrite_markdown_asset_paths_to_urls(
+                owner_id=owner_id,
+                task_id=task_id,
+                markdown=markdown,
+                asset_url_prefix=asset_url_prefix,
+                sign_asset_url=sign_asset_url,
+            )
         return _download_filename(task.filename, ".md"), markdown
 
     async def get_source_pdf(self, *, owner_id: str, task_id: str) -> tuple[str, bytes]:
@@ -1206,6 +1216,9 @@ class PaperTranslationService:
             return candidate
         return None
 
+    def resolve_asset_file(self, *, owner_id: str, task_id: str, asset_path: str) -> Path | None:
+        return self._resolve_asset_file(owner_id=owner_id, task_id=task_id, asset_path=asset_path)
+
     def _inline_markdown_assets(self, *, owner_id: str, task_id: str, markdown: str) -> str:
         def replace(image_path: str) -> str:
             image_path = image_path.strip()
@@ -1217,6 +1230,35 @@ class PaperTranslationService:
             mime_type = mimetypes.guess_type(asset_file.name)[0] or "application/octet-stream"
             encoded = base64.b64encode(asset_file.read_bytes()).decode("ascii")
             return f"data:{mime_type};base64,{encoded}"
+
+        return _replace_markdown_image_destinations(markdown, replace)
+
+    def _rewrite_markdown_asset_paths_to_urls(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        markdown: str,
+        asset_url_prefix: str,
+        sign_asset_url=None,
+    ) -> str:
+        prefix = asset_url_prefix.rstrip("/")
+
+        def replace(image_path: str) -> str:
+            image_path = image_path.strip()
+            if re.match(r"^(?:https?:|data:|blob:|mailto:)", image_path, re.IGNORECASE):
+                return image_path
+            normalized = _normalize_asset_path(image_path)
+            if not normalized:
+                return image_path
+            asset_file = self._resolve_asset_file(owner_id=owner_id, task_id=task_id, asset_path=normalized)
+            if asset_file is None:
+                return image_path
+            encoded_path = "/".join(quote(part) for part in normalized.split("/"))
+            asset_url = f"{prefix}/{encoded_path}"
+            if sign_asset_url is not None:
+                return sign_asset_url(asset_url, normalized)
+            return asset_url
 
         return _replace_markdown_image_destinations(markdown, replace)
 

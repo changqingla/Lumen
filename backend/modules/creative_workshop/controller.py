@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import mimetypes
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
+import httpx
+from jose import JWTError, jwt
 from pydantic import BaseModel, Field, field_validator
 
 from config.redis import get_redis_client
 from config.settings import settings
-from middlewares.auth import get_current_user
+from middlewares.auth import get_current_user, get_current_user_optional
 from models.user import User
 from utils.audit_logger import record_user_prompt_event
 from .paper_translation_service import PaperTranslationQueueItem, PaperTranslationStatus, paper_translation_service
@@ -24,6 +27,8 @@ from .paper_translation_service import PaperTranslationQueueItem, PaperTranslati
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/creative-workshop", tags=["Creative Workshop"])
+PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE = "paper_translation_asset"
+PAPER_TRANSLATION_ASSET_TOKEN_EXPIRE_MINUTES = 60
 
 ImageSize = Literal[
     "1024x1024",
@@ -287,6 +292,35 @@ def _download_headers(filename: str) -> dict[str, str]:
     }
 
 
+def _create_paper_translation_asset_token(*, owner_id: str, task_id: str, asset_path: str) -> str:
+    from utils.security import create_access_token
+
+    return create_access_token(
+        data={
+            "purpose": PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE,
+            "sub": owner_id,
+            "task_id": task_id,
+            "asset_path": asset_path,
+        },
+        expires_delta=timedelta(minutes=PAPER_TRANSLATION_ASSET_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def _verify_paper_translation_asset_token(*, token: str, task_id: str, asset_path: str) -> str | None:
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("purpose") != PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE:
+        return None
+    if payload.get("task_id") != task_id or payload.get("asset_path") != asset_path:
+        return None
+    owner_id = payload.get("sub")
+    if not owner_id:
+        return None
+    return str(owner_id)
+
+
 def _paper_translation_temp_pdf_path(service: object) -> Path:
     storage_root = Path(getattr(service, "storage_root", settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR))
     temp_dir = storage_root / "_incoming"
@@ -415,11 +449,19 @@ async def get_paper_translation_result(
 ):
     """Return translated Markdown text for rendering."""
     service = _get_paper_translation_service()
+    owner_id = str(current_user.id)
+
+    def sign_asset_url(asset_url: str, asset_path: str) -> str:
+        separator = "&" if "?" in asset_url else "?"
+        token = _create_paper_translation_asset_token(owner_id=owner_id, task_id=task_id, asset_path=asset_path)
+        return f"{asset_url}{separator}asset_token={quote(token, safe='')}"
+
     try:
         _, content = await service.get_translated_markdown(
-            owner_id=str(current_user.id),
+            owner_id=owner_id,
             task_id=task_id,
-            inline_assets=True,
+            asset_url_prefix=f"/api/creative-workshop/paper-translation/tasks/{quote(task_id, safe='')}/assets",
+            sign_asset_url=sign_asset_url,
         )
     except FileNotFoundError as exc:
         raise HTTPException(
@@ -431,6 +473,48 @@ async def get_paper_translation_result(
         content=content.encode("utf-8"),
         media_type="text/markdown; charset=utf-8",
         headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/paper-translation/tasks/{task_id}/assets/{asset_path:path}")
+async def get_paper_translation_asset(
+    task_id: str,
+    asset_path: str,
+    asset_token: str | None = None,
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """Return a translated paper asset for Markdown preview."""
+    service = _get_paper_translation_service()
+    owner_id = str(current_user.id) if current_user is not None else None
+    if asset_token:
+        owner_id = _verify_paper_translation_asset_token(
+            token=asset_token,
+            task_id=task_id,
+            asset_path=asset_path,
+        )
+    if not owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {"code": "UNAUTHORIZED", "message": "图片资源访问凭证无效"}},
+        )
+
+    task = await service.get_task(owner_id=owner_id, task_id=task_id)
+    if task is None or task.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "翻译任务不存在或尚未完成"}},
+        )
+    asset_file = service.resolve_asset_file(owner_id=owner_id, task_id=task_id, asset_path=asset_path)
+    if asset_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "图片资源不存在"}},
+        )
+
+    return Response(
+        content=asset_file.read_bytes(),
+        media_type=mimetypes.guess_type(asset_file.name)[0] or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

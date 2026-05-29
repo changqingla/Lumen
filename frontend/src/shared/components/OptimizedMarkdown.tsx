@@ -188,13 +188,38 @@ function resolveImageLabel(src?: string, alt?: string): string {
 function MarkdownImage({ src, alt, deferImages = false, ...props }: MarkdownImageProps) {
   const normalizedSrc = String(src || '').trim();
   const [isPreviewEnabled, setIsPreviewEnabled] = useState(!deferImages);
+  const [hasLoadError, setHasLoadError] = useState(false);
 
   if (!normalizedSrc) {
     return null;
   }
 
   const label = resolveImageLabel(normalizedSrc, alt);
-  const isExternal = /^https?:\/\//iu.test(normalizedSrc);
+  const canOpenImage = /^(?:https?:|data:image\/|\/)/iu.test(normalizedSrc);
+
+  const imageActions = (
+    <div className="markdown-image-actions">
+      {hasLoadError ? null : (
+        <button
+          type="button"
+          className="markdown-image-button"
+          onClick={() => setIsPreviewEnabled(true)}
+        >
+          加载预览
+        </button>
+      )}
+      {canOpenImage ? (
+        <a
+          href={normalizedSrc}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="markdown-image-link"
+        >
+          打开原图
+        </a>
+      ) : null}
+    </div>
+  );
 
   if (!isPreviewEnabled) {
     return (
@@ -204,15 +229,22 @@ function MarkdownImage({ src, alt, deferImages = false, ...props }: MarkdownImag
             <div className="markdown-image-title">{label}</div>
             <div className="markdown-image-subtitle">图片预览默认按需加载，避免聊天页面卡顿</div>
           </div>
-          <div className="markdown-image-actions">
-            <button
-              type="button"
-              className="markdown-image-button"
-              onClick={() => setIsPreviewEnabled(true)}
-            >
-              加载预览
-            </button>
-            {isExternal ? (
+          {imageActions}
+        </div>
+      </div>
+    );
+  }
+
+  if (hasLoadError) {
+    return (
+      <div className="markdown-image-shell">
+        <div className="markdown-image-card markdown-image-card-error">
+          <div className="markdown-image-meta">
+            <div className="markdown-image-title">{label}</div>
+            <div className="markdown-image-subtitle">图片资源不可用</div>
+          </div>
+          {canOpenImage ? (
+            <div className="markdown-image-actions">
               <a
                 href={normalizedSrc}
                 target="_blank"
@@ -221,8 +253,8 @@ function MarkdownImage({ src, alt, deferImages = false, ...props }: MarkdownImag
               >
                 打开原图
               </a>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -237,8 +269,9 @@ function MarkdownImage({ src, alt, deferImages = false, ...props }: MarkdownImag
         loading="lazy"
         decoding="async"
         className="markdown-inline-image"
+        onError={() => setHasLoadError(true)}
       />
-      {isExternal ? (
+      {canOpenImage ? (
         <div className="markdown-image-caption">
           <a
             href={normalizedSrc}

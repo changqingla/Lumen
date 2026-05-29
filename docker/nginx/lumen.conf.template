@@ -93,7 +93,7 @@ server {
         gzip off;
     }
 
-    location /api/ {
+    location ^~ /api/ {
         proxy_pass http://backend_api;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
@@ -231,7 +231,7 @@ server {
         gzip off;
     }
 
-    location /api/ {
+    location ^~ /api/ {
         proxy_pass http://backend_api;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
