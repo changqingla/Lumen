@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import html
 import json
 import logging
@@ -457,6 +458,11 @@ def _build_pdf_bytes(markdown: str, title: str, *, base_url: str | Path = ".") -
     return HTML(string=html_content, base_url=str(base_url), url_fetcher=_safe_pdf_url_fetcher).write_pdf()
 
 
+def _pdf_cache_key(markdown: str, title: str) -> str:
+    payload = f"{title}\0{markdown}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _safe_pdf_url_fetcher(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
     parsed = urlparse(str(url or ""))
     if parsed.scheme in {"http", "https", "ftp"}:
@@ -842,17 +848,32 @@ class PaperTranslationService:
             task_id=task_id,
             markdown=markdown,
         )
-        pdf_bytes = _build_pdf_bytes(
-            pdf_ready_markdown,
-            task.filename,
-            base_url=self._task_dir(owner_id, task_id),
-        )
-        pdf_path.write_bytes(pdf_bytes)
-        await self._update_task(
-            owner_id=owner_id,
-            task_id=task_id,
-            translated_pdf_path=str(pdf_path),
-        )
+        cache_key = _pdf_cache_key(pdf_ready_markdown, task.filename)
+        cache_meta_path = pdf_path.with_name(f"{pdf_path.name}.meta.json")
+        cached_key = ""
+        if pdf_path.exists() and cache_meta_path.exists():
+            with contextlib.suppress(Exception):
+                cache_payload = json.loads(cache_meta_path.read_text(encoding="utf-8"))
+                cached_key = str(cache_payload.get("cache_key") or "")
+
+        if not pdf_path.exists() or cached_key != cache_key:
+            pdf_bytes = await asyncio.to_thread(
+                _build_pdf_bytes,
+                pdf_ready_markdown,
+                task.filename,
+                base_url=self._task_dir(owner_id, task_id),
+            )
+            pdf_path.parent.mkdir(parents=True, exist_ok=True)
+            pdf_path.write_bytes(pdf_bytes)
+            cache_meta_path.write_text(
+                json.dumps({"cache_key": cache_key, "generated_at": _utc_now()}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await self._update_task(
+                owner_id=owner_id,
+                task_id=task_id,
+                translated_pdf_path=str(pdf_path),
+            )
         return _download_filename(task.filename, ".pdf"), pdf_path.read_bytes()
 
     def build_response_payload(self, task: PaperTranslationTask) -> dict[str, Any]:

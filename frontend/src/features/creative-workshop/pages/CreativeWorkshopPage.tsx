@@ -744,6 +744,7 @@ function PaperTranslationView({
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState('');
   const [isLoadingKnowledgeBases, setIsLoadingKnowledgeBases] = useState(false);
   const [isAddingToKnowledgeBase, setIsAddingToKnowledgeBase] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [knowledgeUploadProgress, setKnowledgeUploadProgress] = useState(0);
   const [knowledgeDialogError, setKnowledgeDialogError] = useState('');
 
@@ -1084,12 +1085,17 @@ function PaperTranslationView({
   };
 
   const handleDownloadPdf = async () => {
-    if (!hasResult || !translationTaskId) return;
+    if (!hasResult || !translationTaskId || isExportingPdf) return;
+    setIsExportingPdf(true);
     try {
       const { blob, fileName } = await api.downloadPaperTranslationPdf(translationTaskId);
       triggerBlobDownload(blob, fileName || `${selectedFile?.name.replace(/\.pdf$/i, '') || 'paper-translation'}.zh.pdf`);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, '导出 PDF 失败'));
+    } finally {
+      if (isMountedRef.current) {
+        setIsExportingPdf(false);
+      }
     }
   };
 
@@ -1258,10 +1264,11 @@ function PaperTranslationView({
                 type="button"
                 className={styles.translationIconButton}
                 onClick={handleDownloadPdf}
-                title="导出 PDF 下载"
-                aria-label="导出 PDF 下载"
+                disabled={isExportingPdf}
+                title={isExportingPdf ? '正在导出 PDF' : '导出 PDF 下载'}
+                aria-label={isExportingPdf ? '正在导出 PDF' : '导出 PDF 下载'}
               >
-                <Share size={17} />
+                {isExportingPdf ? <Loader2 size={17} className={styles.spin} /> : <Share size={17} />}
               </button>
             )}
             {hasResult && (

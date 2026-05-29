@@ -796,6 +796,7 @@ async def test_paper_translation_downloads_markdown_and_pdf(tmp_path, monkeypatc
         status="completed",
         translated_markdown_path=str(md_path),
     )
+    render_calls = 0
 
     class _FakeHTML:
         def __init__(self, *, string, base_url=".", url_fetcher=None):
@@ -804,6 +805,8 @@ async def test_paper_translation_downloads_markdown_and_pdf(tmp_path, monkeypatc
             self.url_fetcher = url_fetcher
 
         def write_pdf(self):
+            nonlocal render_calls
+            render_calls += 1
             assert "中文正文" in self.string
             assert self.url_fetcher is not None
             return b"%PDF-1.7\nfake-rendered"
@@ -816,11 +819,15 @@ async def test_paper_translation_downloads_markdown_and_pdf(tmp_path, monkeypatc
     )
     markdown_name, markdown = await service.get_translated_markdown(owner_id=owner_id, task_id=task.task_id)
     pdf_name, pdf_bytes = await service.get_translated_pdf(owner_id=owner_id, task_id=task.task_id)
+    cached_pdf_name, cached_pdf_bytes = await service.get_translated_pdf(owner_id=owner_id, task_id=task.task_id)
 
     assert markdown_name == "demo.zh.md"
     assert markdown == "# 标题\n\n中文正文。"
     assert pdf_name == "demo.zh.pdf"
     assert pdf_bytes.startswith(b"%PDF-1.7")
+    assert cached_pdf_name == "demo.zh.pdf"
+    assert cached_pdf_bytes == pdf_bytes
+    assert render_calls == 1
 
 
 def test_mineru_extracts_markdown_and_image_assets_from_zip():
