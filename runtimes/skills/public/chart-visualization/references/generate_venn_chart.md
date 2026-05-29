@@ -1,23 +1,23 @@
-# generate_venn_chart — 维恩图
+# generate_venn_chart - Venn Chart
 
-## 功能概述
-展示多个集合之间的交集、并集与差异，适用于市场细分、特性覆盖、用户重叠分析。
+## Overview
+Shows intersections, unions, and differences among multiple sets. Suitable for market segmentation, feature coverage, and user overlap analysis.
 
-## 输入字段
-### 必填
-- `data`: array<object>，每条记录包含 `value`（number）与 `sets`（string[]），可选 `label`（string）。
+## Input Fields
+### Required
+- `data`: array<object>. Each record contains `value` (number) and `sets` (string[]), with optional `label` (string).
 
-### 可选
-- `style.backgroundColor`: string，设置背景色。
-- `style.palette`: string[]，定义配色列表。
-- `style.texture`: string，默认 `default`，可选 `default`/`rough`。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
-- `title`: string，默认空字符串。
+### Optional
+- `style.backgroundColor`: string. Sets the background color.
+- `style.palette`: string[]. Defines the color palette.
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
+- `title`: string, default empty string.
 
-## 使用建议
-集合数量建议 ≤4；若缺少精确权重可根据大致占比填写；集合命名保持简洁明确（如“移动端用户”）。
+## Usage Tips
+Use 4 or fewer sets when possible. If exact weights are unavailable, approximate proportions may be used. Keep set names concise and clear, such as `Mobile Users`.
 
-## 返回结果
-- 返回维恩图 URL，并保存在 `_meta.spec` 中。
+## Return Value
+- Returns a Venn chart URL and stores the configuration in `_meta.spec`.

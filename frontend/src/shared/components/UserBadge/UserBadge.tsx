@@ -1,4 +1,3 @@
-import React from 'react';
 import { User, Award, Crown, Shield } from 'lucide-react';
 import styles from './UserBadge.module.css';
 
@@ -49,4 +48,3 @@ export default function UserBadge({
     </span>
   );
 }
-

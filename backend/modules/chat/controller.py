@@ -19,6 +19,7 @@ from config.database import get_db
 from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity, get_current_user
 from models.user import User
 from schemas.workspace import WorkspaceAttachmentInput
+from utils.audit_logger import record_user_prompt_event
 
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -90,6 +91,12 @@ def _compute_tenant_key(user_id: UUID) -> str:
 def _build_session_prefix(user_id: UUID, session_id: UUID) -> str:
     tenant_key = _compute_tenant_key(user_id)
     return f"v2/tenants/{tenant_key}/sessions/{session_id}/"
+
+
+def _get_session_model_name(session) -> str:
+    session_config = dict(getattr(session, "config", {}) or {})
+    return str(session_config.get("modelName") or "").strip()
+
 
 def _is_allowed_artifact_object_path(user_id: UUID, session_id: UUID, object_path: str) -> bool:
     """
@@ -956,7 +963,30 @@ async def add_message(
     if not message:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return message.to_dict()
+    message_payload = message.to_dict()
+    if request.role == "user":
+        persisted_message_id = (
+            message_payload.get("id")
+            or getattr(message, "id", None)
+            or request.message_id
+            or ""
+        )
+        await record_user_prompt_event(
+            event_type="chat_question",
+            user=current_user,
+            prompt=request.content,
+            metadata={
+                "session_id": str(session_id),
+                "message_id": str(persisted_message_id),
+                "is_guest": identity.is_guest,
+                "guest_id": identity.guest_id,
+                "model": _get_session_model_name(session),
+                "image_count": len(request.image_data_urls or []),
+                "attachment_count": len(validated_attachments or []),
+            },
+        )
+
+    return message_payload
 
 
 @router.get("/sessions/{session_id}/artifacts/url")

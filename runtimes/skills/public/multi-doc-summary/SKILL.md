@@ -1,66 +1,66 @@
 ---
 name: multi-doc-summary
-description: 对多篇文档进行主题化综合总结。用户要求“总结这几篇文档/归纳多篇资料/提炼共同结论”时使用；优先使用 KB 直读工具，不依赖 reader_kb 本地副本路径。
+description: Produce a thematic integrated summary across multiple documents. Use when the user asks to summarize several documents, synthesize multiple materials, or extract shared conclusions. Prefer direct KB reading tools and do not depend on local reader_kb copy paths.
 ---
 
 # Multi-Document Summary Skill
 
-## 执行规则
+## Execution Rules
 
-1. 先定义总结目标（给决策、给学习、给汇报）与输出粒度。
-2. 文档数量 >= 3 且本轮可用 `task` 工具时，可委派子代理分组抽取要点。
-3. 若 `task` 不可用或文档数量 < 3，则主 Agent 直接阅读。
-4. 总结必须“按主题聚合”，禁止“按文档流水账”。
+1. Define the summary goal first, such as decision support, learning, or reporting, along with the desired granularity.
+2. If there are 3 or more documents and the `task` tool is available in this turn, delegate grouped extraction to subagents.
+3. If `task` is unavailable or there are fewer than 3 documents, the main agent should read directly.
+4. The summary must aggregate by theme. Do not write a document-by-document running account.
 
-## 子代理抽取模板（文档数量 >= 3 且 `task` 可用）
+## Subagent Extraction Template (3+ Documents and `task` Available)
 
-调用 `task` 时：
-- `subagent_type` 使用 `general-purpose`
-- 在 `prompt` 中明确限定只做分组阅读和证据抽取，不负责最终成稿和文件发布
+When calling `task`:
+- Use `general-purpose` as `subagent_type`.
+- In the `prompt`, clearly restrict the subagent to grouped reading and evidence extraction only. The subagent must not draft the final report or publish files.
 
-每个子代理的 `prompt` 至少包含：
-- 文档核心命题
-- 关键方法/机制
-- 主要事实或数据点
-- 结论与边界条件
-- 与主题的关联度评估
-- 可引用证据（带文档名称与定位信息；若只有文档 ID 可得，可先记录 ID，最终成稿时再统一替换为文档名称）
+Each subagent `prompt` should include at least:
+- Core proposition of the document
+- Key methods or mechanisms
+- Major facts or data points
+- Conclusions and boundary conditions
+- Relevance assessment to the topic
+- Quotable evidence with document names and location information. If only document IDs are available, record the IDs first and replace them with document names in the final draft.
 
-若 KB 直读工具可用，优先要求子代理仅使用：
+If direct KB reading tools are available, preferably require subagents to use only:
 - `kb_list_docs`
 - `kb_read_doc`
 - `kb_read_doc_lines`
 - `kb_search_doc`
 
-不要在子代理中调用 `present_files`；最终文件发布由主 Agent 统一完成。
+Do not call `present_files` from subagents. Final file publishing is handled only by the main agent.
 
-## 输出结构（必须完整）
+## Output Structure (Required)
 
 ```markdown
-# {综合总结标题}
+# {Integrated Summary Title}
 
-## TL;DR（120-200 字）
-## 主题化总结（3-6 个主题）
-## 关键共识与主线趋势
-## 主要分歧与原因
-## 可执行结论 / 决策建议
-## 未解决问题与后续信息需求
-## 证据来源清单
+## TL;DR (120-200 words)
+## Thematic Summary (3-6 Themes)
+## Key Consensus and Main Trends
+## Major Disagreements and Causes
+## Actionable Conclusions / Decision Recommendations
+## Unresolved Questions and Follow-Up Information Needs
+## Evidence Source List
 ```
 
-## 质量门槛
+## Quality Bar
 
-1. 至少包含 3 个主题小节，每个主题都要跨文档整合。
-2. 关键观点必须标注文档来源，禁止无来源陈述。
-3. 必须有“分歧”部分，不能只写一致结论。
-4. 输出不能过短或模板化空话；应包含具体事实、术语或数据。
-5. 信息不足时必须明确“证据缺口”，不能用主观推断填补。
-6. 输出的最终报告中不要使用文档id，如果需要应该使用文档名称。
+1. Include at least 3 thematic sections, and each theme must integrate across documents.
+2. Key points must cite document sources. Do not make unsourced statements.
+3. Include a disagreement section. Do not only write consensus conclusions.
+4. The output must not be too short or filled with templated abstractions. Include concrete facts, terms, or data.
+5. If information is insufficient, clearly state the evidence gaps. Do not fill gaps with subjective guesses.
+6. Do not use document IDs in the final report. Use document names instead when references are needed.
 
-## 最终交付要求
+## Final Delivery Requirements
 
-1. 将最终结果整理为完整的 Markdown 文档；草稿可先写到 `/mnt/user-data/workspace`，最终交付文件必须写到 `/mnt/user-data/outputs`，例如 `/mnt/user-data/outputs/多文档总结-{主题}.md`。
-2. 使用 `write_file` 写入最终 Markdown 文件。
-3. 文件生成后必须调用 `present_files` 发布，例如传入最终 Markdown 文件路径；不要只调用 `write_file` 后就结束。
-4. 如需自检，可使用 `read_file` 或 `ls` 检查文件内容与输出目录。
-5. 最终答复必须包含已交付文件的信息，明确告诉用户 Markdown 文件已可下载，不能只说“已经生成”或只粘贴正文。
+1. Organize the final result as a complete Markdown document. Drafts may be written under `/mnt/user-data/workspace`, but the final deliverable must be written under `/mnt/user-data/outputs`, for example `/mnt/user-data/outputs/multi-document-summary-{topic}.md`.
+2. Use `write_file` to write the final Markdown file.
+3. After generating the file, call `present_files` to publish it, passing the final Markdown file path. Do not stop after only calling `write_file`.
+4. If self-checking is needed, use `read_file` or `ls` to inspect the file content and output directory.
+5. The final response must include delivery information for the generated file and clearly tell the user that the Markdown file is available for download. Do not only say that it has been generated, and do not only paste the body text.

@@ -1,0 +1,1346 @@
+.page {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  background: var(--layout-main-bg);
+  color: var(--text);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+}
+
+.sidebarContainer {
+  flex-shrink: 0;
+  z-index: 1000;
+}
+
+.mobileMenuButton {
+  display: none;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workshopModelBar {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 10px 32px 0;
+  background: var(--layout-main-bg);
+}
+
+.header {
+  min-height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 24px 32px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--layout-main-bg);
+}
+
+.homeHeader {
+  border-bottom: none;
+}
+
+.title {
+  margin: 0;
+  color: var(--text);
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.homeScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 32px 32px;
+}
+
+.toolGrid {
+  max-width: 980px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.toolCard {
+  position: relative;
+  min-height: 226px;
+  display: grid;
+  grid-template-columns: minmax(220px, 32%) minmax(0, 1fr);
+  gap: 0;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.16s ease, background 0.18s ease;
+}
+
+.toolCard:hover {
+  border-color: rgba(59, 130, 246, 0.45);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.09);
+  transform: translateY(-2px);
+}
+
+.toolImageFrame {
+  width: 100%;
+  height: 100%;
+  min-height: 206px;
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.toolImage {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform 0.28s ease;
+}
+
+.toolCard:hover .toolImage {
+  transform: scale(1.025);
+}
+
+.paperTool .toolImage {
+  object-position: center 42%;
+}
+
+.toolBody {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 9px;
+  padding: 14px 18px 14px 20px;
+}
+
+.toolTopline {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.toolStatus {
+  margin-left: auto;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.paperTool .toolStatus {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+}
+
+.toolIcon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  background: var(--bg-elev-1);
+  color: #2563eb;
+}
+
+.paperTool .toolIcon {
+  color: #7c3aed;
+}
+
+.toolEyebrow {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.toolTitle {
+  margin-top: 0;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 760;
+}
+
+.toolDescription {
+  max-width: 560px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.toolMetaList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.toolMetaList span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev-1);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.toolFooter {
+  margin-top: auto;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 760;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.toolCard:hover .toolFooter {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.paperTool .toolFooter {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+
+.paperTool:hover .toolFooter {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
+  gap: 20px;
+  padding: 20px 32px 32px;
+  overflow: hidden;
+}
+
+.controlPanel,
+.previewPanel,
+.translationPanel,
+.translationResultPanel {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.controlPanel,
+.translationPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.sectionHeader h2,
+.previewHeader h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.3;
+  font-weight: 680;
+}
+
+.field,
+.sliderField,
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field span,
+.sliderField span,
+.groupLabel {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.field textarea,
+.field select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev-1);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.field textarea {
+  min-height: 148px;
+  resize: vertical;
+  padding: 12px;
+}
+
+.field select {
+  min-height: 42px;
+  padding: 0 11px;
+}
+
+.field textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.field textarea:focus,
+.field select:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.promptChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.promptChip {
+  max-width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev-1);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.promptChip:hover {
+  border-color: rgba(59, 130, 246, 0.45);
+  color: var(--text);
+  background: var(--bg-elev-2);
+}
+
+.sizeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.optionButton {
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev-1);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.optionButton span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.optionButton small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.optionButton:hover {
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.optionActive {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.22);
+}
+
+.inlineFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sliderRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sliderRow input {
+  flex: 1;
+  accent-color: var(--primary);
+}
+
+.sliderRow strong {
+  min-width: 34px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: right;
+}
+
+.generateButton {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.16s ease;
+}
+
+.generateButton:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.generateButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.previewPanel,
+.translationResultPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.previewHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.previewHeader p {
+  max-width: 720px;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.downloadButton {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev-1);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.downloadButton:hover:not(:disabled) {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: var(--bg-elev-2);
+}
+
+.downloadButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.toolCard:focus-visible,
+.promptChip:focus-visible,
+.optionButton:focus-visible,
+.generateButton:focus-visible,
+.downloadButton:focus-visible,
+.uploadZone:focus-visible,
+.translationIconButton:focus-visible,
+.translationPrimaryAction:focus-visible,
+.previewRemoveButton:focus-visible,
+.knowledgeDialogClose:focus-visible,
+.knowledgeOption:focus-visible,
+.knowledgeDialogSecondary:focus-visible,
+.knowledgeDialogPrimary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.22);
+}
+
+.progressBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progressMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.progressMeta strong {
+  color: var(--text-secondary);
+}
+
+.progressTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #0f766e);
+  transition: width 0.28s ease;
+}
+
+.progressError {
+  background: var(--danger);
+}
+
+.previewStage {
+  flex: 1;
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(45deg, rgba(148, 163, 184, 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(148, 163, 184, 0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(148, 163, 184, 0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(148, 163, 184, 0.12) 75%);
+  background-size: 28px 28px;
+  background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+}
+
+.square {
+  aspect-ratio: 1 / 1;
+}
+
+.landscape {
+  aspect-ratio: 16 / 10;
+}
+
+.portrait {
+  aspect-ratio: 10 / 14;
+}
+
+.generatedImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.emptyPreview {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.errorBox {
+  padding: 11px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.translationWorkspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(420px, 48%) minmax(0, 1fr);
+  gap: 0;
+  padding: 18px 24px 24px;
+  overflow: hidden;
+  background: var(--layout-main-bg);
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.translationPanel,
+.translationResultPanel {
+  min-height: 0;
+  border-color: rgba(148, 163, 184, 0.24);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.translationPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px 0 0 8px;
+}
+
+.translationResultPanel {
+  position: relative;
+  padding: 10px;
+  border-left: 0;
+  border-radius: 0 8px 8px 0;
+}
+
+.translationSourceToolbar {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 2px;
+}
+
+.uploadZone {
+  flex: 1;
+  width: 100%;
+  min-height: 504px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  border: 1px dashed rgba(100, 116, 139, 0.42);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elev-1) 82%, var(--surface));
+  color: var(--text-secondary);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.16s ease;
+}
+
+.uploadZone:hover {
+  border-color: rgba(15, 23, 42, 0.38);
+  background: var(--surface);
+  transform: translateY(-1px);
+}
+
+.uploadZone > svg {
+  color: var(--text-secondary);
+}
+
+.uploadZone span {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.pdfPreviewShell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pdfFrame {
+  position: relative;
+  flex: 1;
+  min-height: 504px;
+  overflow: hidden;
+  border: 1px dashed rgba(100, 116, 139, 0.42);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elev-1) 82%, var(--surface));
+}
+
+.previewRemoveButton {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 12;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.previewRemoveButton:hover {
+  border-color: rgba(239, 68, 68, 0.38);
+  background: color-mix(in srgb, var(--surface) 86%, rgba(239, 68, 68, 0.14));
+  color: var(--danger);
+}
+
+.translationResultPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.translationResultToolbar {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.translationIconButton {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  background: var(--bg-elev-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.16s ease;
+}
+
+.translationIconButton:hover:not(:disabled) {
+  border-color: rgba(59, 130, 246, 0.36);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.translationIconButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.translationResultBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  border: 1px dashed rgba(100, 116, 139, 0.42);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elev-1) 82%, var(--surface));
+}
+
+.translationEmpty,
+.translationLoading,
+.translationActionStage {
+  flex: 1;
+  min-height: 504px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.translationEmpty > svg,
+.translationLoading > svg {
+  color: var(--text-muted);
+}
+
+.translationPrimaryAction {
+  min-height: 44px;
+  min-width: 152px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 18px;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+  transition: transform 0.16s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.translationPrimaryAction:hover:not(:disabled) {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.16);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.1);
+}
+
+.translationPrimaryAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.translationEmpty h3,
+.translationLoading h3 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.translationLoading p {
+  margin: -2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.knowledgeDialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.knowledgeDialog {
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev-1);
+}
+
+.knowledgeDialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.knowledgeDialogHeader h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.knowledgeDialogClose {
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.knowledgeDialogClose:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+.knowledgeDialogClose:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.knowledgeDialogBody {
+  min-height: 178px;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.knowledgeDialogState {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.knowledgeList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.knowledgeOption {
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.knowledgeOption:hover {
+  border-color: var(--text-muted);
+  background: var(--bg-elev-1);
+}
+
+.knowledgeOptionSelected {
+  border-color: var(--primary);
+  background: var(--bg-elev-1);
+}
+
+.knowledgeOptionName {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledgeOptionMeta {
+  min-width: 0;
+  grid-column: 1 / 2;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledgeOption > svg {
+  grid-row: 1 / 3;
+  grid-column: 2 / 3;
+  color: var(--primary);
+}
+
+.knowledgeDialogError {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.knowledgeUploadProgress {
+  height: 3px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-elev-2);
+}
+
+.knowledgeUploadProgress div {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 0.18s ease;
+}
+
+.knowledgeDialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 24px 24px;
+}
+
+.knowledgeDialogSecondary,
+.knowledgeDialogPrimary {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.knowledgeDialogSecondary {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.knowledgeDialogSecondary:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+}
+
+.knowledgeDialogPrimary {
+  border: none;
+  background: #1f1f1f;
+  color: #ffffff;
+}
+
+.knowledgeDialogPrimary:hover:not(:disabled) {
+  background: #2a2a2a;
+}
+
+.knowledgeDialogSecondary:disabled,
+.knowledgeDialogPrimary:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.markdownResult {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+  padding: 28px 32px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolCard,
+  .toolImage,
+  .toolFooter {
+    transition: none;
+  }
+
+  .toolCard:hover,
+  .toolCard:hover .toolImage {
+    transform: none;
+  }
+}
+
+@media (max-width: 1120px) {
+  .toolCard {
+    grid-template-columns: minmax(210px, 32%) minmax(0, 1fr);
+  }
+
+  .workspace,
+  .translationWorkspace {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    overflow-y: auto;
+  }
+
+  .translationPanel,
+  .translationResultPanel {
+    border-radius: 8px;
+  }
+
+  .translationResultPanel {
+    border-left: 1px solid rgba(148, 163, 184, 0.24);
+  }
+
+  .previewStage {
+    flex: none;
+    max-height: 72vh;
+  }
+
+  .pdfFrame,
+  .translationEmpty,
+  .translationLoading,
+  .translationActionStage {
+    min-height: 520px;
+  }
+}
+
+@media (max-width: 900px) {
+  .toolCard {
+    grid-template-columns: 1fr;
+  }
+
+  .toolImageFrame {
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 16 / 9;
+  }
+
+  .toolBody {
+    padding: 18px 4px 2px;
+  }
+}
+
+@media (max-width: 768px) and (pointer: coarse) {
+  .mobileMenuButton {
+    display: flex;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 1001;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  }
+
+  .sidebarContainer {
+    position: fixed;
+    left: -280px;
+    top: 0;
+    bottom: 0;
+    transition: left 0.3s ease;
+  }
+
+  .sidebarContainer.open {
+    left: 0;
+  }
+
+  .header {
+    min-height: auto;
+    padding: 18px 18px 16px;
+    align-items: flex-start;
+  }
+
+  .workshopModelBar {
+    min-height: 54px;
+    padding: 12px 18px 0 64px;
+  }
+
+  .title {
+    font-size: 28px;
+  }
+
+  .homeScroll,
+  .workspace,
+  .translationWorkspace {
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .sizeGrid,
+  .inlineFields {
+    grid-template-columns: 1fr;
+  }
+
+  .toolCard {
+    min-height: auto;
+    padding: 10px;
+  }
+
+  .toolBody {
+    padding: 16px 2px 2px;
+  }
+
+  .toolTitle {
+    font-size: 23px;
+  }
+
+  .toolTopline {
+    align-items: flex-start;
+  }
+
+  .toolStatus {
+    margin-left: auto;
+  }
+
+  .toolFooter {
+    width: 100%;
+  }
+
+  .controlPanel,
+  .previewPanel,
+  .translationPanel,
+  .translationResultPanel {
+    padding: 16px;
+  }
+
+  .previewHeader {
+    flex-direction: column;
+  }
+
+  .downloadButton {
+    width: 100%;
+  }
+
+  .translationResultToolbar {
+    min-height: 38px;
+  }
+
+  .translationSourceToolbar {
+    min-height: 38px;
+  }
+
+  .translationIconButton {
+    width: 38px;
+    height: 38px;
+  }
+
+  .uploadZone,
+  .pdfFrame,
+  .translationEmpty,
+  .translationLoading,
+  .translationActionStage {
+    min-height: 320px;
+  }
+
+  .knowledgeDialog {
+    max-width: 100%;
+  }
+
+  .knowledgeDialogHeader {
+    padding: 16px 20px;
+  }
+
+  .knowledgeDialogHeader h3 {
+    font-size: 16px;
+  }
+
+  .knowledgeDialogBody {
+    padding: 20px;
+  }
+
+  .knowledgeDialogFooter {
+    flex-direction: column-reverse;
+    padding: 0 20px 20px;
+  }
+
+  .knowledgeDialogSecondary,
+  .knowledgeDialogPrimary {
+    width: 100%;
+  }
+
+}
+
+:global(html.dark) .toolCard,
+:global(html.dark) .uploadZone {
+  background-color: var(--surface);
+}
+
+:global(html.dark) .toolImageFrame {
+  background: #111827;
+}
+
+:global(html.dark) .knowledgeDialogPrimary {
+  background: #f8fafc;
+  color: #111827;
+}
+
+:global(html.dark) .knowledgeDialogPrimary:hover:not(:disabled) {
+  background: #e5e7eb;
+}

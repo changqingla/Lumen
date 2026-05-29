@@ -45,13 +45,13 @@ export interface RAGStreamToolTrace {
   duration_ms?: number;
 }
 
-export interface RAGStreamTupleToolCall {
+interface RAGStreamTupleToolCall {
   id?: string;
   name: string;
   args?: unknown;
 }
 
-export interface RAGStreamTupleMessage {
+interface RAGStreamTupleMessage {
   type: 'ai' | 'tool';
   id: string;
   content?: string;
@@ -204,7 +204,7 @@ interface RuntimeCustomTaskEvent {
   [key: string]: unknown;
 }
 
-export interface RAGActiveRunInfo {
+interface RAGActiveRunInfo {
   runId: string;
   status: string;
   startedAt?: string;
@@ -240,7 +240,7 @@ interface StreamEventHandlers {
 const preparedRuntimeBySession = new Map<string, PreparedRuntimeState>();
 let hasAttachedAuthResetListener = false;
 
-export const clearPreparedRuntimeCache = (): void => {
+const clearPreparedRuntimeCache = (): void => {
   preparedRuntimeBySession.clear();
 };
 

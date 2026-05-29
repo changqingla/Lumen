@@ -2,7 +2,7 @@
  * 统计数据组件
  * 展示系统的各项统计数据
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Users, Building2, Database, RefreshCw, AlertCircle } from 'lucide-react';
 import { useToast } from '@/shared/hooks/useToast';
 import { adminAPI } from '@/shared/api/client';

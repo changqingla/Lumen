@@ -26,6 +26,15 @@ _SENSITIVE_FIELD_NAMES = frozenset(
     }
 )
 _SENSITIVE_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "x-api-key", "api-key"})
+_OPENAI_COMPATIBLE_MODEL_USE = "langchain_openai:ChatOpenAI"
+_PATCHED_OPENAI_COMPATIBLE_MODEL_USE = "src.models.patched_openai:PatchedChatOpenAI"
+_OPENAI_COMPATIBLE_MODEL_USES = frozenset(
+    {
+        _OPENAI_COMPATIBLE_MODEL_USE,
+        _PATCHED_OPENAI_COMPATIBLE_MODEL_USE,
+    }
+)
+_OPENAI_COMPATIBLE_DEFAULT_USER_AGENT = "Lumen/1.0"
 
 
 def _get_supported_model_config_keys(model_class: type[BaseChatModel]) -> set[str] | None:
@@ -135,7 +144,7 @@ def _sanitize_max_tokens(settings: dict, *, model_name: str, model_use: str, sou
         sanitized.pop("max_tokens", None)
         return sanitized
 
-    if model_use == "langchain_openai:ChatOpenAI" and max_tokens > 65536:
+    if model_use in _OPENAI_COMPATIBLE_MODEL_USES and max_tokens > 65536:
         logger.warning(
             "Clamping max_tokens for model '%s' from %s to 65536 (configured=%s) to stay within OpenAI-compatible provider limits.",
             model_name,
@@ -145,6 +154,27 @@ def _sanitize_max_tokens(settings: dict, *, model_name: str, model_use: str, sou
         sanitized["max_tokens"] = 65536
 
     return sanitized
+
+
+def _with_openai_compatible_default_headers(settings: dict, *, model_use: str) -> dict:
+    """Set a stable User-Agent for OpenAI-compatible gateways unless explicitly configured."""
+    if model_use not in _OPENAI_COMPATIBLE_MODEL_USES:
+        return settings
+
+    updated = dict(settings)
+    existing_headers = updated.get("default_headers")
+    if existing_headers is None:
+        updated["default_headers"] = {"User-Agent": _OPENAI_COMPATIBLE_DEFAULT_USER_AGENT}
+        return updated
+
+    if not isinstance(existing_headers, Mapping):
+        return updated
+
+    if any(str(header_name).lower() == "user-agent" for header_name in existing_headers):
+        return updated
+
+    updated["default_headers"] = {**existing_headers, "User-Agent": _OPENAI_COMPATIBLE_DEFAULT_USER_AGENT}
+    return updated
 
 
 def create_chat_model_from_spec(
@@ -209,6 +239,10 @@ def create_chat_model_from_spec(
     )
 
     final_model_settings = {**model_settings_from_config, **kwargs}
+    final_model_settings = _with_openai_compatible_default_headers(
+        final_model_settings,
+        model_use=spec.use,
+    )
     model_instance = model_class(**final_model_settings)
     _attach_request_payload_logger(model_instance, config_name=spec.name)
 

@@ -18,6 +18,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 from config.database import engine, AsyncSessionLocal
 from config.redis import get_redis_client, close_redis
+from modules.creative_workshop.paper_translation_service import (
+    init_paper_translation_queue,
+    shutdown_paper_translation_queue,
+)
 from utils.token_usage_queue import init_token_usage_queue, shutdown_token_usage_queue
 
 # Import routers through domain module entrypoints where available.
@@ -26,6 +30,7 @@ from modules.auth import router as auth_router
 from modules.chat import router as chat_router
 from modules.chat.model_controller import router as chat_model_router
 from modules.chat.runtime_router import router as chat_runtime_router
+from modules.creative_workshop import router as creative_workshop_router
 from modules.favorites import router as favorite_router
 from modules.knowledge import router as knowledge_router
 from modules.knowledge.chunk_controller import router as knowledge_chunk_router
@@ -45,6 +50,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize token usage queue (async background worker)
     await init_token_usage_queue(redis_client, AsyncSessionLocal)
+    await init_paper_translation_queue(
+        redis_client,
+        concurrency=settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_WORKER_CONCURRENCY,
+    )
     
     logger.info("Application started successfully")
     
@@ -54,6 +63,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     from utils.http_client import close_http_client
 
+    await shutdown_paper_translation_queue()
     await shutdown_token_usage_queue()
     await close_http_client()
     await close_redis()
@@ -151,6 +161,7 @@ app.include_router(knowledge_router, prefix=settings.API_PREFIX)
 app.include_router(chat_router, prefix=settings.API_PREFIX)
 app.include_router(chat_model_router, prefix=settings.API_PREFIX)
 app.include_router(chat_runtime_router, prefix=settings.API_PREFIX)
+app.include_router(creative_workshop_router, prefix=settings.API_PREFIX)
 app.include_router(model_config_router, prefix=settings.API_PREFIX)
 app.include_router(model_config_internal_router, prefix=settings.API_PREFIX)
 app.include_router(knowledge_chunk_router, prefix=settings.API_PREFIX)

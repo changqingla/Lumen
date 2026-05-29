@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Sun, Moon, Headphones, LogOut, Book, Star, Notebook, ChevronsLeft, ChevronsRight, MoreVertical, Trash2, User, Building2, CreditCard, Settings as SettingsIcon, MessageSquareX, Bot } from 'lucide-react';
+import { Plus, Sun, Moon, Headphones, LogOut, Book, Star, Notebook, ChevronsLeft, ChevronsRight, MoreVertical, Trash2, User, Building2, CreditCard, Settings as SettingsIcon, MessageSquareX, Bot, WandSparkles } from 'lucide-react';
 import styles from './Sidebar.module.css';
 import { useTheme } from '@/shared/hooks/useTheme';
 import { useGuestMode } from '@/shared/hooks/useGuestMode';
@@ -306,6 +306,10 @@ export default function Sidebar({ onNewChat, onSelectChat, onDeleteChat, onClear
         <button type="button" className={styles.contentItem} onClick={() => navigate('/notes')}>
           <Notebook size={16} />
           <span className={styles.label}>笔记</span>
+        </button>
+        <button type="button" className={styles.contentItem} onClick={() => navigate('/creative-workshop')}>
+          <WandSparkles size={16} />
+          <span className={styles.label}>创意工坊</span>
         </button>
       </div>
 

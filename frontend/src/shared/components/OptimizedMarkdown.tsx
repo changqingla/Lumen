@@ -35,6 +35,13 @@ interface OptimizedMarkdownProps {
 
 const markdownSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
+  protocols: {
+    ...defaultSchema.protocols,
+    src: [
+      ...(defaultSchema.protocols?.src || []),
+      'data',
+    ],
+  },
   attributes: {
     ...defaultSchema.attributes,
     span: [

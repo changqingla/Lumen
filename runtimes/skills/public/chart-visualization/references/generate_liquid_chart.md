@@ -1,24 +1,24 @@
-# generate_liquid_chart — 水波图
+# generate_liquid_chart - Liquid Chart
 
-## 功能概述
-以液面高度展示单一百分比或进度，视觉动效强，适合达成率、资源占用等指标。
+## Overview
+Displays a single percentage or progress value as liquid fill height. It has strong visual motion and is suitable for completion rate, resource utilization, and similar metrics.
 
-## 输入字段
-### 必填
-- `percent`: number，取值范围 [0,1]，表示当前百分比或进度。
+## Input Fields
+### Required
+- `percent`: number. Range [0, 1], representing the current percentage or progress.
 
-### 可选
-- `shape`: string，默认 `circle`，可选 `circle`/`rect`/`pin`/`triangle`。
-- `style.backgroundColor`: string，自定义背景色。
-- `style.color`: string，自定义水波颜色。
-- `style.texture`: string，默认 `default`，可选 `default`/`rough`。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
-- `title`: string，默认空字符串。
+### Optional
+- `shape`: string, default `circle`. Options: `circle` / `rect` / `pin` / `triangle`.
+- `style.backgroundColor`: string. Custom background color.
+- `style.color`: string. Custom liquid wave color.
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
+- `title`: string, default empty string.
 
-## 使用建议
-确保百分比经过归一化；单图仅支持一个进度，如需多指标请并排生成多个水波图；标题可写“目标完成率 85%”。
+## Usage Tips
+Make sure the percentage is normalized. A single chart supports only one progress value. For multiple metrics, generate several liquid charts side by side. A title can be something like `Goal Completion Rate 85%`.
 
-## 返回结果
-- 返回水波图 URL，并在 `_meta.spec` 中记录参数。
+## Return Value
+- Returns a liquid chart URL and records parameters in `_meta.spec`.

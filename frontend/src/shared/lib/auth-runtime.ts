@@ -1,4 +1,4 @@
-export const AUTH_SESSION_RESET_EVENT = 'lumen:auth-session-reset';
+const AUTH_SESSION_RESET_EVENT = 'lumen:auth-session-reset';
 
 let hasAttachedStorageListener = false;
 
@@ -16,7 +16,7 @@ const handleStorageChange = (event: StorageEvent) => {
   emitAuthSessionReset();
 };
 
-export const ensureAuthRuntimeListeners = () => {
+const ensureAuthRuntimeListeners = () => {
   if (typeof window === 'undefined' || hasAttachedStorageListener) {
     return;
   }

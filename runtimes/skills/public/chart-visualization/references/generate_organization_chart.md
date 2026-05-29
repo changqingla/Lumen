@@ -1,21 +1,21 @@
-# generate_organization_chart — 组织架构图
+# generate_organization_chart - Organization Chart
 
-## 功能概述
-展示公司、团队或项目的层级关系，并可在节点上描述角色职责。
+## Overview
+Shows hierarchical relationships within a company, team, or project, and can describe roles or responsibilities on nodes.
 
-## 输入字段
-### 必填
-- `data`: object，必填，节点至少含 `name`（string），可选 `description`（string），子节点通过 `children`（array<object>）嵌套，最大深度建议为 3。
+## Input Fields
+### Required
+- `data`: object. Required. Nodes must contain at least `name` (string), with optional `description` (string). Child nodes are nested through `children` (array<object>). Maximum recommended depth is 3.
 
-### 可选
-- `orient`: string，默认 `vertical`，可选 `horizontal`/`vertical`。
-- `style.texture`: string，默认 `default`，可选 `default`/`rough`。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
+### Optional
+- `orient`: string, default `vertical`. Options: `horizontal` / `vertical`.
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
 
-## 使用建议
-节点名称使用岗位/角色，`description` 简要说明职责或人数；若组织较大可拆分多个子图或按部门分批展示。
+## Usage Tips
+Use positions or roles as node names, and use `description` to briefly describe responsibilities or headcount. If the organization is large, split it into multiple subcharts or render by department.
 
-## 返回结果
-- 返回组织架构图 URL，并在 `_meta.spec` 保存结构便于日后迭代。
+## Return Value
+- Returns an organization chart URL and saves the structure in `_meta.spec` for later iteration.

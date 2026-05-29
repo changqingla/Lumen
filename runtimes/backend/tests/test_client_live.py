@@ -16,7 +16,7 @@ from src.client import InsightFlowClient, StreamEvent
 
 # Skip entire module in CI or when no config/config.yaml exists
 _skip_reason = None
-if os.environ.get("CI"):
+if os.environ.get("CI") or os.environ.get("LUMEN_RUNTIME_SKIP_LIVE_TESTS"):
     _skip_reason = "Live tests skipped in CI"
 elif not Path(__file__).resolve().parents[2].joinpath("config", "config.yaml").exists():
     _skip_reason = "No config/config.yaml found — live tests require valid API credentials"

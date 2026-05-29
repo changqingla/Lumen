@@ -18,7 +18,7 @@ let cachedResponse: CachedChatModelsResponse | null = null;
 let inflightRequest: Promise<ChatModelsResponse> | null = null;
 let inflightAuthToken: string | null = null;
 
-export const CHAT_MODELS_UPDATED_EVENT = 'lumen:chat-models-updated';
+const CHAT_MODELS_UPDATED_EVENT = 'lumen:chat-models-updated';
 let hasAttachedAuthResetListener = false;
 
 const getChatModelsAuthToken = () => readAuthToken();
@@ -79,7 +79,7 @@ const loadChatModels = async (): Promise<ChatModelsResponse> => {
   return inflightRequest;
 };
 
-export const invalidateChatModelsCache = () => {
+const invalidateChatModelsCache = () => {
   cachedResponse = null;
   inflightRequest = null;
   inflightAuthToken = null;

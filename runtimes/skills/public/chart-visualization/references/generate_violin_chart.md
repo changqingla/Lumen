@@ -1,25 +1,25 @@
-# generate_violin_chart — 小提琴图
+# generate_violin_chart - Violin Chart
 
-## 功能概述
-结合核密度曲线与箱型统计展示不同类别的分布形态，适合对比多批次实验或群体表现。
+## Overview
+Combines kernel density curves with box-plot statistics to show distribution shapes across categories. Suitable for comparing multiple experiment batches or population performance.
 
-## 输入字段
-### 必填
-- `data`: array<object>，每条记录包含 `category`（string）与 `value`（number），可选 `group`（string）。
+## Input Fields
+### Required
+- `data`: array<object>. Each record contains `category` (string) and `value` (number), with optional `group` (string).
 
-### 可选
-- `style.backgroundColor`: string，设置背景色。
-- `style.palette`: string[]，定义配色列表。
-- `style.texture`: string，默认 `default`，可选 `default`/`rough`。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
-- `title`: string，默认空字符串。
-- `axisXTitle`: string，默认空字符串。
-- `axisYTitle`: string，默认空字符串。
+### Optional
+- `style.backgroundColor`: string. Sets the background color.
+- `style.palette`: string[]. Defines the color palette.
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
+- `title`: string, default empty string.
+- `axisXTitle`: string, default empty string.
+- `axisYTitle`: string, default empty string.
 
-## 使用建议
-各类别样本量建议 ≥30 以确保密度估计稳定；如需要突出四分位信息，可与箱型图结合展示。
+## Usage Tips
+At least 30 samples per category are recommended for stable density estimation. If quartile information should be emphasized, combine this with a box plot.
 
-## 返回结果
-- 返回小提琴图 URL，并在 `_meta.spec` 中保留配置。
+## Return Value
+- Returns a violin chart URL and keeps the configuration in `_meta.spec`.

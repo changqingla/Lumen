@@ -1,70 +1,70 @@
 ---
 name: domestic-global-research-status
-description: 撰写“国内外研究现状”专题分析。用户要求“国内外研究现状/国内外进展对比/中外研究差异”时使用。若已上传文档，先基于文档证据写作；证据不足时再补充联网搜索。优先使用 KB 直读工具，不依赖 reader_kb 本地副本路径。
+description: Write a domestic-versus-international research status analysis. Use when the user asks for research status across domestic and international contexts, progress comparisons, or cross-region research differences. If documents have been uploaded, write from document evidence first and supplement with web search only when evidence is insufficient. Prefer direct KB reading tools and do not depend on local reader_kb copy paths.
 ---
 
 # Domestic-Global Research Status Skill
 
-## 执行规则
+## Execution Rules
 
-1. 先用 `kb_list_docs` 确认文档范围。
-2. 先文档后联网：优先从文档提取证据，不足时再使用 `web_search`。
-3. 文档数量 >= 3 时，优先先用 `spawn_agent` 并行抽取文档证据。
-4. 文档数量 < 3 时，主 Agent 可直接阅读。
-5. 联网补充时仅检索“缺失信息”，避免重复堆砌。
+1. Use `kb_list_docs` first to confirm the document scope.
+2. Documents first, web second: extract evidence from documents first, and use `web_search` only when document evidence is insufficient.
+3. If there are 3 or more documents, preferably use `spawn_agent` first to extract document evidence in parallel.
+4. If there are fewer than 3 documents, the main agent may read directly.
+5. When supplementing with web search, search only for missing information and avoid redundant accumulation.
 
-## 子 Agent 文档抽取要求（文档数量 >= 3）
+## Subagent Document Extraction Requirements (3+ Documents)
 
-每个子 Agent 的 `task_description` 至少要求提取：
-- 研究方向与问题定义
-- 国内研究代表工作/机构/方法
-- 国外研究代表工作/机构/方法
-- 关键结果与评价指标
-- 发展阶段判断与局限
-- 可引用证据（含文档 ID 与行号）
+Each subagent `task_description` should require extraction of at least:
+- Research direction and problem definition
+- Representative domestic work, institutions, and methods
+- Representative international work, institutions, and methods
+- Key results and evaluation metrics
+- Development-stage judgment and limitations
+- Quotable evidence, including document ID and line numbers
 
-`allowed_tools` 仅使用：
+Use only the following `allowed_tools`:
 - `kb_list_docs`
 - `kb_read_doc`
 - `kb_read_doc_lines`
 - `kb_search_doc`
 
-## 联网补充规则
+## Web Supplement Rules
 
-1. 仅在以下情况调用 `web_search`：
-   - 文档缺少“国外/国内”某一侧证据
-   - 缺少近两年的最新进展
-   - 缺少关键机构、基准数据或政策背景
-2. 先列出信息缺口，再执行有针对性的搜索查询。
-3. 如果 `web_search` 不可用或被禁用，明确说明无法补充联网证据。
+1. Call `web_search` only in the following cases:
+   - Documents lack evidence for either the domestic or international side.
+   - Recent progress from the last two years is missing.
+   - Key institutions, benchmark data, or policy background are missing.
+2. List information gaps first, then run targeted search queries.
+3. If `web_search` is unavailable or disabled, clearly state that web evidence cannot be supplemented.
 
-## 输出结构（必须完整）
+## Output Structure (Required)
 
 ```markdown
-# {主题}国内外研究现状
+# Domestic and International Research Status on {Topic}
 
-## 1. 研究范围与问题定义
-## 2. 国内研究现状
-## 3. 国外研究现状
-## 4. 国内外对比分析（方向/方法/指标/应用）
-## 5. 研究空白与发展趋势
-## 6. 结论与建议
-## 参考来源（文档来源 + 网络来源）
+## 1. Research Scope and Problem Definition
+## 2. Domestic Research Status
+## 3. International Research Status
+## 4. Comparative Analysis (Directions / Methods / Metrics / Applications)
+## 5. Research Gaps and Development Trends
+## 6. Conclusions and Recommendations
+## References (Document Sources + Web Sources)
 ```
 
-## 质量门槛
+## Quality Bar
 
-1. 国内与国外部分都必须有实质内容，不能一侧缺失。
-2. 每个关键判断都要有证据映射（文档路径或网络来源）。
-3. 必须给出至少 3 条“国内外差异”并解释原因。
-4. 必须给出“研究空白”和“下一步方向”，不能停留在描述层。
-5. 若网络资料参与结论，必须标注其时效性（日期或年份）。
-6. 输出的最终报告中不要使用文档id，如果需要应该使用文档名称。
+1. Both the domestic and international sections must contain substantive content. Neither side may be missing.
+2. Every key judgment must include evidence mapping, such as document paths or web sources.
+3. Provide at least 3 domestic-versus-international differences and explain their causes.
+4. Include research gaps and next-step directions. Do not stop at descriptive reporting.
+5. If web materials support conclusions, mark their timeliness with dates or years.
+6. Do not use document IDs in the final report. Use document names instead when references are needed.
 
-## 最终交付要求
+## Final Delivery Requirements
 
-1. 将最终结果整理为完整的 Markdown 文档，优先在 sandbox 中生成，例如使用 `sandbox_write_file` 写入 `documents/国内外研究现状-{主题}.md`。
-2. 生成后必须调用 `sandbox_publish_file` 发布该 Markdown 文件，确保前端能够展示可下载产物；不要只调用 `write_file` 后就结束。
-3. 如需自检，可使用 `sandbox_read_file`、`sandbox_read_lines` 或 `sandbox_list_directory` 检查文件内容与路径。
-4. 最终答复必须包含已发布 Markdown 文档的交付信息，明确告诉用户文件已可下载，不能只说“已经生成”或只粘贴正文。
-5. 最终答复中不要暴露 MinIO 内部路径；如需说明结果，只描述已生成并已提供下载的 Markdown 文档及其用途。
+1. Organize the final result as a complete Markdown document, preferably generated in the sandbox, for example by using `sandbox_write_file` to write `documents/domestic-global-research-status-{topic}.md`.
+2. After generation, call `sandbox_publish_file` to publish the Markdown file so the frontend can display a downloadable artifact. Do not stop after only calling `write_file`.
+3. If self-checking is needed, use `sandbox_read_file`, `sandbox_read_lines`, or `sandbox_list_directory` to inspect file content and paths.
+4. The final response must include delivery information for the published Markdown document and clearly tell the user that the file is available for download. Do not only say that it has been generated, and do not only paste the body text.
+5. Do not expose internal MinIO paths in the final response. If describing the result, only state that the Markdown document has been generated and made available for download, along with its purpose.

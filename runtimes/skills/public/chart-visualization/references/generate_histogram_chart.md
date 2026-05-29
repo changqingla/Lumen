@@ -1,26 +1,26 @@
-# generate_histogram_chart — 直方图
+# generate_histogram_chart - Histogram
 
-## 功能概述
-通过分箱显示连续数值的频数或概率分布，便于识别偏态、离群与集中区间。
+## Overview
+Shows frequency or probability distribution of continuous values through bins, making it easier to identify skewness, outliers, and concentration ranges.
 
-## 输入字段
-### 必填
-- `data`: number[]，至少 1 条，用于构建频数分布。
+## Input Fields
+### Required
+- `data`: number[]. At least 1 value, used to build the frequency distribution.
 
-### 可选
-- `binNumber`: number，自定义分箱数量，未设置则自动估算。
-- `style.backgroundColor`: string，设置背景色。
-- `style.palette`: string[]，定义柱体颜色。
-- `style.texture`: string，默认 `default`，可选 `default`/`rough`。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
-- `title`: string，默认空字符串。
-- `axisXTitle`: string，默认空字符串。
-- `axisYTitle`: string，默认空字符串。
+### Optional
+- `binNumber`: number. Custom number of bins. If omitted, it is estimated automatically.
+- `style.backgroundColor`: string. Sets the background color.
+- `style.palette`: string[]. Defines bar colors.
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
+- `title`: string, default empty string.
+- `axisXTitle`: string, default empty string.
+- `axisYTitle`: string, default empty string.
 
-## 使用建议
-清理空值/异常后再传入；样本量建议 ≥30；根据业务意义调整 `binNumber` 以兼顾细节与整体趋势。
+## Usage Tips
+Remove missing values and anomalies before uploading. A sample size of at least 30 is recommended. Adjust `binNumber` according to business meaning to balance detail and overall trend.
 
-## 返回结果
-- 返回直方图 URL，并在 `_meta.spec` 存储参数。
+## Return Value
+- Returns a histogram URL and stores parameters in `_meta.spec`.

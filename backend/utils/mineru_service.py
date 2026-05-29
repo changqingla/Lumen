@@ -3,6 +3,8 @@
 import io
 import logging
 import zipfile
+from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any, Dict
 
 import httpx
@@ -11,6 +13,17 @@ from config.settings import settings
 from utils.http_client import get_http_client
 
 logger = logging.getLogger(__name__)
+
+MINERU_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+
+@dataclass(frozen=True)
+class MineruMarkdownResult:
+    """Markdown and companion assets extracted from a MinerU result archive."""
+
+    markdown: str
+    assets: dict[str, bytes]
+    markdown_path: str
 
 
 class MineruService:
@@ -149,6 +162,12 @@ class MineruService:
     @staticmethod
     async def get_content(batch_id: str) -> str:
         """Download and extract markdown content from MinerU result."""
+        result = await MineruService.get_content_with_assets(batch_id)
+        return result.markdown
+
+    @staticmethod
+    async def get_content_with_assets(batch_id: str) -> MineruMarkdownResult:
+        """Download and extract markdown content plus image assets from MinerU result."""
         try:
             status = await MineruService.get_task_status(batch_id)
 
@@ -167,10 +186,14 @@ class MineruService:
                 zip_data = response.content
 
             logger.info(f"[MinerU] Downloaded {len(zip_data)} bytes, extracting markdown...")
-            markdown_content = MineruService._extract_markdown_from_zip(zip_data)
-            logger.info(f"[MinerU] Extracted {len(markdown_content)} chars of markdown")
+            result = MineruService._extract_markdown_result_from_zip(zip_data)
+            logger.info(
+                "[MinerU] Extracted %s chars of markdown and %s asset(s)",
+                len(result.markdown),
+                len(result.assets),
+            )
 
-            return markdown_content
+            return result
 
         except Exception as e:
             logger.error(f"[MinerU] Get content error: {e}")
@@ -179,6 +202,11 @@ class MineruService:
     @staticmethod
     def _extract_markdown_from_zip(zip_data: bytes) -> str:
         """Extract markdown content from MinerU result zip file."""
+        return MineruService._extract_markdown_result_from_zip(zip_data).markdown
+
+    @staticmethod
+    def _extract_markdown_result_from_zip(zip_data: bytes) -> MineruMarkdownResult:
+        """Extract markdown and companion image assets from MinerU result zip file."""
         try:
             with zipfile.ZipFile(io.BytesIO(zip_data), "r") as zf:
                 file_list = zf.namelist()
@@ -198,7 +226,32 @@ class MineruService:
                 with zf.open(md_file) as f:
                     content = f.read().decode("utf-8")
 
-                return content
+                md_parent = PurePosixPath(md_file).parent
+                assets: dict[str, bytes] = {}
+                for name in file_list:
+                    if name.endswith("/"):
+                        continue
+                    path = PurePosixPath(name)
+                    if any(part in {"", ".", ".."} for part in path.parts):
+                        continue
+                    suffix = PurePosixPath(name).suffix.lower()
+                    if suffix not in MINERU_IMAGE_EXTENSIONS:
+                        continue
+                    try:
+                        relative_path = path.relative_to(md_parent)
+                    except ValueError:
+                        relative_path = path.name
+                    normalized = str(relative_path).lstrip("/")
+                    if not normalized or normalized.startswith("../") or "/../" in normalized:
+                        continue
+                    with zf.open(name) as asset_file:
+                        assets[normalized] = asset_file.read()
+
+                return MineruMarkdownResult(
+                    markdown=content,
+                    assets=assets,
+                    markdown_path=md_file,
+                )
 
         except zipfile.BadZipFile:
             raise Exception("Invalid zip file received from MinerU")

@@ -1,6 +1,6 @@
 import os
 
-os.environ.setdefault("DEBUG", "false")
+os.environ["DEBUG"] = "false"
 
 import pytest
 
@@ -20,6 +20,62 @@ def test_build_run_request_template_uses_messages_tuple_stream_mode():
     )
 
     assert payload["stream_mode"] == ["messages-tuple", "values", "custom"]
+    assert payload["context"]["disable_model_streaming"] is False
+
+
+def test_build_run_request_template_can_disable_model_streaming():
+    service = InsightRuntimeService()
+
+    payload = service.build_run_request_template(
+        thread_id="thread-123",
+        assistant_id="assistant-123",
+        model_name="gpt-5.4",
+        thinking_enabled=False,
+        is_plan_mode=False,
+        disable_model_streaming=True,
+    )
+
+    assert payload["context"]["disable_model_streaming"] is True
+
+
+@pytest.mark.asyncio
+async def test_download_thread_artifact_text_fetches_gateway_artifact(monkeypatch):
+    service = InsightRuntimeService()
+    service.gateway_url = "http://gateway"
+
+    calls = []
+
+    class _Response:
+        content = "# 标题".encode("utf-8")
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url):
+            calls.append(url)
+            return _Response()
+
+    monkeypatch.setattr(insight_runtime_service_module.httpx, "AsyncClient", _Client)
+
+    result = await service.download_thread_artifact_text(
+        "thread-123",
+        "/mnt/user-data/outputs/demo.zh.md",
+    )
+
+    assert result == "# 标题"
+    assert calls == [
+        "http://gateway/api/threads/thread-123/artifacts/mnt/user-data/outputs/demo.zh.md?download=true"
+    ]
 
 
 @pytest.mark.asyncio

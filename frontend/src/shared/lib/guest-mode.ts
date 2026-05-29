@@ -83,8 +83,6 @@ export const getGuestModeState = (): GuestModeState => syncCachedGuestModeState(
 
 export const isGuestModeEnabled = (): boolean => syncCachedGuestModeState().enabled;
 
-export const hasGuestUsedMessage = (): boolean => syncCachedGuestModeState().usedMessageCount > 0;
-
 export const getGuestUsedMessageCount = (): number => syncCachedGuestModeState().usedMessageCount;
 
 export const getGuestModeGuestId = (): string => syncCachedGuestModeState().guestId;

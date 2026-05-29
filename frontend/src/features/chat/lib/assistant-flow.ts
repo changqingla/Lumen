@@ -16,19 +16,19 @@ export interface AssistantTupleMessage {
   status?: string;
 }
 
-export interface AssistantFlowContentBlock {
+interface AssistantFlowContentBlock {
   type: 'content';
   id: string;
   content: string;
 }
 
-export interface AssistantFlowProcessingBlock {
+interface AssistantFlowProcessingBlock {
   type: 'processing';
   id: string;
   messages: AssistantTupleMessage[];
 }
 
-export type AssistantFlowBlock =
+type AssistantFlowBlock =
   | AssistantFlowContentBlock
   | AssistantFlowProcessingBlock;
 

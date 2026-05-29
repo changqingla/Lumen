@@ -5,7 +5,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { PdfLoader, PdfHighlighter } from 'react-pdf-highlighter';
 import type { Content, ScaledPosition } from 'react-pdf-highlighter';
-import pdfjsPkg from 'react-pdf-highlighter/node_modules/pdfjs-dist/package.json';
+import pdfjsPkg from 'pdfjs-dist/package.json';
 import { FileText, Star, X } from 'lucide-react';
 import { getFileIcon } from '@/shared/utils/fileIcons';
 import styles from './PDFViewer.module.css';
@@ -23,6 +23,7 @@ interface PDFViewerProps {
   onClose?: () => void;
   onToggleFavorite?: () => void;
   isFavorited?: boolean;
+  hideToolbar?: boolean;
 }
 
 export default function PDFViewer({ 
@@ -31,7 +32,8 @@ export default function PDFViewer({
   onTextSelect, 
   onClose, 
   onToggleFavorite, 
-  isFavorited 
+  isFavorited,
+  hideToolbar = false,
 }: PDFViewerProps) {
   const [error, setError] = useState<string>('');
   const [selectedText, setSelectedText] = useState<string>('');
@@ -41,8 +43,8 @@ export default function PDFViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const justSelectedRef = useRef<boolean>(false); // 用于防止选择后立即触发点击隐藏
 
-  // 将相对路径转换为绝对路径
-  const absoluteUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`;
+  // 将相对路径转换为绝对路径，上传预览会直接传入 blob URL
+  const absoluteUrl = /^(https?:|blob:)/.test(url) ? url : `${window.location.origin}${url}`;
 
   // 处理文本选择完成
   const handleSelectionFinished = useCallback((
@@ -97,34 +99,35 @@ export default function PDFViewer({
 
   return (
     <div className={styles.container}>
-      {/* 工具栏 */}
-      <div className={styles.toolbar}>
-        <div className={styles.toolbarLeft}>
-          <img src={getFileIcon(fileName || 'document.pdf')} alt="File" className={styles.fileIcon} />
-          <span className={styles.fileName}>{fileName || '文档预览'}</span>
+      {!hideToolbar && (
+        <div className={styles.toolbar}>
+          <div className={styles.toolbarLeft}>
+            <img src={getFileIcon(fileName || 'document.pdf')} alt="File" className={styles.fileIcon} />
+            <span className={styles.fileName}>{fileName || '文档预览'}</span>
+          </div>
+
+          <div className={styles.toolbarCenter} />
+
+          <div className={styles.toolbarRight}>
+            {onToggleFavorite && (
+              <button
+                onClick={onToggleFavorite}
+                className={`${styles.favoriteBtn} ${isFavorited ? styles.favorited : ''}`}
+                title={isFavorited ? "取消收藏" : "收藏文档"}
+              >
+                <Star size={18} fill={isFavorited ? 'currentColor' : 'none'} />
+              </button>
+            )}
+
+            {onClose && (
+              <button onClick={onClose} className={styles.closeBtn} title="关闭预览">
+                <X size={16} />
+                <span className={styles.closeBtnText}>关闭预览</span>
+              </button>
+            )}
+          </div>
         </div>
-
-        <div className={styles.toolbarCenter} />
-
-        <div className={styles.toolbarRight}>
-          {onToggleFavorite && (
-            <button
-              onClick={onToggleFavorite}
-              className={`${styles.favoriteBtn} ${isFavorited ? styles.favorited : ''}`}
-              title={isFavorited ? "取消收藏" : "收藏文档"}
-            >
-              <Star size={18} fill={isFavorited ? 'currentColor' : 'none'} />
-            </button>
-          )}
-
-          {onClose && (
-            <button onClick={onClose} className={styles.closeBtn} title="关闭预览">
-              <X size={16} />
-              <span className={styles.closeBtnText}>关闭预览</span>
-            </button>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* PDF内容 */}
       <div 

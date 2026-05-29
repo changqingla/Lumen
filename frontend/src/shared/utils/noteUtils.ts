@@ -20,7 +20,7 @@ export interface Message {
  * @param aiMessageIndex AI消息在列表中的索引
  * @returns 对应的用户消息，如果没找到返回null
  */
-export function findUserQuestion(messages: Message[], aiMessageIndex: number): Message | null {
+function findUserQuestion(messages: Message[], aiMessageIndex: number): Message | null {
   // 从AI消息的前一条开始向前查找用户消息
   for (let i = aiMessageIndex - 1; i >= 0; i--) {
     if (messages[i].role === 'user') {
@@ -36,7 +36,7 @@ export function findUserQuestion(messages: Message[], aiMessageIndex: number): M
  * @param userMessage 用户消息
  * @returns 笔记标题
  */
-export function generateNoteTitle(userMessage: Message): string {
+function generateNoteTitle(userMessage: Message): string {
   const content = userMessage.content.trim();
   if (content.length <= 50) {
     return content;
@@ -69,7 +69,7 @@ export function generateNoteTitle(userMessage: Message): string {
  * @param aiMessage AI消息
  * @returns 笔记内容
  */
-export function generateNoteContent(aiMessage: Message): string {
+function generateNoteContent(aiMessage: Message): string {
   // 只使用AI回复的主要内容，不包含thinking过程
   return aiMessage.content.trim();
 }
@@ -105,7 +105,7 @@ async function ensureChatNotesFolder(): Promise<string | null> {
  * @param aiMessage AI消息
  * @returns Promise<保存结果>
  */
-export async function saveConversationToNote(
+async function saveConversationToNote(
   userMessage: Message,
   aiMessage: Message
 ): Promise<{ success: boolean; noteId?: string; error?: string }> {

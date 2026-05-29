@@ -144,6 +144,27 @@ class Settings(BaseSettings):
     HTTP_DEFAULT_TIMEOUT: float = 60.0
     HTTP_UPLOAD_TIMEOUT: float = 300.0
     HTTP_DOWNLOAD_TIMEOUT: float = 120.0
+
+    # ============================================================================
+    # 创意工坊配置
+    # ============================================================================
+    CREATIVE_WORKSHOP_IMAGE_BASE_URL: str = "https://api.openai.com/v1"
+    CREATIVE_WORKSHOP_IMAGE_API_KEY: str = ""
+    CREATIVE_WORKSHOP_IMAGE_MODEL: str = "gpt-image-2"
+    CREATIVE_WORKSHOP_IMAGE_TIMEOUT: float = 180.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR: str = "logs/creative-workshop/paper-translation"
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_MINERU_POLL_INTERVAL_SECONDS: float = 5.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_MINERU_MAX_ATTEMPTS: int = 180
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_TIMEOUT_SECONDS: float = 1800.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_WORKER_CONCURRENCY: int = 1
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_VISIBILITY_TIMEOUT_SECONDS: float = 120.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_MAX_RETRIES: int = 0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_RETRY_DELAY_SECONDS: float = 5.0
+
+    # ============================================================================
+    # 审计日志配置
+    # ============================================================================
+    AUDIT_LOG_DIR: str = "logs"
     
     # ============================================================================
     # 安全配置

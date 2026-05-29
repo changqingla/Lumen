@@ -4,6 +4,14 @@
 
 ## 快速启动
 
+后端默认使用已构建好的 `lumen-backend:paper-translation` 镜像。首次使用或后端 Python 依赖变更后，先构建一次镜像：
+
+```bash
+docker build -f docker/backend-paper-translation.Dockerfile -t lumen-backend:paper-translation .
+```
+
+日常修改 `backend/` 代码不需要重新构建镜像，Compose 会把代码目录挂载到容器内。
+
 使用默认值直接启动：
 
 ```bash

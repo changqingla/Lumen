@@ -1,24 +1,24 @@
-# generate_radar_chart — 雷达图
+# generate_radar_chart - Radar Chart
 
-## 功能概述
-在多维坐标系上比较单个对象或多对象的能力维度，常用于评测、产品对比、绩效画像。
+## Overview
+Compares capability dimensions for one or more objects in a multidimensional coordinate system. Commonly used for evaluations, product comparisons, and performance profiles.
 
-## 输入字段
-### 必填
-- `data`: array<object>，每条记录包含 `name`（string）与 `value`（number），可选 `group`（string）。
+## Input Fields
+### Required
+- `data`: array<object>. Each record contains `name` (string) and `value` (number), with optional `group` (string).
 
-### 可选
-- `style.backgroundColor`: string，设置背景色。
-- `style.lineWidth`: number，设置雷达线宽。
-- `style.palette`: string[]，定义系列颜色。
-- `style.texture`: string，默认 `default`，可选 `default`/`rough`。
-- `theme`: string，默认 `default`，可选 `default`/`academy`/`dark`。
-- `width`: number，默认 `600`。
-- `height`: number，默认 `400`。
-- `title`: string，默认空字符串。
+### Optional
+- `style.backgroundColor`: string. Sets the background color.
+- `style.lineWidth`: number. Sets radar line width.
+- `style.palette`: string[]. Defines series colors.
+- `style.texture`: string, default `default`. Options: `default` / `rough`.
+- `theme`: string, default `default`. Options: `default` / `academy` / `dark`.
+- `width`: number, default `600`.
+- `height`: number, default `400`.
+- `title`: string, default empty string.
 
-## 使用建议
-维度数量控制在 4~8 之间；不同对象通过 `group` 区分并保证同一维度都给出数值；如量纲不同需先归一化。
+## Usage Tips
+Keep the number of dimensions between 4 and 8. Distinguish different objects with `group` and provide values for each dimension. Normalize values first if dimensions use different units.
 
-## 返回结果
-- 返回雷达图 URL，并附 `_meta.spec`。
+## Return Value
+- Returns a radar chart URL and includes `_meta.spec`.

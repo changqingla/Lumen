@@ -7,7 +7,7 @@ import { safeLocalStorageRemove } from '@/shared/utils/localStorage';
 // API 基础配置
 // 开发环境使用相对路径，通过 Vite 代理
 // 生产环境使用环境变量配置的完整 URL
-export const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const attachGuestHeaders = (headers: Headers, token: string | null) => {
   if (token || !isGuestModeEnabled() || headers.has('X-Guest-Id')) {
@@ -118,6 +118,38 @@ async function request<T>(
   return data as T;
 }
 
+async function requestText(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<string> {
+  const token = localStorage.getItem('auth_token');
+  const headers = new Headers(options.headers || undefined);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  attachGuestHeaders(headers, token);
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    let errorMessage = responseText || `请求失败 (${response.status})`;
+    try {
+      const parsed = JSON.parse(responseText);
+      const error = parsed?.detail?.error || parsed?.error || parsed;
+      errorMessage = error?.message || parsed?.detail || errorMessage;
+    } catch {
+      // Keep plain text error.
+    }
+    throw new Error(errorMessage);
+  }
+
+  return responseText;
+}
+
 async function requestBlob(
   endpoint: string,
   options: RequestInit = {}
@@ -148,7 +180,7 @@ async function requestBlob(
   }
 
   const contentDisposition = response.headers.get('content-disposition') || '';
-  const utf8Match = contentDisposition.match(/filename\\*=UTF-8''([^;]+)/i);
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
   const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
   const fileName = utf8Match?.[1]
     ? decodeURIComponent(utf8Match[1])
@@ -189,7 +221,7 @@ export interface ChatAttachment {
   metadata?: Record<string, unknown>;
 }
 
-export const serializeChatAttachments = (attachments?: ChatAttachment[]) => (
+const serializeChatAttachments = (attachments?: ChatAttachment[]) => (
   (attachments || []).map((attachment) => ({
     attachment_id: attachment.attachment_id,
     name: attachment.name,
@@ -241,7 +273,7 @@ export interface ChatModelOption {
   source?: 'system' | 'user';
 }
 
-export interface ModelProviderCatalogModel {
+interface ModelProviderCatalogModel {
   name: string;
   display_name: string;
   description?: string | null;
@@ -291,12 +323,12 @@ export interface ProviderRemoteModelsResponse {
   base_url: string;
   models: ModelProviderCatalogModel[];
 }
-export interface ChatAssistantTupleToolCall {
+interface ChatAssistantTupleToolCall {
   id?: string;
   name: string;
   args?: unknown;
 }
-export interface ChatAssistantTupleMessage {
+interface ChatAssistantTupleMessage {
   type: 'ai' | 'tool';
   id: string;
   content?: string;
@@ -364,7 +396,7 @@ export interface ChatTaskModeDecisionEvent {
   [key: string]: unknown;
 }
 
-export interface ChatRuntimePrepareRequest {
+interface ChatRuntimePrepareRequest {
   model_name?: string;
   plan_mode?: boolean;
   sync_workspace_assets?: boolean;
@@ -408,7 +440,7 @@ export interface ChatRuntimeThreadUploadFile {
   markdown_artifact_url?: string | null;
 }
 
-export interface ChatRuntimeThreadUploadsResponse {
+interface ChatRuntimeThreadUploadsResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
@@ -419,7 +451,7 @@ export interface ChatRuntimeThreadUploadsResponse {
   kb_materialized_files: Record<string, unknown>[];
 }
 
-export interface ChatRuntimeThreadUploadMutationResponse {
+interface ChatRuntimeThreadUploadMutationResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
@@ -429,7 +461,7 @@ export interface ChatRuntimeThreadUploadMutationResponse {
   message: string;
 }
 
-export interface ChatRuntimeThreadUploadDeleteResponse {
+interface ChatRuntimeThreadUploadDeleteResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
@@ -437,7 +469,7 @@ export interface ChatRuntimeThreadUploadDeleteResponse {
   message: string;
 }
 
-export interface ChatSessionConfigEditableFields {
+interface ChatSessionConfigEditableFields {
   kbIds?: string[];
   docIds?: string[];
   sourceType?: 'home' | 'knowledge' | 'favorites';
@@ -445,7 +477,7 @@ export interface ChatSessionConfigEditableFields {
   modelName?: string;
 }
 
-export interface ChatSessionRuntimeMeta {
+interface ChatSessionRuntimeMeta {
   runtime?: string;
   threadId?: string;
   assistantId?: string;
@@ -456,7 +488,7 @@ export interface ChatSessionConfig extends ChatSessionConfigEditableFields, Chat
   uiMode: ChatUIMode;
 }
 
-export type ChatSessionConfigUpdate = Partial<ChatSessionConfigEditableFields> & {
+type ChatSessionConfigUpdate = Partial<ChatSessionConfigEditableFields> & {
   uiMode: ChatUIMode;
 };
 
@@ -581,7 +613,7 @@ export interface NoteListItem {
   createdAt: string;
 }
 
-export interface ChatSessionSummary {
+interface ChatSessionSummary {
   id: string;
   title: string;
   lastMessage: string;
@@ -601,6 +633,47 @@ export interface AdminUserSummary {
   created_at: string;
   last_active_at: string | null;
   weekly_token_total: number;
+}
+
+export type CreativeImageSize =
+  | '1024x1024'
+  | '1536x1024'
+  | '1024x1536'
+  | '2048x2048'
+  | '3840x2160'
+  | '2160x3840'
+  | 'auto';
+
+export type CreativeImageQuality = 'low' | 'medium' | 'high' | 'auto';
+export type CreativeImageOutputFormat = 'png' | 'jpeg' | 'webp';
+export type PaperTranslationStatus = 'queued' | 'converting' | 'translating' | 'completed' | 'failed';
+
+interface CreativeImageGenerationRequest {
+  prompt: string;
+  size: CreativeImageSize;
+  quality: CreativeImageQuality;
+  output_format: CreativeImageOutputFormat;
+  output_compression?: number;
+}
+
+interface CreativeImageGenerationResponse {
+  b64_json: string;
+  mime_type: string;
+  model: string;
+  size: CreativeImageSize;
+  quality: CreativeImageQuality;
+  output_format: CreativeImageOutputFormat;
+}
+
+export interface PaperTranslationTaskResponse {
+  task_id: string;
+  status: PaperTranslationStatus;
+  filename: string;
+  thread_id: string;
+  model_name?: string | null;
+  created_at: string;
+  updated_at: string;
+  error?: string | null;
 }
 
 // 认证相关 API
@@ -1451,7 +1524,7 @@ export const favoriteAPI = {
 };
 
 // ==================== 聊天会话相关 API ====================
-export const chatAPI = {
+const chatAPI = {
 
   /**
    * 获取用户的所有聊天会话
@@ -2031,6 +2104,85 @@ export const adminAPI = {
   },
 };
 
+// 创意工坊相关 API
+const creativeWorkshopAPI = {
+  /**
+   * 使用 Image2 生成图片
+   */
+  async generateImage(data: CreativeImageGenerationRequest) {
+    return request<CreativeImageGenerationResponse>('/creative-workshop/images/generations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /**
+   * 创建论文翻译任务
+   */
+  async createPaperTranslationTask(file: File, options?: { signal?: AbortSignal; modelName?: string }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const modelName = options?.modelName?.trim();
+    if (modelName) {
+      formData.append('model_name', modelName);
+    }
+    return request<PaperTranslationTaskResponse>('/creative-workshop/paper-translation/tasks', {
+      method: 'POST',
+      body: formData,
+      signal: options?.signal,
+    });
+  },
+
+  /**
+   * 获取论文翻译任务状态
+   */
+  async getPaperTranslationTask(taskId: string, options?: { signal?: AbortSignal }) {
+    return request<PaperTranslationTaskResponse>(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async getLatestActivePaperTranslationTask(options?: { signal?: AbortSignal }) {
+    return request<PaperTranslationTaskResponse>('/creative-workshop/paper-translation/tasks/active/latest', {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async getPaperTranslationResult(taskId: string, options?: { signal?: AbortSignal }) {
+    return requestText(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/result`, {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async getPaperTranslationSourcePdf(taskId: string, options?: { signal?: AbortSignal }) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/source`, {
+      method: 'GET',
+      signal: options?.signal,
+    });
+  },
+
+  async downloadPaperTranslationMarkdown(taskId: string) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/markdown`, {
+      method: 'GET',
+    });
+  },
+
+  async downloadPaperTranslationMarkdownForKnowledgeBase(taskId: string) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/markdown/knowledge-base`, {
+      method: 'GET',
+    });
+  },
+
+  async downloadPaperTranslationPdf(taskId: string) {
+    return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/pdf`, {
+      method: 'GET',
+    });
+  },
+};
+
 // ==================== 统一导出所有 API ====================
 export const api = {
   ...authAPI,
@@ -2040,4 +2192,5 @@ export const api = {
   ...chatAPI,
   ...organizationAPI,
   ...adminAPI,
+  ...creativeWorkshopAPI,
 };

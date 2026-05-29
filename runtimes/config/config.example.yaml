@@ -223,6 +223,7 @@ agent_loop:
 # 在其他平台上：使用 Docker
 sandbox:
   use: src.community.aio_sandbox:AioSandboxProvider
+  # image: lumen-sandbox:ppt-master  # 示例：使用安装了 ppt-master 依赖的本地派生沙箱镜像
 
 #   # 注意：技能目录会自动从 skills.path 挂载到 skills.container_path
 #   # mounts:

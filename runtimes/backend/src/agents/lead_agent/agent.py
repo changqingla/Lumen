@@ -276,6 +276,7 @@ def make_lead_agent(config: RunnableConfig):
 
     thinking_enabled = cfg.get("thinking_enabled", True)
     reasoning_effort = cfg.get("reasoning_effort", None)
+    disable_model_streaming = bool(cfg.get("disable_model_streaming", False))
     requested_model_name: str | None = cfg.get("model_name") or cfg.get("model")
     dynamic_model_token: str | None = cfg.get("dynamic_model_token")
     thread_id: str | None = cfg.get("thread_id")
@@ -311,15 +312,22 @@ def make_lead_agent(config: RunnableConfig):
         logger.warning(f"Thinking mode is enabled but model '{model_spec.name}' does not support it; fallback to non-thinking mode.")
         thinking_enabled = False
 
+    effective_reasoning_effort = reasoning_effort
+    if effective_reasoning_effort is None and model_spec.supports_reasoning_effort:
+        config_reasoning_effort = model_spec.config.get("reasoning_effort")
+        if config_reasoning_effort is not None:
+            effective_reasoning_effort = config_reasoning_effort
+
     logger.info(
-        "Create Agent(%s) -> thinking_enabled: %s, reasoning_effort: %s, model_name: %s, is_plan_mode: %s, subagent_enabled: %s, max_concurrent_subagents: %s",
+        "Create Agent(%s) -> thinking_enabled: %s, reasoning_effort: %s, model_name: %s, is_plan_mode: %s, subagent_enabled: %s, max_concurrent_subagents: %s, disable_model_streaming: %s",
         agent_name or "default",
         thinking_enabled,
-        reasoning_effort,
+        effective_reasoning_effort,
         model_spec.name,
         is_plan_mode,
         subagent_enabled,
         max_concurrent_subagents,
+        disable_model_streaming,
     )
 
     # 注入运行元数据，用于 LangSmith 链路追踪标记
@@ -331,9 +339,10 @@ def make_lead_agent(config: RunnableConfig):
             "agent_name": agent_name or "default",
             "model_name": model_spec.name or "default",
             "thinking_enabled": thinking_enabled,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": effective_reasoning_effort,
             "is_plan_mode": is_plan_mode,
             "subagent_enabled": subagent_enabled,
+            "disable_model_streaming": disable_model_streaming,
             "dynamic_model_token": dynamic_model_token,
             "resolved_model_spec": dump_resolved_chat_model_spec(model_spec),
         }
@@ -362,11 +371,17 @@ def make_lead_agent(config: RunnableConfig):
         )
 
     # 默认 lead agent（保持原有行为）
+    model_kwargs = {}
+    if reasoning_effort is not None:
+        model_kwargs["reasoning_effort"] = reasoning_effort
+    if disable_model_streaming:
+        model_kwargs["disable_streaming"] = True
+
     return create_agent(
         model=create_chat_model_from_spec(
             model_spec,
             thinking_enabled=thinking_enabled,
-            reasoning_effort=reasoning_effort,
+            **model_kwargs,
         ),
         tools=get_available_tools(
             model_name=model_spec.name,

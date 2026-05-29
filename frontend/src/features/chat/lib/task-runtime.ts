@@ -8,9 +8,9 @@ import type {
   RAGTaskState,
 } from '@/features/chat/api/rag';
 
-export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
+type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'cancelled';
 
-export interface TaskSnapshotTask {
+interface TaskSnapshotTask {
   taskId: string;
   title: string;
   description?: string;
@@ -35,7 +35,7 @@ export interface TaskSnapshotState {
   lastOperation?: 'created' | 'updated' | string;
 }
 
-export type TaskActivationLevel = 'none' | 'latent' | 'suggested' | 'required';
+type TaskActivationLevel = 'none' | 'latent' | 'suggested' | 'required';
 
 export interface TaskModeDecisionState {
   uiMode: ChatUIMode;

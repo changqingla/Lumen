@@ -26,4 +26,4 @@ export function getFileIcon(filename: string): string {
   }
 }
 
-export { pdfIconUrl, docIconUrl, docxIconUrl, txtIconUrl, mdIconUrl };
+export { pdfIconUrl };
