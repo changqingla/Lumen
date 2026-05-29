@@ -271,18 +271,6 @@ function MarkdownImage({ src, alt, deferImages = false, ...props }: MarkdownImag
         className="markdown-inline-image"
         onError={() => setHasLoadError(true)}
       />
-      {canOpenImage ? (
-        <div className="markdown-image-caption">
-          <a
-            href={normalizedSrc}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="markdown-image-link"
-          >
-            在新窗口打开原图
-          </a>
-        </div>
-      ) : null}
     </div>
   );
 }

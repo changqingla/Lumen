@@ -821,7 +821,7 @@ function PaperTranslationView({
     activeTaskIdRef.current = task.task_id;
     setTranslationTaskId(task.task_id);
     setRestoredFilename(task.filename);
-    if (TRANSLATION_PROCESSING_STATUSES.includes(task.status)) {
+    if (TRANSLATION_PROCESSING_STATUSES.includes(task.status) || task.status === 'completed') {
       persistActivePaperTranslationTask(task.task_id, task.filename);
     } else {
       clearActivePaperTranslationTask();
