@@ -23,7 +23,7 @@ export const loadKnowledgeDocumentPreview = async (
   try {
     const markdownResponse = await kbAPI.getDocumentMarkdown(kbId, docId);
     return {
-      url: extension === 'doc' ? urlResponse.url : '',
+      url: urlResponse.url,
       markdownContent: markdownResponse.content,
     };
   } catch (error) {
