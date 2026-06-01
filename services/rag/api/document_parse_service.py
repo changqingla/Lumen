@@ -195,11 +195,7 @@ class DocumentParseService:
         self.tasks[task.task_id] = task
         await self.task_queue.set_task_data(task.task_id, task.to_persisted_dict())
 
-    async def _restore_task(self, task_id: str) -> Optional[DocumentParseTask]:
-        task_data = await self.task_queue.get_task_data(task_id)
-        if not task_data:
-            return None
-
+    def _task_from_data(self, task_data: Dict[str, Any]) -> DocumentParseTask:
         task = DocumentParseTask(
             task_id=task_data["task_id"],
             filename=normalize_upload_filename(task_data["filename"]),
@@ -227,15 +223,25 @@ class DocumentParseService:
         task.result_data = task_data.get("result_data", {})
         task.source_path = task_data.get("source_path")
         task.cancel_requested = bool(task_data.get("cancel_requested", False))
+        return task
 
+    async def _restore_task(self, task_id: str) -> Optional[DocumentParseTask]:
+        task_data = await self.task_queue.get_task_data(task_id)
+        if not task_data:
+            return None
+
+        task = self._task_from_data(task_data)
         self.tasks[task_id] = task
         return task
 
     async def _get_or_restore_task(self, task_id: str) -> Optional[DocumentParseTask]:
-        task = self.tasks.get(task_id)
-        if task:
+        task_data = await self.task_queue.get_task_data(task_id)
+        if task_data:
+            task = self._task_from_data(task_data)
+            self.tasks[task_id] = task
             return task
-        return await self._restore_task(task_id)
+
+        return self.tasks.get(task_id)
 
     async def _finalize_cancelled_task(self, task: DocumentParseTask, message: str) -> Dict[str, Any]:
         task.status = TaskStatus.CANCELLED

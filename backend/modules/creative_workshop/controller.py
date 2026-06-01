@@ -580,7 +580,7 @@ async def download_paper_translation_markdown_for_knowledge_base(
         filename, content = await service.get_translated_markdown(
             owner_id=str(current_user.id),
             task_id=task_id,
-            inline_assets=False,
+            inline_assets=True,
         )
     except FileNotFoundError as exc:
         raise HTTPException(

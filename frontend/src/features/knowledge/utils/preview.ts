@@ -13,7 +13,7 @@ export const loadKnowledgeDocumentPreview = async (
   const urlResponse = await kbAPI.getDocumentUrl(kbId, docId);
   const extension = fileName.toLowerCase().split('.').pop();
 
-  if (extension !== 'doc') {
+  if (extension !== 'doc' && extension !== 'md' && extension !== 'markdown') {
     return {
       url: urlResponse.url,
       markdownContent: '',
@@ -23,11 +23,11 @@ export const loadKnowledgeDocumentPreview = async (
   try {
     const markdownResponse = await kbAPI.getDocumentMarkdown(kbId, docId);
     return {
-      url: urlResponse.url,
+      url: extension === 'doc' ? urlResponse.url : '',
       markdownContent: markdownResponse.content,
     };
   } catch (error) {
-    console.warn('Failed to get markdown content for .doc file:', error);
+    console.warn('Failed to get markdown content for document preview:', error);
     return {
       url: urlResponse.url,
       markdownContent: '',
