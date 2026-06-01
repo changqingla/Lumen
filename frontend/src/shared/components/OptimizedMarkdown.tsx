@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react';
 import { Check, Copy } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -60,6 +60,14 @@ const markdownSanitizeSchema: RehypeSanitizeOptions = {
     ],
   },
 };
+
+function markdownUrlTransform(value: string): string {
+  const normalizedValue = String(value || '').trim();
+  if (/^data:image\/(?:png|gif|jpe?g|webp);base64,[a-z0-9+/=\s]+$/iu.test(normalizedValue)) {
+    return normalizedValue;
+  }
+  return defaultUrlTransform(value);
+}
 
 function getTextContent(children: ReactNode): string {
   if (Array.isArray(children)) {
@@ -307,6 +315,7 @@ export default function OptimizedMarkdown({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema], rehypeKatex]}
+        urlTransform={markdownUrlTransform}
         components={{
           pre: ({ children, ...props }) => {
             const blockData = findCodeBlockData(children);
