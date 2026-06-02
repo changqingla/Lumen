@@ -50,6 +50,16 @@ class DocumentRepository:
         )
         return [str(doc_id) for doc_id in result.scalars().all()]
 
+    async def get_by_kb_and_source(self, kb_id: str, source: str) -> Optional[Document]:
+        """Get a document in a knowledge base by its source marker."""
+        result = await self.db.execute(
+            select(Document).where(
+                Document.kb_id == kb_id,
+                Document.source == source,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def list_ready_docs_with_markdown(
         self,
         kb_id: str,

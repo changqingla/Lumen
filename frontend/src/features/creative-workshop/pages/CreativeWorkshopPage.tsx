@@ -10,6 +10,7 @@ import {
   Loader2,
   Menu,
   Share,
+  Star,
   Upload,
   WandSparkles,
   X,
@@ -745,6 +746,8 @@ function PaperTranslationView({
   const [isLoadingKnowledgeBases, setIsLoadingKnowledgeBases] = useState(false);
   const [isAddingToKnowledgeBase, setIsAddingToKnowledgeBase] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isFavoritingTranslation, setIsFavoritingTranslation] = useState(false);
+  const [isTranslationFavorited, setIsTranslationFavorited] = useState(false);
   const [knowledgeUploadProgress, setKnowledgeUploadProgress] = useState(0);
   const [knowledgeDialogError, setKnowledgeDialogError] = useState('');
 
@@ -809,6 +812,29 @@ function PaperTranslationView({
     onRequestSidebarCollapse();
   };
 
+  const syncTranslationFavoriteStatus = async (
+    taskId: string,
+    generation: number,
+    signal: AbortSignal,
+  ) => {
+    if (isGuestMode) {
+      setIsTranslationFavorited(false);
+      return;
+    }
+
+    try {
+      const status = await api.getPaperTranslationFavoriteStatus(taskId, { signal });
+      if (!isMountedRef.current || requestGenerationRef.current !== generation || signal.aborted) {
+        return;
+      }
+      setIsTranslationFavorited(status.favorited);
+    } catch (error) {
+      if (!signal.aborted) {
+        console.warn('Failed to sync translation favorite status:', error);
+      }
+    }
+  };
+
   const applyTaskState = async (
     task: Awaited<ReturnType<typeof api.getPaperTranslationTask>>,
     generation: number,
@@ -818,7 +844,11 @@ function PaperTranslationView({
       return;
     }
 
+    const previousTaskId = activeTaskIdRef.current;
     activeTaskIdRef.current = task.task_id;
+    if (previousTaskId && previousTaskId !== task.task_id) {
+      setIsTranslationFavorited(false);
+    }
     setTranslationTaskId(task.task_id);
     setRestoredFilename(task.filename);
     if (TRANSLATION_PROCESSING_STATUSES.includes(task.status) || task.status === 'completed') {
@@ -838,6 +868,7 @@ function PaperTranslationView({
       setTranslatedMarkdown(markdown);
       setTranslationPhase('done');
       setTranslationError('');
+      await syncTranslationFavoriteStatus(task.task_id, generation, signal);
       return;
     }
 
@@ -846,6 +877,7 @@ function PaperTranslationView({
       setTranslationError(message);
       setTranslationPhase('error');
       setTranslatedMarkdown('');
+      setIsTranslationFavorited(false);
       return;
     }
 
@@ -853,6 +885,7 @@ function PaperTranslationView({
       setTranslationPhase('processing');
       setTranslatedMarkdown('');
       setTranslationError('');
+      setIsTranslationFavorited(false);
       schedulePoll(task.task_id, generation);
     }
   };
@@ -910,6 +943,11 @@ function PaperTranslationView({
   useEffect(() => {
     if (isGuestMode) return;
 
+    const cachedTask = readActivePaperTranslationTask();
+    if (!cachedTask) {
+      return;
+    }
+
     requestGenerationRef.current += 1;
     const generation = requestGenerationRef.current;
     const controller = new AbortController();
@@ -917,18 +955,21 @@ function PaperTranslationView({
 
     const restoreTask = async () => {
       try {
-        const cachedTask = readActivePaperTranslationTask();
-        const task = cachedTask
-          ? await api.getPaperTranslationTask(cachedTask.taskId, { signal: controller.signal })
-          : await api.getLatestActivePaperTranslationTask({ signal: controller.signal });
+        const task = await api.getPaperTranslationTask(cachedTask.taskId, { signal: controller.signal });
         activeTaskIdRef.current = task.task_id;
         setTranslationTaskId(task.task_id);
         setRestoredFilename(task.filename);
         if (task.model_name) {
           onModelChange(task.model_name);
         }
-        setTranslationPhase('processing');
         setTranslationError('');
+        if (TRANSLATION_PROCESSING_STATUSES.includes(task.status)) {
+          setTranslationPhase('processing');
+        } else if (task.status === 'completed') {
+          setTranslationPhase('done');
+        } else if (task.status === 'failed') {
+          setTranslationPhase('error');
+        }
         try {
           await restoreSourcePdfPreview(task.task_id, controller.signal);
         } catch (previewError) {
@@ -1024,6 +1065,9 @@ function PaperTranslationView({
       if (createAbortRef.current === createController) {
         createAbortRef.current = null;
       }
+      if (translationTaskId !== task.task_id) {
+        setIsTranslationFavorited(false);
+      }
       activeTaskIdRef.current = task.task_id;
       setTranslationTaskId(task.task_id);
       setRestoredFilename(task.filename);
@@ -1068,6 +1112,7 @@ function PaperTranslationView({
     setTranslatedMarkdown('');
     setTranslationTaskId('');
     setTranslationError('');
+    setIsTranslationFavorited(false);
     setTranslationPhase('idle');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1095,6 +1140,31 @@ function PaperTranslationView({
     } finally {
       if (isMountedRef.current) {
         setIsExportingPdf(false);
+      }
+    }
+  };
+
+  const handleFavoriteTranslation = async () => {
+    if (!hasResult || !translationTaskId || isFavoritingTranslation) return;
+    if (isGuestMode) {
+      promptLogin({
+        title: '登录后可收藏译文',
+        message: '请先登录后继续。',
+        confirmText: '去登录',
+      });
+      return;
+    }
+
+    setIsFavoritingTranslation(true);
+    try {
+      await api.favoritePaperTranslationResult(translationTaskId);
+      setIsTranslationFavorited(true);
+      toast.success('已添加到收藏');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '收藏译文失败'));
+    } finally {
+      if (isMountedRef.current) {
+        setIsFavoritingTranslation(false);
       }
     }
   };
@@ -1280,6 +1350,22 @@ function PaperTranslationView({
                 aria-label="添加到知识库"
               >
                 <CirclePlus size={18} />
+              </button>
+            )}
+            {hasResult && (
+              <button
+                type="button"
+                className={`${styles.translationIconButton} ${isTranslationFavorited ? styles.translationIconButtonActive : ''}`}
+                onClick={handleFavoriteTranslation}
+                disabled={isFavoritingTranslation}
+                title={isTranslationFavorited ? '已收藏译文' : '收藏译文'}
+                aria-label={isTranslationFavorited ? '已收藏译文' : '收藏译文'}
+              >
+                {isFavoritingTranslation ? (
+                  <Loader2 size={17} className={styles.spin} />
+                ) : (
+                  <Star size={17} fill={isTranslationFavorited ? 'currentColor' : 'none'} />
+                )}
               </button>
             )}
           </div>

@@ -671,39 +671,6 @@ class PaperTranslationService:
             task = self._mark_stale_task_if_needed(task)
             return task
 
-    async def get_latest_active_task(self, *, owner_id: str) -> PaperTranslationTask | None:
-        active_statuses = {"queued", "converting", "translating"}
-        candidates: dict[str, PaperTranslationTask] = {}
-
-        async with self._lock:
-            for task in self._tasks.values():
-                if task.owner_id == str(owner_id) and task.status in active_statuses:
-                    candidates[task.task_id] = task
-
-            owner_dir = self._owner_dir(owner_id)
-            if owner_dir.exists():
-                for manifest_path in owner_dir.glob("*/task.json"):
-                    task_id = manifest_path.parent.name
-                    if task_id in candidates:
-                        continue
-                    task = self._load_task(owner_id=owner_id, task_id=task_id)
-                    if task is not None and task.owner_id == str(owner_id) and task.status in active_statuses:
-                        candidates[task.task_id] = task
-
-        def sort_key(task: PaperTranslationTask) -> datetime:
-            return (
-                _parse_utc_datetime(task.updated_at)
-                or _parse_utc_datetime(task.created_at)
-                or datetime.min.replace(tzinfo=timezone.utc)
-            )
-
-        # Refresh outside the lock because get_task also acquires it.
-        for task in sorted(candidates.values(), key=sort_key, reverse=True):
-            fresh_task = await self.get_task(owner_id=owner_id, task_id=task.task_id)
-            if fresh_task is not None and fresh_task.status in active_statuses:
-                return fresh_task
-        return None
-
     def source_pdf_path(self, *, owner_id: str, task_id: str) -> Path:
         return self._task_dir(owner_id, task_id) / "source.pdf"
 

@@ -16,7 +16,9 @@ from fastapi.responses import Response
 import httpx
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from config.database import get_db
 from config.redis import get_redis_client
 from config.settings import settings
 from middlewares.auth import get_current_user, get_current_user_optional
@@ -83,6 +85,24 @@ class PaperTranslationTaskResponse(BaseModel):
     created_at: str
     updated_at: str
     error: str | None = None
+
+
+class PaperTranslationFavoriteResponse(BaseModel):
+    """Response returned after favoriting a translated paper."""
+
+    success: bool
+    kb_id: str
+    document_id: str
+    document_name: str
+
+
+class PaperTranslationFavoriteStatusResponse(BaseModel):
+    """Response returned when checking translated paper favorite status."""
+
+    favorited: bool
+    kb_id: str | None = None
+    document_id: str | None = None
+    document_name: str | None = None
 
 
 def _get_paper_translation_service():
@@ -411,21 +431,6 @@ async def create_paper_translation_task(
     return PaperTranslationTaskResponse(**service.build_response_payload(task))
 
 
-@router.get("/paper-translation/tasks/active/latest", response_model=PaperTranslationTaskResponse)
-async def get_latest_active_paper_translation_task(
-    current_user: User = Depends(get_current_user),
-):
-    """Get the latest unfinished paper translation task for the current user."""
-    service = _get_paper_translation_service()
-    task = await service.get_latest_active_task(owner_id=str(current_user.id))
-    if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "NOT_FOUND", "message": "没有进行中的翻译任务"}},
-        )
-    return PaperTranslationTaskResponse(**service.build_response_payload(task))
-
-
 @router.get("/paper-translation/tasks/{task_id}", response_model=PaperTranslationTaskResponse)
 async def get_paper_translation_task(
     task_id: str,
@@ -614,4 +619,94 @@ async def download_paper_translation_pdf(
         content=content,
         media_type="application/pdf",
         headers=_download_headers(filename),
+    )
+
+
+@router.post("/paper-translation/tasks/{task_id}/favorite", response_model=PaperTranslationFavoriteResponse)
+async def favorite_paper_translation_result(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add translated Markdown to the default KB and favorite it."""
+    service = _get_paper_translation_service()
+    owner_id = str(current_user.id)
+    try:
+        filename, content = await service.get_translated_markdown(
+            owner_id=owner_id,
+            task_id=task_id,
+            inline_assets=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NOT_FOUND", "message": "Markdown 译文尚不可用"}},
+        ) from exc
+
+    from modules.favorites.services.favorite_service import FavoriteService
+    from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
+    from modules.knowledge.services.document_service import DocumentService
+
+    kb_repo = KnowledgeBaseRepository(db)
+    kb = await kb_repo.get_by_owner_and_name(owner_id, settings.DEFAULT_KB_NAME)
+    if kb is None:
+        kb = await kb_repo.create(owner_id, settings.DEFAULT_KB_NAME, "", settings.DEFAULT_KB_CATEGORY)
+
+    document_service = DocumentService(db)
+    document = await document_service.create_markdown_document_from_content(
+        kb_id=str(kb.id),
+        user_id=owner_id,
+        filename=filename,
+        markdown=content,
+        source=f"creative_workshop_paper_translation:{task_id}",
+    )
+
+    favorite_service = FavoriteService(db)
+    await favorite_service.favorite_document(str(document.id), str(kb.id), owner_id)
+
+    return PaperTranslationFavoriteResponse(
+        success=True,
+        kb_id=str(kb.id),
+        document_id=str(document.id),
+        document_name=document.name,
+    )
+
+
+@router.get("/paper-translation/tasks/{task_id}/favorite", response_model=PaperTranslationFavoriteStatusResponse)
+async def get_paper_translation_favorite_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check whether the translated Markdown document is already favorited."""
+    owner_id = str(current_user.id)
+
+    from modules.favorites.services.favorite_service import FavoriteService
+    from modules.knowledge.repositories.document_repository import DocumentRepository
+    from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
+
+    kb_repo = KnowledgeBaseRepository(db)
+    kb = await kb_repo.get_by_owner_and_name(owner_id, settings.DEFAULT_KB_NAME)
+    if kb is None:
+        return PaperTranslationFavoriteStatusResponse(favorited=False)
+
+    doc_repo = DocumentRepository(db)
+    document = await doc_repo.get_by_kb_and_source(
+        str(kb.id),
+        f"creative_workshop_paper_translation:{task_id}",
+    )
+    if document is None:
+        return PaperTranslationFavoriteStatusResponse(favorited=False, kb_id=str(kb.id))
+
+    favorite_service = FavoriteService(db)
+    favorite_status = await favorite_service.check_favorites(
+        owner_id,
+        [{"type": "document", "id": str(document.id)}],
+    )
+
+    return PaperTranslationFavoriteStatusResponse(
+        favorited=bool(favorite_status.get(f"document:{document.id}")),
+        kb_id=str(kb.id),
+        document_id=str(document.id),
+        document_name=document.name,
     )

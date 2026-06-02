@@ -416,6 +416,49 @@ class DocumentService:
         )
         return document
 
+    async def create_markdown_document_from_content(
+        self,
+        *,
+        kb_id: str,
+        user_id: str,
+        filename: str,
+        markdown: str,
+        source: str,
+    ) -> Document:
+        """Create or reuse a Markdown document from in-memory content."""
+        kb = await self._verify_kb_write_access(kb_id, user_id)
+        existing = await self.doc_repo.get_by_kb_and_source(kb_id, source)
+        if existing:
+            return existing
+
+        safe_filename = self._normalize_filename(filename)
+        if self._get_file_extension(safe_filename) not in self.TEXT_EXTENSIONS:
+            safe_filename = f"{os.path.splitext(safe_filename)[0] or 'document'}.md"
+
+        file_data = markdown.encode("utf-8")
+        storage_owner_id = str(kb.owner_id)
+        object_name = self._build_object_name(storage_owner_id, kb_id, safe_filename)
+        file_path = await upload_file(object_name, file_data, "text/markdown")
+
+        document = await self.doc_repo.create(
+            kb_id=kb_id,
+            name=safe_filename,
+            size=len(file_data),
+            source=source,
+            file_path=file_path,
+        )
+
+        owner_es_index = self._get_owner_es_index(kb)
+        asyncio.create_task(
+            self._process_document_pipeline(
+                str(document.id),
+                owner_es_index,
+                file_data,
+                safe_filename,
+            )
+        )
+        return document
+
     async def complete_direct_upload(
         self,
         kb_id: str,

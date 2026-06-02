@@ -2143,13 +2143,6 @@ const creativeWorkshopAPI = {
     });
   },
 
-  async getLatestActivePaperTranslationTask(options?: { signal?: AbortSignal }) {
-    return request<PaperTranslationTaskResponse>('/creative-workshop/paper-translation/tasks/active/latest', {
-      method: 'GET',
-      signal: options?.signal,
-    });
-  },
-
   async getPaperTranslationResult(taskId: string, options?: { signal?: AbortSignal }) {
     return requestText(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/result`, {
       method: 'GET',
@@ -2179,6 +2172,29 @@ const creativeWorkshopAPI = {
   async downloadPaperTranslationPdf(taskId: string) {
     return requestBlob(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/pdf`, {
       method: 'GET',
+    });
+  },
+
+  async favoritePaperTranslationResult(taskId: string) {
+    return request<{
+      success: boolean;
+      kb_id: string;
+      document_id: string;
+      document_name: string;
+    }>(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/favorite`, {
+      method: 'POST',
+    });
+  },
+
+  async getPaperTranslationFavoriteStatus(taskId: string, options?: { signal?: AbortSignal }) {
+    return request<{
+      favorited: boolean;
+      kb_id?: string | null;
+      document_id?: string | null;
+      document_name?: string | null;
+    }>(`/creative-workshop/paper-translation/tasks/${encodeURIComponent(taskId)}/favorite`, {
+      method: 'GET',
+      signal: options?.signal,
     });
   },
 };

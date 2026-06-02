@@ -1079,31 +1079,6 @@ async def test_paper_translation_status_response_omits_markdown_body(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_get_latest_active_task(tmp_path):
-    owner_id = str(uuid4())
-    service = PaperTranslationService(storage_root=tmp_path)
-    older = await service.create_task(owner_id=owner_id, filename="older.pdf")
-    newer = await service.create_task(owner_id=owner_id, filename="newer.pdf")
-    await service._update_task(owner_id=owner_id, task_id=older.task_id, status="translating")
-    await service._update_task(owner_id=owner_id, task_id=newer.task_id, status="converting")
-
-    latest = await service.get_latest_active_task(owner_id=owner_id)
-
-    assert latest is not None
-    assert latest.task_id == newer.task_id
-
-
-@pytest.mark.asyncio
-async def test_paper_translation_get_latest_active_task_ignores_completed(tmp_path):
-    owner_id = str(uuid4())
-    service = PaperTranslationService(storage_root=tmp_path)
-    task = await service.create_task(owner_id=owner_id, filename="done.pdf")
-    await service._update_task(owner_id=owner_id, task_id=task.task_id, status="completed")
-
-    assert await service.get_latest_active_task(owner_id=owner_id) is None
-
-
-@pytest.mark.asyncio
 async def test_paper_translation_queue_recovers_stale_processing_items(monkeypatch):
     service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
     monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 10.0)
@@ -1397,7 +1372,7 @@ async def test_download_paper_translation_markdown_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_download_paper_translation_markdown_for_knowledge_base_uses_plain_markdown(monkeypatch):
+async def test_download_paper_translation_markdown_for_knowledge_base_inlines_assets(monkeypatch):
     user_id = uuid4()
 
     class _Service:
@@ -1411,7 +1386,7 @@ async def test_download_paper_translation_markdown_for_knowledge_base_uses_plain
         ):
             assert owner_id == str(user_id)
             assert task_id == "task-1"
-            assert inline_assets is False
+            assert inline_assets is True
             assert asset_url_prefix is None
             return "demo.zh.md", "# 标题\n\n![](images/fig.jpg)"
 
@@ -1535,6 +1510,145 @@ async def test_get_paper_translation_asset_accepts_signed_token(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_favorite_paper_translation_result_creates_and_favorites_document(monkeypatch):
+    user_id = uuid4()
+    calls = {}
+
+    class _TranslationService:
+        async def get_translated_markdown(self, *, owner_id, task_id, inline_assets=False, **kwargs):
+            assert owner_id == str(user_id)
+            assert task_id == "task-1"
+            assert inline_assets is True
+            return "demo.zh.md", "# 标题"
+
+    class _KbRepo:
+        def __init__(self, db):
+            self.db = db
+
+        async def get_by_owner_and_name(self, owner_id, name):
+            calls["lookup_kb"] = (owner_id, name)
+            return None
+
+        async def create(self, owner_id, name, description, category):
+            calls["create_kb"] = (owner_id, name, description, category)
+            return SimpleNamespace(id="kb-1")
+
+    class _DocumentService:
+        def __init__(self, db):
+            self.db = db
+
+        async def create_markdown_document_from_content(self, **kwargs):
+            calls["create_doc"] = kwargs
+            return SimpleNamespace(id="doc-1", name=kwargs["filename"])
+
+    class _FavoriteService:
+        def __init__(self, db):
+            self.db = db
+
+        async def favorite_document(self, doc_id, kb_id, owner_id):
+            calls["favorite_doc"] = (doc_id, kb_id, owner_id)
+            return {"success": True}
+
+    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _TranslationService())
+    monkeypatch.setattr("modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo)
+    monkeypatch.setattr("modules.knowledge.services.document_service.DocumentService", _DocumentService)
+    monkeypatch.setattr("modules.favorites.services.favorite_service.FavoriteService", _FavoriteService)
+
+    response = await controller.favorite_paper_translation_result(
+        task_id="task-1",
+        current_user=SimpleNamespace(id=user_id),
+        db=SimpleNamespace(),
+    )
+
+    assert response.success is True
+    assert response.kb_id == "kb-1"
+    assert response.document_id == "doc-1"
+    assert calls["lookup_kb"] == (str(user_id), "我的知识库")
+    assert calls["create_doc"]["source"] == "creative_workshop_paper_translation:task-1"
+    assert calls["create_doc"]["markdown"] == "# 标题"
+    assert calls["favorite_doc"] == ("doc-1", "kb-1", str(user_id))
+
+
+@pytest.mark.asyncio
+async def test_get_paper_translation_favorite_status_returns_existing_state(monkeypatch):
+    user_id = uuid4()
+
+    class _KbRepo:
+        def __init__(self, db):
+            self.db = db
+
+        async def get_by_owner_and_name(self, owner_id, name):
+            assert owner_id == str(user_id)
+            assert name == "我的知识库"
+            return SimpleNamespace(id="kb-1")
+
+    class _DocumentRepo:
+        def __init__(self, db):
+            self.db = db
+
+        async def get_by_kb_and_source(self, kb_id, source):
+            assert kb_id == "kb-1"
+            assert source == "creative_workshop_paper_translation:task-1"
+            return SimpleNamespace(id="doc-1", name="demo.zh.md")
+
+    class _FavoriteService:
+        def __init__(self, db):
+            self.db = db
+
+        async def check_favorites(self, owner_id, items):
+            assert owner_id == str(user_id)
+            assert items == [{"type": "document", "id": "doc-1"}]
+            return {"document:doc-1": True}
+
+    monkeypatch.setattr("modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo)
+    monkeypatch.setattr("modules.knowledge.repositories.document_repository.DocumentRepository", _DocumentRepo)
+    monkeypatch.setattr("modules.favorites.services.favorite_service.FavoriteService", _FavoriteService)
+
+    response = await controller.get_paper_translation_favorite_status(
+        task_id="task-1",
+        current_user=SimpleNamespace(id=user_id),
+        db=SimpleNamespace(),
+    )
+
+    assert response.favorited is True
+    assert response.kb_id == "kb-1"
+    assert response.document_id == "doc-1"
+    assert response.document_name == "demo.zh.md"
+
+
+@pytest.mark.asyncio
+async def test_get_paper_translation_favorite_status_returns_false_when_document_missing(monkeypatch):
+    user_id = uuid4()
+
+    class _KbRepo:
+        def __init__(self, db):
+            self.db = db
+
+        async def get_by_owner_and_name(self, owner_id, name):
+            return SimpleNamespace(id="kb-1")
+
+    class _DocumentRepo:
+        def __init__(self, db):
+            self.db = db
+
+        async def get_by_kb_and_source(self, kb_id, source):
+            return None
+
+    monkeypatch.setattr("modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo)
+    monkeypatch.setattr("modules.knowledge.repositories.document_repository.DocumentRepository", _DocumentRepo)
+
+    response = await controller.get_paper_translation_favorite_status(
+        task_id="task-1",
+        current_user=SimpleNamespace(id=user_id),
+        db=SimpleNamespace(),
+    )
+
+    assert response.favorited is False
+    assert response.kb_id == "kb-1"
+    assert response.document_id is None
+
+
+@pytest.mark.asyncio
 async def test_get_paper_translation_source_pdf_response(monkeypatch):
     user_id = uuid4()
 
@@ -1555,42 +1669,3 @@ async def test_get_paper_translation_source_pdf_response(monkeypatch):
     assert response.body == b"%PDF-1.4\nfake"
     assert response.headers["content-disposition"] == "inline; filename*=UTF-8''demo.pdf"
 
-
-@pytest.mark.asyncio
-async def test_get_latest_active_paper_translation_task_response(monkeypatch):
-    user_id = uuid4()
-    task = PaperTranslationTask(
-        task_id="task-1",
-        owner_id=str(user_id),
-        filename="demo.pdf",
-        thread_id="paper-translation-task-1",
-        status="translating",
-        created_at="2026-05-29T00:00:00+00:00",
-        updated_at="2026-05-29T00:01:00+00:00",
-    )
-
-    class _Service:
-        async def get_latest_active_task(self, *, owner_id):
-            assert owner_id == str(user_id)
-            return task
-
-        def build_response_payload(self, payload_task):
-            assert payload_task is task
-            return {
-                "task_id": task.task_id,
-                "status": task.status,
-                "filename": task.filename,
-                "thread_id": task.thread_id,
-                "created_at": task.created_at,
-                "updated_at": task.updated_at,
-                "error": None,
-            }
-
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
-
-    response = await controller.get_latest_active_paper_translation_task(
-        current_user=SimpleNamespace(id=user_id),
-    )
-
-    assert response.task_id == "task-1"
-    assert response.status == "translating"

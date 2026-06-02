@@ -799,6 +799,13 @@
   transform: translateY(-1px);
 }
 
+.translationIconButtonActive,
+.translationIconButtonActive:hover:not(:disabled) {
+  border-color: rgba(234, 179, 8, 0.34);
+  background: rgba(250, 204, 21, 0.12);
+  color: #b45309;
+}
+
 .translationIconButton:disabled {
   cursor: not-allowed;
   opacity: 0.52;
