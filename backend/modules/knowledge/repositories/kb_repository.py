@@ -1,11 +1,40 @@
 """Knowledge Base repository for database operations with visibility control."""
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, or_, and_
+from sqlalchemy import select, func, desc, or_, and_, true
 from typing import Optional, List, Tuple
 from modules.knowledge.entities.knowledge_base import KnowledgeBase, KNOWLEDGE_CATEGORIES
 from modules.knowledge.entities.document import Document
 from datetime import datetime
+import logging
 import uuid
+
+
+logger = logging.getLogger(__name__)
+
+
+def knowledge_base_access_condition(
+    user_id: uuid.UUID | str,
+    user_org_ids: Optional[List[uuid.UUID]] = None,
+    *,
+    is_admin: bool = False,
+):
+    """Build the canonical SQL predicate for read access to a knowledge base."""
+    if is_admin:
+        return true()
+
+    user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    conditions = [
+        KnowledgeBase.owner_id == user_uuid,
+        KnowledgeBase.visibility == "public",
+    ]
+    if user_org_ids:
+        conditions.append(
+            and_(
+                KnowledgeBase.visibility == "organization",
+                KnowledgeBase.shared_to_orgs.overlap(list(user_org_ids)),
+            )
+        )
+    return or_(*conditions)
 
 
 class KnowledgeBaseRepository:
@@ -20,6 +49,45 @@ class KnowledgeBaseRepository:
             select(KnowledgeBase).where(
                 KnowledgeBase.id == kb_id,
                 KnowledgeBase.owner_id == owner_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_accessible_by_id(
+        self,
+        kb_id: uuid.UUID | str,
+        user_id: uuid.UUID | str,
+        user_org_ids: Optional[List[uuid.UUID]] = None,
+        *,
+        is_admin: bool = False,
+    ) -> Optional[KnowledgeBase]:
+        """Get a knowledge base only when the caller has read access."""
+        result = await self.db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == kb_id,
+                knowledge_base_access_condition(
+                    user_id,
+                    user_org_ids,
+                    is_admin=is_admin,
+                ),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_writable_by_id(
+        self,
+        kb_id: uuid.UUID | str,
+        user_id: uuid.UUID | str,
+        *,
+        is_admin: bool = False,
+    ) -> Optional[KnowledgeBase]:
+        """Get a knowledge base only when the caller is its owner or an admin."""
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        write_condition = true() if is_admin else KnowledgeBase.owner_id == user_uuid
+        result = await self.db.execute(
+            select(KnowledgeBase).where(
+                KnowledgeBase.id == kb_id,
+                write_condition,
             )
         )
         return result.scalar_one_or_none()
@@ -136,16 +204,6 @@ class KnowledgeBaseRepository:
         await self.db.delete(kb)
         await self.db.commit()
     
-    async def calculate_total_size(self, owner_id: str) -> int:
-        """Calculate total storage used by user."""
-        result = await self.db.execute(
-            select(func.sum(Document.size)).select_from(Document).join(
-                KnowledgeBase
-            ).where(KnowledgeBase.owner_id == owner_id)
-        )
-        total = result.scalar()
-        return total or 0
-    
     async def increment_contents_count(self, kb_id: str, delta: int = 1):
         """Increment contents count."""
         kb = await self.db.get(KnowledgeBase, kb_id)
@@ -153,24 +211,20 @@ class KnowledgeBaseRepository:
             kb.contents_count += delta
             kb.last_updated_at = datetime.utcnow()
             await self.db.commit()
-    
-    async def toggle_public(self, kb: KnowledgeBase) -> KnowledgeBase:
-        """
-        Toggle public status of a knowledge base.
-        Switches between private and public visibility.
-        """
-        if kb.visibility == 'public':
-            # 从公开改为私有
-            kb.visibility = 'private'
-            kb.shared_to_orgs = []  # 清空组织共享
-        else:
-            # 从私有/组织 改为公开
-            kb.visibility = 'public'
-            kb.shared_to_orgs = []  # 公开时清空组织共享
-        
-        await self.db.commit()
-        await self.db.refresh(kb)
-        return kb
+
+    async def sync_contents_count(self, kb_id: str) -> None:
+        """Recompute the denormalized count after an at-least-once document job."""
+        result = await self.db.execute(
+            select(func.count(Document.id)).where(
+                Document.kb_id == kb_id,
+                Document.status == Document.STATUS_READY,
+            )
+        )
+        kb = await self.db.get(KnowledgeBase, kb_id)
+        if kb:
+            kb.contents_count = int(result.scalar() or 0)
+            kb.last_updated_at = datetime.utcnow()
+            await self.db.commit()
     
     async def increment_view_count(self, kb_id: str):
         """Increment view count."""
@@ -296,7 +350,8 @@ class KnowledgeBaseRepository:
         self,
         kb_id: uuid.UUID,
         visibility: str,
-        is_admin: bool = False
+        is_admin: bool = False,
+        shared_to_orgs: Optional[List[uuid.UUID]] = None,
     ) -> KnowledgeBase:
         """
         Update knowledge base visibility.
@@ -305,6 +360,7 @@ class KnowledgeBaseRepository:
             kb_id: Knowledge base ID
             visibility: Visibility level (private/organization/public)
             is_admin: Whether the requester is admin (only admin can set public)
+            shared_to_orgs: Complete organization list for organization visibility
             
         Returns:
             Updated knowledge base
@@ -317,11 +373,17 @@ class KnowledgeBaseRepository:
         if visibility == 'public' and not is_admin:
             raise PermissionError("Only administrators can set knowledge bases to public")
         
-        kb.visibility = visibility
-        
-        # Clear shared_to_orgs if setting to private or public
-        if visibility in ('private', 'public'):
+        if visibility == 'organization':
+            if shared_to_orgs is not None:
+                if not shared_to_orgs:
+                    raise ValueError("Organization visibility requires at least one organization")
+                kb.shared_to_orgs = shared_to_orgs
+            elif not kb.shared_to_orgs:
+                raise ValueError("Organization visibility requires at least one organization")
+        else:
             kb.shared_to_orgs = []
+
+        kb.visibility = visibility
         
         await self.db.commit()
         await self.db.refresh(kb)
@@ -338,9 +400,9 @@ class KnowledgeBaseRepository:
         Returns:
             Updated knowledge base
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        
+        if not org_ids:
+            raise ValueError("Organization visibility requires at least one organization")
+
         kb = await self.db.get(KnowledgeBase, kb_id)
         if not kb:
             raise ValueError("Knowledge base not found")
@@ -362,43 +424,6 @@ class KnowledgeBaseRepository:
         await self.db.refresh(kb)
         
         logger.info(f"After commit - KB {kb_id} shared_to_orgs: {kb.shared_to_orgs}")
-        
-        return kb
-    
-    async def set_shared_organizations(self, kb_id: uuid.UUID, org_ids: List[uuid.UUID]) -> KnowledgeBase:
-        """
-        Set (replace) knowledge base shared organizations.
-        Unlike share_to_organizations, this replaces the entire list.
-        
-        Args:
-            kb_id: Knowledge base ID
-            org_ids: Complete list of organization IDs to share with
-            
-        Returns:
-            Updated knowledge base
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        kb = await self.db.get(KnowledgeBase, kb_id)
-        if not kb:
-            raise ValueError("Knowledge base not found")
-        
-        logger.info(f"Setting KB {kb_id} shared_to_orgs from {kb.shared_to_orgs} to {org_ids}")
-        
-        # Replace the entire list
-        kb.shared_to_orgs = org_ids
-        
-        # Set visibility based on org_ids
-        if org_ids:
-            kb.visibility = 'organization'
-        else:
-            kb.visibility = 'private'
-        
-        await self.db.commit()
-        await self.db.refresh(kb)
-        
-        logger.info(f"After setting - KB {kb_id} shared_to_orgs: {kb.shared_to_orgs}, visibility: {kb.visibility}")
         
         return kb
     
@@ -488,47 +513,6 @@ class KnowledgeBaseRepository:
         
         return kbs, total or 0
     
-    async def get_org_shared_kbs(
-        self,
-        user_org_ids: List[uuid.UUID],
-        page: int = 1,
-        page_size: int = 20
-    ) -> Tuple[List[KnowledgeBase], int]:
-        """
-        Get knowledge bases shared to user's organizations.
-        
-        Args:
-            user_org_ids: List of organization IDs
-            page: Page number
-            page_size: Page size
-            
-        Returns:
-            Tuple of (knowledge bases, total count)
-        """
-        if not user_org_ids:
-            return [], 0
-        
-        stmt = select(KnowledgeBase).where(
-            and_(
-                KnowledgeBase.visibility == 'organization',
-                KnowledgeBase.shared_to_orgs.overlap(user_org_ids)
-            )
-        )
-        
-        # Count total
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        total = (await self.db.execute(count_stmt)).scalar()
-        
-        # Paginate
-        stmt = stmt.order_by(desc(KnowledgeBase.created_at))
-        stmt = stmt.limit(page_size).offset((page - 1) * page_size)
-        
-        result = await self.db.execute(stmt)
-        kbs = list(result.scalars().all())
-        
-        return kbs, total or 0
-
-
     async def remove_org_from_user_kbs(
         self,
         user_id: uuid.UUID,
@@ -545,9 +529,6 @@ class KnowledgeBaseRepository:
         Returns:
             int: 受影响的知识库数量
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        
         # 查找该用户拥有的、共享到该组织的所有知识库
         stmt = select(KnowledgeBase).where(
             and_(
@@ -593,9 +574,6 @@ class KnowledgeBaseRepository:
         Returns:
             int: 受影响的知识库数量
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        
         # 查找所有共享到该组织的知识库
         stmt = select(KnowledgeBase).where(
             and_(

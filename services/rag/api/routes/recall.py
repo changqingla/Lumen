@@ -10,8 +10,9 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from config import settings
 from common_utils import DeepRAGCommonUtils
+from error_boundary import log_rag_failure, public_error_message
+from recall_lib import create_embedding_model, create_rerank_model
 from schemas import RecallRequest, UnifiedResponse
 
 logger = logging.getLogger(__name__)
@@ -44,16 +45,16 @@ async def hybrid_recall(
         raise HTTPException(status_code=400, detail="doc_ids 不能为空")
 
     try:
-        emb_model = DeepRAGCommonUtils.create_embedding_model(
+        emb_model = create_embedding_model(
             model_factory=request.model_factory,
             model_name=request.model_name,
-            base_url=request.model_base_url,
+            model_base_url=request.model_base_url,
             api_key=request.api_key,
         )
 
         rerank_model = None
         if request.rerank_factory:
-            rerank_model = DeepRAGCommonUtils.create_rerank_model(
+            rerank_model = create_rerank_model(
                 rerank_factory=request.rerank_factory,
                 rerank_model_name=request.rerank_model_name or "",
                 rerank_base_url=request.rerank_base_url,
@@ -106,14 +107,19 @@ async def hybrid_recall(
             processing_time=processing_time,
             timestamp=datetime.now().isoformat(),
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"混合检索召回失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"混合检索召回失败: {str(e)}")
+    except Exception as error:
+        log_rag_failure(logger, stage="recall", error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=public_error_message("recall"),
+        ) from None
     finally:
         if retriever is not None:
             try:
                 await retriever.close()
-            except Exception as close_err:
-                logger.warning(f"关闭 retriever 失败: {close_err}")
+            except Exception as error:
+                log_rag_failure(
+                    logger,
+                    stage="retriever_cleanup",
+                    error=error,
+                )

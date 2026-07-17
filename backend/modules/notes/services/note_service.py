@@ -3,7 +3,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 from modules.notes.repositories.note_repository import NoteRepository, NoteFolderRepository
 from typing import List, Tuple, Optional
-from modules.notes.entities.note import Note, NoteFolder
 
 
 class NoteService:
@@ -13,6 +12,23 @@ class NoteService:
         self.db = db
         self.note_repo = NoteRepository(db)
         self.folder_repo = NoteFolderRepository(db)
+
+    async def _validate_folder_access(
+        self,
+        folder_id: Optional[str],
+        user_id: str,
+    ) -> Optional[str]:
+        """Return a normalized folder ID after verifying user ownership."""
+        if not folder_id:
+            return None
+
+        folder = await self.folder_repo.get_by_id(folder_id, user_id)
+        if not folder:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": {"code": "NOT_FOUND", "message": "Folder not found"}},
+            )
+        return str(folder.id)
     
     async def list_notes(
         self,
@@ -47,7 +63,7 @@ class NoteService:
         tags: List[str]
     ) -> dict:
         """Create a new note."""
-        folder_id = folder if folder else None
+        folder_id = await self._validate_folder_access(folder, user_id)
         note_content = content if content is not None else ""
         
         note = await self.note_repo.create(
@@ -74,6 +90,12 @@ class NoteService:
             kwargs['folder_id'] = kwargs.pop('folder')
         if 'folderId' in kwargs:
             kwargs['folder_id'] = kwargs.pop('folderId')
+
+        if 'folder_id' in kwargs:
+            kwargs['folder_id'] = await self._validate_folder_access(
+                kwargs['folder_id'],
+                user_id,
+            )
         
         updated = await self.note_repo.update(note, **kwargs)
         return updated.to_dict()

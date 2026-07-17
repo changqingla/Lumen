@@ -111,7 +111,7 @@ class TestTitleMiddlewareCoreLogic:
         assert title.endswith("...")
         assert title.startswith("这是一个非常长的问题描述")
 
-    def test_after_agent_returns_title_only_when_needed(self, monkeypatch):
+    def test_after_agent_returns_title_only_when_needed(self, monkeypatch, capsys):
         middleware = TitleMiddleware()
         monkeypatch.setattr(middleware, "_should_generate_title", lambda state: True)
         monkeypatch.setattr(middleware, "_generate_title", AsyncMock(return_value="核心逻辑回归"))
@@ -119,6 +119,9 @@ class TestTitleMiddlewareCoreLogic:
         result = asyncio.run(middleware.aafter_model({"messages": []}, runtime=MagicMock()))
 
         assert result == {"title": "核心逻辑回归"}
+        captured = capsys.readouterr()
+        assert "核心逻辑回归" not in captured.out
+        assert "核心逻辑回归" not in captured.err
 
         monkeypatch.setattr(middleware, "_should_generate_title", lambda state: False)
         assert asyncio.run(middleware.aafter_model({"messages": []}, runtime=MagicMock())) is None

@@ -10,10 +10,13 @@ requirepass __REDIS_PASSWORD__
 # ACL 用户配置
 user default off
 user lumen on >__REDIS_PASSWORD__ ~* &* +@all
+user rag on >__RAG_REDIS_PASSWORD__ ~document_parse_queue:* +ping +select +eval +exists +incr +hdel +hget +hgetall +hincrby +hmget +hset +zadd +zcard +zpopmax +zrange +zrangebyscore +zrem +zremrangebyscore +zrevrank +zscore
 
 # 内存配置
 maxmemory 1024mb
-maxmemory-policy allkeys-lru
+# Redis carries durable job streams and quota reservations. Silent LRU eviction
+# would corrupt those protocols; reject writes explicitly under memory pressure.
+maxmemory-policy noeviction
 
 # 持久化配置 - RDB
 save 900 1

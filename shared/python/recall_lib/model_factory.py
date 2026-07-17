@@ -8,17 +8,15 @@ create_embedding_model 和 create_rerank_model 函数。
 依赖 core.llm.EmbeddingModel 和 core.llm.RerankModel 字典。
 """
 
-import sys
 import logging
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
+from ._paths import ensure_rag_root_on_path
 
 # 添加 services/rag 根目录到路径，以解析 core.llm 导入
-current_dir = Path(__file__).parent.absolute()
-deeprag_root = current_dir.parent / "services" / "rag"
-sys.path.insert(0, str(deeprag_root))
+deeprag_root = ensure_rag_root_on_path()
 
-from core.llm import EmbeddingModel, RerankModel
+from core.llm import EmbeddingModel, RerankModel  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +37,12 @@ def create_embedding_model(model_factory: str, model_name: str,
     Raises:
         ValueError: 不支持的模型工厂或缺少必要参数
     """
-    # 打印用户传入的 API key（带掩码保护）
-    if api_key:
-        masked_key = f"{api_key[:8]}...{api_key[-8:]}" if len(api_key) > 16 else "***"
-        logger.info(f"[create_embedding_model] 用户传入的 api_key: {masked_key}")
-    else:
-        logger.info("[create_embedding_model] 用户传入的 api_key: None")
+    logger.info(
+        "Creating embedding model factory=%s model=%s credential_configured=%s",
+        model_factory,
+        model_name,
+        bool(api_key),
+    )
 
     if model_factory not in EmbeddingModel:
         available_factories = list(EmbeddingModel.keys())

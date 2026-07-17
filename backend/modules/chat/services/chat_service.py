@@ -39,10 +39,7 @@ class ChatService:
     
     async def get_session(self, session_id: UUID, user_id: UUID) -> Optional[ChatSession]:
         """获取会话（验证所有权）"""
-        session = await self.chat_repo.get_session(session_id)
-        if session and session.user_id == user_id:
-            return session
-        return None
+        return await self.chat_repo.get_session_for_user(session_id, user_id)
     
     async def list_sessions(self, user_id: UUID, page: int = 1, page_size: int = 50) -> List[ChatSession]:
         """获取用户的所有会话"""
@@ -61,13 +58,11 @@ class ChatService:
 
     async def update_session_config(self, session_id: UUID, user_id: UUID, config_updates: dict) -> Optional[ChatSession]:
         """更新会话配置（验证所有权）"""
-        # 先验证所有权
-        session = await self.get_session(session_id, user_id)
-        if not session:
-            return None
-
-        # 更新配置
-        return await self.chat_repo.update_session_config(session_id, config_updates)
+        return await self.chat_repo.update_session_config(
+            session_id,
+            user_id,
+            config_updates,
+        )
     
     async def add_message(
         self,
@@ -105,14 +100,6 @@ class ChatService:
             interruption,
         )
     
-    async def get_messages(self, session_id: UUID, user_id: UUID) -> List[ChatMessage]:
-        """获取会话消息（验证所有权）"""
-        session = await self.get_session(session_id, user_id)
-        if not session:
-            return []
-        
-        return await self.chat_repo.get_session_messages(session_id)
-
     async def delete_last_assistant_message(
         self,
         session_id: UUID,

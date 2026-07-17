@@ -1,0 +1,39 @@
+.git
+.gitignore
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.py[cod]
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+
+# Local credentials and machine-specific configuration must never enter images.
+**/.env
+**/.env.*
+**/config.yaml
+!**/config.example.yaml
+
+# Frontend and package-manager output are not used by either Python image.
+node_modules
+frontend
+**/dist
+**/build
+**/.vite
+**/.cache
+
+# Persistent/runtime state is mounted at deployment time.
+logs
+runtimes/state
+services/rag/tmp
+services/rag/.cache
+services/rag/**/tmp
+
+# Local tooling and editor state.
+.vscode
+.idea
+*.log
+*.swp
+*~

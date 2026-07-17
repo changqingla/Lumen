@@ -1,9 +1,8 @@
 """Knowledge Base database model with visibility and organization sharing support."""
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, func, UniqueConstraint, ARRAY
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, func, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from config.database import Base
 import uuid
-from typing import List, Optional
 
 
 # 知识库分类常量
@@ -53,72 +52,6 @@ class KnowledgeBase(Base):
             result["ownerId"] = str(self.owner_id)
         return result
     
-    # === 辅助方法 ===
-    
-    def is_visible_to_user(self, user_id: uuid.UUID, user_org_ids: List[uuid.UUID], is_admin: bool = False) -> bool:
-        """
-        检查知识库对指定用户是否可见
-        
-        Args:
-            user_id: 用户ID
-            user_org_ids: 用户所在的组织ID列表
-            is_admin: 用户是否为管理员
-            
-        Returns:
-            是否可见
-        """
-        # 所有者总是可见
-        if self.owner_id == user_id:
-            return True
-        
-        # 管理员总是可见
-        if is_admin:
-            return True
-        
-        # public: 全局可见（仅管理员可设置）
-        if self.visibility == 'public':
-            return True
-        
-        # organization: 组织可见
-        if self.visibility == 'organization':
-            # 检查用户是否在共享的组织中
-            if not self.shared_to_orgs:
-                return False
-            return any(org_id in self.shared_to_orgs for org_id in user_org_ids)
-        
-        # private: 仅所有者可见
-        return False
-    
-    def share_to_organizations(self, org_ids: List[uuid.UUID]) -> None:
-        """
-        共享知识库到指定组织
-        
-        Args:
-            org_ids: 组织ID列表
-        """
-        self.visibility = 'organization'
-        self.shared_to_orgs = org_ids
-    
-    def set_public(self, public_enabled: bool) -> None:
-        """
-        设置知识库公开状态（仅管理员）
-        
-        Args:
-            public_enabled: 是否公开
-        """
-        if public_enabled:
-            self.visibility = 'public'
-            self.shared_to_orgs = []
-        else:
-            self.visibility = 'private'
-            self.shared_to_orgs = []
-    
-    def set_private(self) -> None:
-        """设置为私有"""
-        self.visibility = 'private'
-        self.shared_to_orgs = []
-
-
 class KnowledgeBaseSubscription(Base):
     """Knowledge Base subscription relationship."""
     __tablename__ = "kb_subscriptions"

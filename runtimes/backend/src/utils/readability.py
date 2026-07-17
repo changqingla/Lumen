@@ -29,15 +29,9 @@ class ReadabilityExtractor:
         try:
             article = simple_json_from_html_string(html, use_readability=True)
         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-            stderr = getattr(exc, "stderr", None)
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode(errors="replace")
-            stderr_info = f"; stderr={stderr.strip()}" if isinstance(stderr, str) and stderr.strip() else ""
             logger.warning(
-                "Readability.js 提取失败（%s%s）；将回退到纯 Python 提取",
+                "Readability.js 提取失败（%s）；将回退到纯 Python 提取",
                 type(exc).__name__,
-                stderr_info,
-                exc_info=True,
             )
             article = simple_json_from_html_string(html, use_readability=False)
 

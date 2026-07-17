@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import heroImage1 from '@/assets/show/image-a40e9b1a22ad.webp';
 import heroImage2 from '@/assets/show/image-c5c42bc275b8.webp';
@@ -7,6 +7,7 @@ import heroImage3 from '@/assets/show/image-9414bca96a27.webp';
 import heroImage4 from '@/assets/show/image-758c70f191b1.webp';
 import heroImage5 from '@/assets/show/image-06e1d61b8d42.webp';
 import { authAPI } from '@/shared/api/client';
+import { useToast } from '@/shared/hooks/useToast';
 import { dispatchAuthSessionReset } from '@/shared/lib/auth-runtime';
 import { disableGuestMode, enableGuestMode } from '@/shared/lib/guest-mode';
 import { copyTextToClipboard } from '@/shared/utils/clipboard';
@@ -108,6 +109,7 @@ function Header({ onLoginClick }: { onLoginClick: () => void }) {
 
         <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-4">
           <button
+            type="button"
             onClick={onLoginClick}
             className="rounded-lg bg-primary/10 px-5 py-2 font-medium text-primary transition-all duration-200 hover:bg-primary/20"
           >
@@ -119,10 +121,13 @@ function Header({ onLoginClick }: { onLoginClick: () => void }) {
   );
 }
 
-function Hero({ onTryDemo }: { onTryDemo: () => void }) {
+function Hero({ onTryDemo, isStartingDemo }: { onTryDemo: () => void; isStartingDemo: boolean }) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
       setCurrentIndex((prev) => (prev + 1) % heroImages.length);
     }, 5000);
@@ -173,10 +178,13 @@ function Hero({ onTryDemo }: { onTryDemo: () => void }) {
             <ArrowRight className="h-5 w-5" />
           </a>
           <button
+            type="button"
             className="flex items-center justify-center gap-2 rounded-xl border border-on-surface/20 bg-surface-container-low/50 px-8 py-4 text-lg font-semibold text-on-surface backdrop-blur-md transition-all hover:bg-surface-container-high"
+            disabled={isStartingDemo}
             onClick={onTryDemo}
           >
-            Try Demo
+            {isStartingDemo ? <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin" /> : null}
+            {isStartingDemo ? 'Starting Demo' : 'Try Demo'}
           </button>
         </motion.div>
 
@@ -201,14 +209,18 @@ function Hero({ onTryDemo }: { onTryDemo: () => void }) {
           </AnimatePresence>
 
           <button
+            type="button"
             onClick={() => setCurrentIndex((prev) => (prev - 1 + heroImages.length) % heroImages.length)}
-            className="absolute left-4 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/20 p-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 hover:bg-black/40"
+            aria-label="Previous workspace screenshot"
+            className="absolute left-4 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/20 p-2 text-white opacity-100 backdrop-blur-sm transition-opacity hover:bg-black/40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
           >
             <ChevronLeft className="h-6 w-6" />
           </button>
           <button
+            type="button"
             onClick={() => setCurrentIndex((prev) => (prev + 1) % heroImages.length)}
-            className="absolute right-4 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/20 p-2 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 hover:bg-black/40"
+            aria-label="Next workspace screenshot"
+            className="absolute right-4 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/20 p-2 text-white opacity-100 backdrop-blur-sm transition-opacity hover:bg-black/40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
           >
             <ChevronRight className="h-6 w-6" />
           </button>
@@ -217,7 +229,10 @@ function Hero({ onTryDemo }: { onTryDemo: () => void }) {
             {heroImages.map((_, index) => (
               <button
                 key={index}
+                type="button"
                 onClick={() => setCurrentIndex(index)}
+                aria-label={`Show workspace screenshot ${index + 1}`}
+                aria-current={index === currentIndex ? 'true' : undefined}
                 className={`h-2 rounded-full transition-all ${index === currentIndex ? 'w-6 bg-primary' : 'w-2 bg-white/50'}`}
               />
             ))}
@@ -817,6 +832,19 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading && !isClosingAfterSuccess) {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isClosingAfterSuccess, isOpen, loading, onClose]);
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -834,18 +862,24 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="auth-dialog-title"
               className="relative w-full max-w-md transform overflow-hidden rounded-3xl border border-outline-variant/20 bg-surface-container-low p-8 text-left shadow-2xl transition-all"
             >
               <button
+                type="button"
                 onClick={onClose}
                 disabled={loading || isClosingAfterSuccess}
+                aria-label="Close authentication dialog"
+                title="Close"
                 className="absolute right-6 top-6 text-on-surface-variant transition-colors hover:text-on-surface"
               >
                 <X className="h-6 w-6" />
               </button>
 
               <div className="mb-8 text-center">
-                <h2 className="mb-2 font-headline text-3xl font-bold">
+                <h2 id="auth-dialog-title" className="mb-2 font-headline text-3xl font-bold">
                   {mode === 'login' ? 'Welcome Back' : mode === 'register' ? 'Create Account' : 'Reset Password'}
                 </h2>
                 <p className="text-on-surface-variant">
@@ -860,11 +894,16 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
               <form className="space-y-4" onSubmit={handleSubmit}>
                 {mode === 'register' && (
                   <div className="space-y-2">
-                    <label className="ml-1 text-sm font-medium text-on-surface-variant">Username</label>
+                    <label htmlFor="auth-name" className="ml-1 text-sm font-medium text-on-surface-variant">Username</label>
                     <div className="relative">
                       <User className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-on-surface-variant" />
                       <input
+                        id="auth-name"
+                        name="name"
                         type="text"
+                        autoComplete="nickname"
+                        autoFocus
+                        required
                         value={name}
                         onChange={(e) => {
                           setName(e.target.value);
@@ -880,11 +919,16 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
                 )}
 
                 <div className="space-y-2">
-                  <label className="ml-1 text-sm font-medium text-on-surface-variant">Email Address</label>
+                  <label htmlFor="auth-email" className="ml-1 text-sm font-medium text-on-surface-variant">Email Address</label>
                   <div className="relative">
                     <Mail className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-on-surface-variant" />
                     <input
+                      id="auth-email"
+                      name="email"
                       type="email"
+                      autoComplete="email"
+                      autoFocus={mode !== 'register'}
+                      required
                       value={email}
                       onChange={(e) => {
                         setEmail(e.target.value);
@@ -900,12 +944,17 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
 
                 {!isLogin && (
                   <div className="space-y-2">
-                    <label className="ml-1 text-sm font-medium text-on-surface-variant">Verification Code</label>
+                    <label htmlFor="auth-verification-code" className="ml-1 text-sm font-medium text-on-surface-variant">Verification Code</label>
                     <div className="flex gap-2">
                       <div className="relative flex-1">
                         <ShieldCheck className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-on-surface-variant" />
                         <input
+                          id="auth-verification-code"
+                          name="verification-code"
                           type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          required
                           value={verificationCode}
                           onChange={(e) => {
                             setVerificationCode(e.target.value);
@@ -930,11 +979,15 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
                 )}
 
                 <div className="space-y-2">
-                  <label className="ml-1 text-sm font-medium text-on-surface-variant">Password</label>
+                  <label htmlFor="auth-password" className="ml-1 text-sm font-medium text-on-surface-variant">Password</label>
                   <div className="relative">
                     <Lock className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-on-surface-variant" />
                     <input
+                      id="auth-password"
+                      name="password"
                       type="password"
+                      autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                      required
                       value={password}
                       onChange={(e) => {
                         setPassword(e.target.value);
@@ -950,11 +1003,15 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
 
                 {!isLogin && (
                   <div className="space-y-2">
-                    <label className="ml-1 text-sm font-medium text-on-surface-variant">Confirm Password</label>
+                    <label htmlFor="auth-confirm-password" className="ml-1 text-sm font-medium text-on-surface-variant">Confirm Password</label>
                     <div className="relative">
                       <Lock className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-on-surface-variant" />
                       <input
+                        id="auth-confirm-password"
+                        name="confirm-password"
                         type="password"
+                        autoComplete="new-password"
+                        required
                         value={confirmPassword}
                         onChange={(e) => {
                           setConfirmPassword(e.target.value);
@@ -970,12 +1027,17 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
                 )}
 
                 {(error || successMsg) && (
-                  <div className={`rounded-xl border px-4 py-3 text-sm ${error ? 'border-red-400/30 bg-red-500/10 text-red-200' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'}`}>
+                  <div
+                    id="auth-feedback"
+                    role={error ? 'alert' : 'status'}
+                    className={`rounded-xl border px-4 py-3 text-sm ${error ? 'border-red-400/30 bg-red-500/10 text-red-200' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'}`}
+                  >
                     {error || successMsg}
                   </div>
                 )}
 
                 <button
+                  type="submit"
                   disabled={loading || isClosingAfterSuccess}
                   className="hero-gradient mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-4 font-bold text-white shadow-lg shadow-primary-container/20 transition-transform hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -989,6 +1051,7 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
                 <p className="text-on-surface-variant">
                   {mode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
                   <button
+                    type="button"
                     onClick={() => {
                       clearAuthFeedback(setError, setSuccessMsg);
                       setMode(mode === 'login' ? 'register' : 'login');
@@ -1004,6 +1067,7 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
 
                 {mode === 'login' ? (
                   <button
+                    type="button"
                     onClick={() => {
                       clearAuthFeedback(setError, setSuccessMsg);
                       setMode('reset');
@@ -1017,6 +1081,7 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
                   </button>
                 ) : mode === 'reset' ? (
                   <button
+                    type="button"
                     onClick={() => {
                       clearAuthFeedback(setError, setSuccessMsg);
                       setMode('login');
@@ -1040,8 +1105,11 @@ function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
 
 export default function AuthPage() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isStartingDemo, setIsStartingDemo] = useState(false);
+  const demoRequestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const htmlOverflow = document.documentElement.style.overflow;
@@ -1082,23 +1150,54 @@ export default function AuthPage() {
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const handleTryDemo = () => {
-    enableGuestMode();
-    navigate('/');
+  useEffect(() => () => {
+    demoRequestRef.current?.abort();
+    demoRequestRef.current = null;
+  }, []);
+
+  const handleTryDemo = async () => {
+    if (isStartingDemo) {
+      return;
+    }
+    const controller = new AbortController();
+    demoRequestRef.current = controller;
+    setIsStartingDemo(true);
+    try {
+      const session = await authAPI.createGuestSession({ signal: controller.signal });
+      if (controller.signal.aborted || demoRequestRef.current !== controller) {
+        return;
+      }
+      enableGuestMode(session.guest_token);
+      navigate('/');
+    } catch (error) {
+      if (controller.signal.aborted || demoRequestRef.current !== controller) {
+        return;
+      }
+      toast.error(getErrorMessage(error, 'Unable to start the demo. Please try again.'));
+    } finally {
+      if (demoRequestRef.current === controller) {
+        demoRequestRef.current = null;
+        if (!controller.signal.aborted) {
+          setIsStartingDemo(false);
+        }
+      }
+    }
   };
 
   return (
-    <div className="min-h-screen overflow-y-auto bg-background text-on-surface selection:bg-primary/30 selection:text-primary">
-      <Header onLoginClick={() => setIsAuthModalOpen(true)} />
-      <main>
-        <Hero onTryDemo={handleTryDemo} />
-        <ValueProp />
-        <Features />
-        <Architecture />
-        <QuickStart />
-      </main>
-      <Footer />
-      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
-    </div>
+    <MotionConfig reducedMotion="user">
+      <div className="min-h-screen overflow-y-auto bg-background text-on-surface selection:bg-primary/30 selection:text-primary">
+        <Header onLoginClick={() => setIsAuthModalOpen(true)} />
+        <main>
+          <Hero onTryDemo={() => { void handleTryDemo(); }} isStartingDemo={isStartingDemo} />
+          <ValueProp />
+          <Features />
+          <Architecture />
+          <QuickStart />
+        </main>
+        <Footer />
+        <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+      </div>
+    </MotionConfig>
   );
 }

@@ -64,8 +64,11 @@ def get_available_tools(
                     logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
         except ImportError:
             logger.warning("MCP module not available. Install 'langchain-mcp-adapters' package to enable MCP tools.")
-        except Exception as e:
-            logger.error(f"Failed to get cached MCP tools: {e}")
+        except Exception as exc:
+            logger.error(
+                "Failed to get cached MCP tools (%s)",
+                type(exc).__name__,
+            )
 
     # 按配置条件添加工具
     builtin_tools = BUILTIN_TOOLS.copy()

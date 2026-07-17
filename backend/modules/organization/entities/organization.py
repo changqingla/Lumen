@@ -97,49 +97,6 @@ class Organization(Base):
         
         return True, None
     
-    def is_owner(self, user_id: uuid.UUID) -> bool:
-        """检查指定用户是否为组织所有者"""
-        return self.owner_id == user_id
-    
-    def is_member(self, user_id: uuid.UUID) -> bool:
-        """
-        检查指定用户是否为组织成员
-        
-        注意：此方法需要 members 关系已加载
-        """
-        from sqlalchemy import inspect
-        insp = inspect(self)
-        
-        if 'members' in insp.unloaded:
-            # members 未加载，无法检查
-            return False
-        
-        if not self.members:
-            return False
-        return any(m.user_id == user_id for m in self.members)
-    
-    def get_member_role(self, user_id: uuid.UUID) -> Optional[str]:
-        """
-        获取用户在组织中的角色
-        
-        注意：此方法需要 members 关系已加载
-        """
-        from sqlalchemy import inspect
-        insp = inspect(self)
-        
-        if 'members' in insp.unloaded:
-            # members 未加载，无法检查
-            return None
-        
-        if not self.members:
-            return None
-        
-        for m in self.members:
-            if m.user_id == user_id:
-                return m.role
-        
-        return None
-    
     @staticmethod
     def generate_org_code(length: int = 8) -> str:
         """
@@ -155,4 +112,3 @@ class Organization(Base):
         chars = string.ascii_uppercase.replace('O', '').replace('I', '') + string.digits.replace('0', '')
         code = ''.join(secrets.choice(chars) for _ in range(length))
         return code
-

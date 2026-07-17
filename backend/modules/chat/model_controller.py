@@ -6,8 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.database import get_db
 from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity
-from models.user import User
-
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
 

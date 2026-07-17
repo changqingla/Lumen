@@ -5,8 +5,8 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, update, delete
-from sqlalchemy.orm import joinedload
+from sqlalchemy import cast, delete, desc, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 
 from modules.chat.entities.chat_session import ChatSession, ChatMessage
 from modules.chat.message_metadata import build_message_metadata
@@ -43,12 +43,31 @@ class ChatRepository:
         return session
     
     async def get_session(self, session_id: UUID) -> Optional[ChatSession]:
-        """获取聊天会话"""
-        stmt = select(ChatSession).where(ChatSession.id == session_id).options(
-            joinedload(ChatSession.messages)
+        """获取聊天会话元数据，不加载消息历史。"""
+        stmt = (
+            select(ChatSession)
+            .where(ChatSession.id == session_id)
+            .execution_options(populate_existing=True)
         )
         result = await self.db.execute(stmt)
-        return result.unique().scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+    async def get_session_for_user(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+    ) -> Optional[ChatSession]:
+        """Get session metadata and enforce ownership in the database query."""
+        stmt = (
+            select(ChatSession)
+            .where(
+                ChatSession.id == session_id,
+                ChatSession.user_id == user_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
     
     async def list_user_sessions(
         self, 
@@ -85,34 +104,27 @@ class ChatRepository:
         result = await self.db.execute(stmt)
         return int(result.scalar() or 0)
     
-    async def update_session_title(self, session_id: UUID, title: str) -> Optional[ChatSession]:
-        """更新会话标题"""
-        session = await self.get_session(session_id)
-        if not session:
-            return None
-
-        session.title = title
-        await self.db.commit()
-        await self.db.refresh(session)
-        return session
-
-    async def update_session_config(self, session_id: UUID, config_updates: Dict) -> Optional[ChatSession]:
-        """更新会话配置（部分更新）"""
-        # 只查询会话本身，不加载消息
-        stmt = select(ChatSession).where(ChatSession.id == session_id)
+    async def update_session_config(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        config_updates: Dict,
+    ) -> Optional[ChatSession]:
+        """Atomically merge session JSON config while enforcing ownership."""
+        current_config = func.coalesce(ChatSession.config, cast({}, JSONB))
+        stmt = (
+            update(ChatSession)
+            .where(
+                ChatSession.id == session_id,
+                ChatSession.user_id == user_id,
+            )
+            .values(config=current_config.op("||")(cast(config_updates, JSONB)))
+            .returning(ChatSession)
+            .execution_options(populate_existing=True)
+        )
         result = await self.db.execute(stmt)
         session = result.scalar_one_or_none()
-
-        if not session:
-            return None
-
-        # 合并配置：保留原有配置，只更新传入的字段
-        current_config = session.config or {}
-        updated_config = {**current_config, **config_updates}
-
-        session.config = updated_config
         await self.db.commit()
-        await self.db.refresh(session)
         return session
     
     async def delete_session(self, session_id: UUID) -> bool:
@@ -284,28 +296,6 @@ class ChatRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
     
-    async def get_session_stats(self, session_id: UUID) -> Dict:
-        """获取会话统计信息（消息数量和最后一条消息）"""
-        # 获取消息数量
-        count_stmt = select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
-        count_result = await self.db.execute(count_stmt)
-        message_count = count_result.scalar() or 0
-        
-        # 获取最后一条消息
-        last_msg_stmt = (
-            select(ChatMessage)
-            .where(ChatMessage.session_id == session_id)
-            .order_by(desc(ChatMessage.created_at))
-            .limit(1)
-        )
-        last_msg_result = await self.db.execute(last_msg_stmt)
-        last_message = last_msg_result.scalar_one_or_none()
-        
-        return {
-            "messageCount": message_count,
-            "lastMessage": last_message.content[:50] if last_message else ""
-        }
-
     async def get_sessions_stats_bulk(self, session_ids: List[UUID]) -> Dict[UUID, Dict[str, Any]]:
         """批量获取会话统计信息，避免 N+1 查询。"""
         if not session_ids:

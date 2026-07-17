@@ -4,21 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import re
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import AsyncIterator, Awaitable, Dict, List
 
 import asyncpg
 
 from config.settings import settings
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-MIGRATION_FILE_PATTERN = re.compile(r"^(?P<version>\d{3})_(?P<name>.+)\.(?P<kind>sql|py)$")
+MIGRATION_FILE_PATTERN = re.compile(
+    r"^(?P<version>\d{3})_(?P<name>.+)\.(?P<kind>sql|py)$"
+)
 MIGRATION_TABLE_NAME = "schema_migrations"
+MIGRATION_LOCK_DOMAIN = b"lumen/backend/schema-migrations/session-lock/v1"
+MIGRATION_LOCK_TIMEOUT_ENV = "MIGRATION_LOCK_TIMEOUT_SECONDS"
+DEFAULT_MIGRATION_LOCK_TIMEOUT_SECONDS = 60.0
+MIGRATION_LOCK_POLL_INTERVAL_SECONDS = 0.1
+_TRY_MIGRATION_LOCK_SQL = "SELECT pg_try_advisory_lock($1::bigint)"
+_RELEASE_MIGRATION_LOCK_SQL = "SELECT pg_advisory_unlock($1::bigint)"
+
+
+class MigrationLockTimeout(RuntimeError):
+    """Raised when another migration runner holds the database lock too long."""
 
 
 @dataclass(frozen=True)
@@ -41,6 +55,103 @@ def _database_dsn_for_asyncpg() -> str:
 
 def _sha256_for_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _migration_advisory_lock_key() -> int:
+    digest = hashlib.sha256(MIGRATION_LOCK_DOMAIN).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def _migration_lock_timeout_seconds() -> float:
+    raw_value = os.environ.get(
+        MIGRATION_LOCK_TIMEOUT_ENV,
+        str(DEFAULT_MIGRATION_LOCK_TIMEOUT_SECONDS),
+    )
+    try:
+        timeout_seconds = float(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{MIGRATION_LOCK_TIMEOUT_ENV} must be a positive finite number"
+        ) from exc
+
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise RuntimeError(
+            f"{MIGRATION_LOCK_TIMEOUT_ENV} must be a positive finite number"
+        )
+    return timeout_seconds
+
+
+async def _acquire_migration_advisory_lock(
+    conn: asyncpg.Connection,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = MIGRATION_LOCK_POLL_INTERVAL_SECONDS,
+) -> None:
+    lock_key = _migration_advisory_lock_key()
+
+    async def _poll_until_acquired() -> None:
+        while not bool(await conn.fetchval(_TRY_MIGRATION_LOCK_SQL, lock_key)):
+            await asyncio.sleep(poll_interval_seconds)
+
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await _poll_until_acquired()
+    except TimeoutError as exc:
+        raise MigrationLockTimeout(
+            "Timed out waiting for the PostgreSQL migration advisory lock after "
+            f"{timeout_seconds:g} seconds"
+        ) from exc
+
+
+async def _release_migration_advisory_lock(conn: asyncpg.Connection) -> None:
+    released = await conn.fetchval(
+        _RELEASE_MIGRATION_LOCK_SQL,
+        _migration_advisory_lock_key(),
+    )
+    if not released:
+        raise RuntimeError(
+            "PostgreSQL reported that the migration advisory lock was not held"
+        )
+
+
+async def _complete_cleanup_despite_cancellation(
+    cleanup: Awaitable[None],
+) -> None:
+    """Finish session cleanup before propagating any repeated cancellation."""
+    cleanup_task = asyncio.ensure_future(cleanup)
+    cancellation: asyncio.CancelledError | None = None
+
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError as exc:
+            if cleanup_task.cancelled():
+                raise
+            cancellation = exc
+
+    cleanup_task.result()
+    if cancellation is not None:
+        raise cancellation
+
+
+@asynccontextmanager
+async def _migration_advisory_lock(
+    conn: asyncpg.Connection,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = MIGRATION_LOCK_POLL_INTERVAL_SECONDS,
+) -> AsyncIterator[None]:
+    await _acquire_migration_advisory_lock(
+        conn,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+    try:
+        yield
+    finally:
+        await _complete_cleanup_despite_cancellation(
+            _release_migration_advisory_lock(conn)
+        )
 
 
 def _discover_migrations() -> List[MigrationFile]:
@@ -104,7 +215,9 @@ async def _ensure_migration_table(conn: asyncpg.Connection) -> None:
     )
 
 
-async def _load_applied_migrations(conn: asyncpg.Connection) -> Dict[int, Dict[str, str]]:
+async def _load_applied_migrations(
+    conn: asyncpg.Connection,
+) -> Dict[int, Dict[str, str]]:
     rows = await conn.fetch(
         f"""
         SELECT version, filename, kind, checksum
@@ -112,14 +225,26 @@ async def _load_applied_migrations(conn: asyncpg.Connection) -> Dict[int, Dict[s
         ORDER BY version ASC
         """
     )
-    return {
-        int(row["version"]): {
-            "filename": str(row["filename"]),
+    applied_migrations: Dict[int, Dict[str, str]] = {}
+    seen_filenames: set[str] = set()
+    for row in rows:
+        version = int(row["version"])
+        filename = str(row["filename"])
+        if version in applied_migrations:
+            raise RuntimeError(
+                f"Database migration history contains duplicate version {version:03d}"
+            )
+        if filename in seen_filenames:
+            raise RuntimeError(
+                f"Database migration history contains duplicate filename {filename}"
+            )
+        applied_migrations[version] = {
+            "filename": filename,
             "kind": str(row["kind"]),
             "checksum": str(row["checksum"]),
         }
-        for row in rows
-    }
+        seen_filenames.add(filename)
+    return applied_migrations
 
 
 async def _record_applied_migration(
@@ -159,6 +284,41 @@ def _validate_applied_migration(
         )
 
 
+def _validate_applied_history(
+    migrations: List[MigrationFile],
+    applied_migrations: Dict[int, Dict[str, str]],
+) -> None:
+    repository_versions = [migration.version for migration in migrations]
+    repository_version_set = set(repository_versions)
+    applied_versions = sorted(applied_migrations)
+    unknown_versions = [
+        version for version in applied_versions if version not in repository_version_set
+    ]
+    if unknown_versions:
+        formatted_versions = ", ".join(f"{version:03d}" for version in unknown_versions)
+        raise RuntimeError(
+            "Database migration history contains version(s) that are not present in "
+            f"this repository: {formatted_versions}. Refusing to run an older or "
+            "incomplete application image."
+        )
+
+    expected_prefix = repository_versions[: len(applied_versions)]
+    if applied_versions != expected_prefix:
+        expected = ", ".join(f"{version:03d}" for version in expected_prefix) or "none"
+        actual = ", ".join(f"{version:03d}" for version in applied_versions) or "none"
+        raise RuntimeError(
+            "Database migration history is not an exact prefix of this repository. "
+            f"Expected applied versions [{expected}], found [{actual}]."
+        )
+
+    migrations_by_version = {migration.version: migration for migration in migrations}
+    for version in applied_versions:
+        _validate_applied_migration(
+            migrations_by_version[version],
+            applied_migrations[version],
+        )
+
+
 async def _apply_sql_migration(
     conn: asyncpg.Connection,
     migration: MigrationFile,
@@ -193,42 +353,54 @@ async def _apply_python_migration(
 
 
 async def run_migrations() -> None:
-    migrations = _discover_migrations()
     dsn = _database_dsn_for_asyncpg()
+    lock_timeout_seconds = _migration_lock_timeout_seconds()
 
     print(f"Connecting to database using {MIGRATION_TABLE_NAME}...")
     conn = await asyncpg.connect(dsn)
     try:
-        await _ensure_migration_table(conn)
-        applied_migrations = await _load_applied_migrations(conn)
+        async with _migration_advisory_lock(
+            conn,
+            timeout_seconds=lock_timeout_seconds,
+        ):
+            migrations = _discover_migrations()
+            await _ensure_migration_table(conn)
+            applied_migrations = await _load_applied_migrations(conn)
+            _validate_applied_history(migrations, applied_migrations)
 
-        for migration in migrations:
-            applied = applied_migrations.get(migration.version)
-            if applied is not None:
-                _validate_applied_migration(migration, applied)
-                print(f"Skipping applied migration {migration.filename}")
-                continue
+            for migration in migrations:
+                if migration.version in applied_migrations:
+                    print(f"Skipping applied migration {migration.filename}")
+                    continue
 
-            print(f"Applying migration {migration.filename}")
-            if migration.kind == "sql":
-                await _apply_sql_migration(conn, migration)
-            elif migration.kind == "py":
-                await _apply_python_migration(conn, migration)
-            else:
-                raise RuntimeError(f"Unsupported migration kind: {migration.kind}")
+                print(f"Applying migration {migration.filename}")
+                if migration.kind == "sql":
+                    await _apply_sql_migration(conn, migration)
+                elif migration.kind == "py":
+                    await _apply_python_migration(conn, migration)
+                else:
+                    raise RuntimeError(f"Unsupported migration kind: {migration.kind}")
 
-            print(f"Applied migration {migration.filename}")
+                print(f"Applied migration {migration.filename}")
 
-        print("All migrations are up to date.")
+            print("All migrations are up to date.")
     finally:
-        await conn.close()
+        await _complete_cleanup_despite_cancellation(conn.close())
 
 
 def main() -> int:
     try:
         asyncio.run(run_migrations())
-    except (RuntimeError, asyncpg.PostgresError, OSError, subprocess.SubprocessError) as exc:
-        print(f"Migration failed: {exc}")
+    except (
+        RuntimeError,
+        asyncpg.PostgresError,
+        OSError,
+        subprocess.SubprocessError,
+    ) as exc:
+        print(
+            f"Migration failed (error_type={type(exc).__name__})",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

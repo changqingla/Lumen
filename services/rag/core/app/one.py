@@ -14,7 +14,6 @@
 #  limitations under the License.
 #
 
-import logging
 from tika import parser
 from io import BytesIO
 import re
@@ -79,12 +78,3 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
     tokenize(doc, "\n".join(sections), eng)
     return [doc]
-
-
-if __name__ == "__main__":
-    import sys
-
-    def dummy(prog=None, msg=""):
-        pass
-
-    chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)

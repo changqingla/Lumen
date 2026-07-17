@@ -1,5 +1,6 @@
 """记忆机制中间件。"""
 
+import logging
 import re
 from typing import Any, override
 
@@ -8,7 +9,10 @@ from langchain.agents.middleware import AgentMiddleware
 from langgraph.runtime import Runtime
 
 from src.agents.memory.queue import get_memory_queue
+from src.agents.memory.scope import normalize_agent_name, normalize_memory_scope
 from src.config.memory_config import get_memory_config
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryMiddlewareState(AgentState):
@@ -96,10 +100,24 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         """初始化记忆中间件。
 
         参数：
-            agent_name: 若提供，则按 agent 维度存储记忆；否则使用全局记忆。
+            agent_name: Optional agent subpartition within every tenant scope.
         """
         super().__init__()
-        self._agent_name = agent_name
+        self._agent_name = normalize_agent_name(agent_name)
+
+    @override
+    def before_agent(
+        self,
+        state: MemoryMiddlewareState,
+        runtime: Runtime,
+    ) -> dict | None:
+        """Reject malformed scopes before any model can observe the request."""
+        del state
+        normalize_memory_scope(
+            runtime.context.get("memory_scope"),
+            allow_none=True,
+        )
+        return None
 
     @override
     def after_agent(self, state: MemoryMiddlewareState, runtime: Runtime) -> dict | None:
@@ -116,16 +134,25 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         if not config.enabled:
             return None
 
+        memory_scope = normalize_memory_scope(
+            runtime.context.get("memory_scope"),
+            allow_none=True,
+        )
+        if memory_scope is None:
+            # Guests and direct callers without a trusted scope do not get
+            # persistent long-term memory.
+            return None
+
         # 从 runtime 上下文获取 thread_id
         thread_id = runtime.context.get("thread_id")
         if not thread_id:
-            print("MemoryMiddleware: No thread_id in context, skipping memory update")
+            logger.debug("Skipping memory update because the Runtime thread ID is missing")
             return None
 
         # 从状态中获取消息列表
         messages = state.get("messages", [])
         if not messages:
-            print("MemoryMiddleware: No messages in state, skipping memory update")
+            logger.debug("Skipping memory update because the message state is empty")
             return None
 
         # 过滤，仅保留用户输入与最终 assistant 回复
@@ -141,6 +168,11 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
 
         # 将过滤后的会话加入记忆更新队列
         queue = get_memory_queue()
-        queue.add(thread_id=thread_id, messages=filtered_messages, agent_name=self._agent_name)
+        queue.add(
+            thread_id=thread_id,
+            messages=filtered_messages,
+            memory_scope=memory_scope,
+            agent_name=self._agent_name,
+        )
 
         return None

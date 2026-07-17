@@ -66,7 +66,7 @@ class OrganizationRepository:
         query = select(Organization).where(Organization.id == org_id)
         
         if not include_deleted:
-            query = query.where(Organization.is_deleted == False)
+            query = query.where(Organization.is_deleted.is_(False))
         
         # Load relationships to prevent lazy loading
         # Use selectinload for members to also load nested relationships
@@ -84,7 +84,7 @@ class OrganizationRepository:
             select(Organization)
             .where(and_(
                 Organization.org_code == org_code,
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             ))
             .options(
                 selectinload(Organization.members).selectinload(OrganizationMember.user),
@@ -99,7 +99,7 @@ class OrganizationRepository:
             select(Organization)
             .where(and_(
                 Organization.owner_id == owner_id,
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             ))
             .options(
                 selectinload(Organization.members).selectinload(OrganizationMember.user),
@@ -125,7 +125,7 @@ class OrganizationRepository:
             .where(and_(
                 OrganizationMember.user_id == user_id,
                 OrganizationMember.role == 'member',
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             ))
             .options(
                 selectinload(Organization.members).selectinload(OrganizationMember.user),
@@ -219,18 +219,10 @@ class OrganizationRepository:
         await self.db.refresh(org)
         return org
     
-    async def count_members(self, org_id: uuid.UUID) -> int:
-        """Count the number of members in an organization."""
-        result = await self.db.execute(
-            select(func.count(OrganizationMember.id))
-            .where(OrganizationMember.org_id == org_id)
-        )
-        return result.scalar() or 0
-    
     async def count_all(self) -> int:
         """Count total number of organizations (excluding deleted)."""
         result = await self.db.execute(
             select(func.count(Organization.id))
-            .where(Organization.is_deleted == False)
+            .where(Organization.is_deleted.is_(False))
         )
         return result.scalar() or 0

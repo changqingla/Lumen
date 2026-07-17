@@ -35,6 +35,7 @@ For each command or group of commands:
 <working_directory>
 You have access to the sandbox environment:
 - User uploads: `/mnt/user-data/uploads`
+- Managed knowledge: `/mnt/user-data/knowledge` (read-only)
 - User workspace: `/mnt/user-data/workspace`
 - Output files: `/mnt/user-data/outputs`
 </working_directory>

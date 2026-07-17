@@ -15,15 +15,12 @@
         print(event)
 """
 
-import asyncio
-import json
 import logging
 import mimetypes
-import re
-import shutil
+import os
+import stat
 import tempfile
 import uuid
-import zipfile
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,13 +32,34 @@ from langchain_core.runnables import RunnableConfig
 
 from src.agents.lead_agent.agent import _build_middlewares
 from src.agents.lead_agent.prompt import apply_prompt_template
+from src.agents.memory.scope import normalize_memory_scope
+from src.agents.runtime_context import RuntimeContext
 from src.agents.thread_state import ThreadState
 from src.config.app_config import get_app_config, reload_app_config
-from src.config.extensions_config import ExtensionsConfig, SkillStateConfig, get_extensions_config, reload_extensions_config
+from src.config.extensions_config import (
+    McpServerConfig,
+    get_extensions_config,
+    reload_extensions_config,
+    update_raw_extensions_config,
+)
+from src.config.extensions_secrets import (
+    redact_mcp_configuration,
+    restore_mcp_server_secrets,
+)
 from src.config.paths import get_paths
 from src.models import create_chat_model
+from src.utils.thread_files import (
+    ThreadFileAccessError,
+    ThreadFileNotFoundError,
+    ThreadFileNotRegularError,
+    ThreadFileTooLargeError,
+    open_thread_file,
+    resolve_thread_file,
+)
 
 logger = logging.getLogger(__name__)
+
+_MAX_EMBEDDED_ARTIFACT_BYTES = 100 * 1024 * 1024
 
 
 @dataclass
@@ -73,9 +91,10 @@ class InsightFlowClient:
         每次 ``stream()`` / ``chat()`` 都是无状态调用，
         ``thread_id`` 仅用于文件隔离（uploads / artifacts）。
 
-        系统提示词（包含日期、记忆与技能上下文）会在内部 agent 首次创建时生成，
-        并在配置键不变时复用缓存。长生命周期进程中如需强制刷新，
-        请调用 :meth:`reset_agent`。
+        系统提示词的静态部分（日期、技能索引等）会在内部 agent 创建时生成，
+        并在配置键不变时复用。长期记忆由中间件在每次 model call 时按构造器
+        接收的可信 ``memory_scope`` 动态注入，不会被静态 prompt 缓存。长生命周期
+        进程中如需重建模型、工具或其他静态配置，请调用 :meth:`reset_agent`。
 
     示例::
 
@@ -104,6 +123,7 @@ class InsightFlowClient:
         thinking_enabled: bool = True,
         subagent_enabled: bool = False,
         plan_mode: bool = False,
+        memory_scope: str | None = None,
     ):
         """初始化客户端。
 
@@ -118,6 +138,8 @@ class InsightFlowClient:
             thinking_enabled: 是否启用模型扩展思考能力。
             subagent_enabled: 是否启用子代理委派。
             plan_mode: 是否启用计划模式（TodoList 中间件）。
+            memory_scope: Optional trusted 64-character lowercase hexadecimal
+                partition. When omitted, persistent long-term memory is disabled.
         """
         if config_path is not None:
             reload_app_config(config_path)
@@ -128,6 +150,10 @@ class InsightFlowClient:
         self._thinking_enabled = thinking_enabled
         self._subagent_enabled = subagent_enabled
         self._plan_mode = plan_mode
+        self._memory_scope = normalize_memory_scope(
+            memory_scope,
+            allow_none=True,
+        )
 
         # 延迟初始化 agent：首次调用时创建，配置变化后重建。
         self._agent = None
@@ -146,24 +172,6 @@ class InsightFlowClient:
     # 内部辅助方法
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _atomic_write_json(path: Path, data: dict) -> None:
-        """以原子方式将 JSON 写入 *path*（临时文件 + replace）。"""
-        fd = tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=path.parent,
-            suffix=".tmp",
-            delete=False,
-        )
-        try:
-            json.dump(data, fd, indent=2)
-            fd.close()
-            Path(fd.name).replace(path)
-        except BaseException:
-            fd.close()
-            Path(fd.name).unlink(missing_ok=True)
-            raise
-
     def _get_runnable_config(self, thread_id: str, **overrides) -> RunnableConfig:
         """构建 agent 调用所需的 `RunnableConfig`。"""
         configurable = {
@@ -173,6 +181,8 @@ class InsightFlowClient:
             "is_plan_mode": overrides.get("plan_mode", self._plan_mode),
             "subagent_enabled": overrides.get("subagent_enabled", self._subagent_enabled),
         }
+        if self._memory_scope is not None:
+            configurable["memory_scope"] = self._memory_scope
         return RunnableConfig(
             configurable=configurable,
             recursion_limit=overrides.get("recursion_limit", 300),
@@ -205,6 +215,7 @@ class InsightFlowClient:
                 max_concurrent_subagents=max_concurrent_subagents,
             ),
             "state_schema": ThreadState,
+            "context_schema": RuntimeContext,
         }
         checkpointer = self._checkpointer
         if checkpointer is None:
@@ -303,6 +314,8 @@ class InsightFlowClient:
 
         state: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
         context = {"thread_id": thread_id}
+        if self._memory_scope is not None:
+            context["memory_scope"] = self._memory_scope
 
         seen_ids: set[str] = set()
 
@@ -431,7 +444,7 @@ class InsightFlowClient:
             ]
         }
 
-    def get_memory(self) -> dict:
+    def get_memory(self, *, agent_name: str | None = None) -> dict:
         """获取当前记忆数据。
 
         返回：
@@ -439,7 +452,7 @@ class InsightFlowClient:
         """
         from src.agents.memory.updater import get_memory_data
 
-        return get_memory_data()
+        return get_memory_data(self._memory_scope, agent_name)
 
     def get_model(self, name: str) -> dict | None:
         """按名称获取指定模型配置。
@@ -473,8 +486,7 @@ class InsightFlowClient:
             包含 `mcp_servers` 键的字典，键为服务名、值为服务配置，
             结构与 Gateway API `McpConfigResponse` 模式一致。
         """
-        config = get_extensions_config()
-        return {"mcp_servers": {name: server.model_dump() for name, server in config.mcp_servers.items()}}
+        return {"mcp_servers": redact_mcp_configuration(get_extensions_config())}
 
     def update_mcp_config(self, mcp_servers: dict[str, dict]) -> dict:
         """更新 MCP 服务配置。
@@ -492,22 +504,23 @@ class InsightFlowClient:
         异常：
             OSError: 配置文件写入失败时抛出。
         """
-        config_path = ExtensionsConfig.resolve_config_path()
-        if config_path is None:
-            raise FileNotFoundError("Cannot locate extensions_config.json. Set LUMEN_EXTENSIONS_CONFIG_PATH or ensure it exists in the project root.")
+        def apply_update(config_data: dict) -> None:
+            existing_servers = config_data.get("mcpServers", {})
+            if not isinstance(existing_servers, dict):
+                existing_servers = {}
+            config_data["mcpServers"] = {
+                name: restore_mcp_server_secrets(
+                    McpServerConfig.model_validate(server).model_dump(),
+                    existing_servers.get(name, {}) if isinstance(existing_servers.get(name), dict) else {},
+                )
+                for name, server in mcp_servers.items()
+            }
 
-        current_config = get_extensions_config()
-
-        config_data = {
-            "mcpServers": mcp_servers,
-            "skills": {name: {"enabled": skill.enabled} for name, skill in current_config.skills.items()},
-        }
-
-        self._atomic_write_json(config_path, config_data)
+        update_raw_extensions_config(apply_update)
 
         self._agent = None
         reloaded = reload_extensions_config()
-        return {"mcp_servers": {name: server.model_dump() for name, server in reloaded.mcp_servers.items()}}
+        return {"mcp_servers": redact_mcp_configuration(reloaded)}
 
     # ------------------------------------------------------------------
     # 对外 API：技能管理
@@ -556,19 +569,14 @@ class InsightFlowClient:
         if skill is None:
             raise ValueError(f"Skill '{name}' not found")
 
-        config_path = ExtensionsConfig.resolve_config_path()
-        if config_path is None:
-            raise FileNotFoundError("Cannot locate extensions_config.json. Set LUMEN_EXTENSIONS_CONFIG_PATH or ensure it exists in the project root.")
+        def apply_update(config_data: dict) -> None:
+            skill_states = config_data.get("skills", {})
+            if not isinstance(skill_states, dict):
+                skill_states = {}
+            skill_states[name] = {"enabled": enabled}
+            config_data["skills"] = skill_states
 
-        extensions_config = get_extensions_config()
-        extensions_config.skills[name] = SkillStateConfig(enabled=enabled)
-
-        config_data = {
-            "mcpServers": {n: s.model_dump() for n, s in extensions_config.mcp_servers.items()},
-            "skills": {n: {"enabled": sc.enabled} for n, sc in extensions_config.skills.items()},
-        }
-
-        self._atomic_write_json(config_path, config_data)
+        update_raw_extensions_config(apply_update)
 
         self._agent = None
         reload_extensions_config()
@@ -596,8 +604,9 @@ class InsightFlowClient:
         异常：
             FileNotFoundError: 文件不存在时抛出。
             ValueError: 文件内容或格式非法时抛出。
+            FileExistsError: 同名自定义技能已存在时抛出。
         """
-        from src.gateway.routers.skills import _validate_skill_frontmatter
+        from src.skills.archive_installer import install_skill_archive
         from src.skills.loader import get_skills_root_path
 
         path = Path(skill_path)
@@ -607,52 +616,19 @@ class InsightFlowClient:
             raise ValueError(f"Path is not a file: {skill_path}")
         if path.suffix != ".skill":
             raise ValueError("File must have .skill extension")
-        if not zipfile.is_zipfile(path):
-            raise ValueError("File is not a valid ZIP archive")
 
-        skills_root = get_skills_root_path()
-        custom_dir = skills_root / "custom"
-        custom_dir.mkdir(parents=True, exist_ok=True)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            with zipfile.ZipFile(path, "r") as zf:
-                total_size = sum(info.file_size for info in zf.infolist())
-                if total_size > 100 * 1024 * 1024:
-                    raise ValueError("Skill archive too large when extracted (>100MB)")
-                for info in zf.infolist():
-                    if Path(info.filename).is_absolute() or ".." in Path(info.filename).parts:
-                        raise ValueError(f"Unsafe path in archive: {info.filename}")
-                zf.extractall(tmp_path)
-            for p in tmp_path.rglob("*"):
-                if p.is_symlink():
-                    p.unlink()
-
-            items = list(tmp_path.iterdir())
-            if not items:
-                raise ValueError("Skill archive is empty")
-
-            skill_dir = items[0] if len(items) == 1 and items[0].is_dir() else tmp_path
-
-            is_valid, message, skill_name = _validate_skill_frontmatter(skill_dir)
-            if not is_valid:
-                raise ValueError(f"Invalid skill: {message}")
-            if not re.fullmatch(r"[a-zA-Z0-9_-]+", skill_name):
-                raise ValueError(f"Invalid skill name: {skill_name}")
-
-            target = custom_dir / skill_name
-            if target.exists():
-                raise ValueError(f"Skill '{skill_name}' already exists")
-
-            shutil.copytree(skill_dir, target)
-
-        return {"success": True, "skill_name": skill_name, "message": f"Skill '{skill_name}' installed successfully"}
+        installed = install_skill_archive(path, get_skills_root_path())
+        return {
+            "success": True,
+            "skill_name": installed.name,
+            "message": f"Skill '{installed.name}' installed successfully",
+        }
 
     # ------------------------------------------------------------------
     # 对外 API：记忆管理
     # ------------------------------------------------------------------
 
-    def reload_memory(self) -> dict:
+    def reload_memory(self, *, agent_name: str | None = None) -> dict:
         """从文件重载记忆数据，并强制缓存失效。
 
         返回：
@@ -660,7 +636,7 @@ class InsightFlowClient:
         """
         from src.agents.memory.updater import reload_memory_data
 
-        return reload_memory_data()
+        return reload_memory_data(self._memory_scope, agent_name)
 
     def get_memory_config(self) -> dict:
         """获取记忆系统配置。
@@ -719,49 +695,91 @@ class InsightFlowClient:
         异常：
             FileNotFoundError: 任一文件不存在时抛出。
         """
-        from src.gateway.routers.uploads import convert_file_to_markdown, get_markdown_extensions
+        from src.gateway.routers.uploads import (
+            _allocate_unique_filename,
+            _convert_file_to_markdown_sync,
+            _copy_conversion_output,
+            _is_reserved_managed_filename,
+            _normalize_filename,
+            get_markdown_extensions,
+            get_uploads_config,
+        )
 
         # 先校验全部文件，避免发生部分上传成功的情况。
         resolved_files = []
         for f in files:
             p = Path(f)
-            if not p.exists():
+            if not p.is_file():
                 raise FileNotFoundError(f"File not found: {f}")
+            if _normalize_filename(p.name) is None:
+                raise ValueError("Upload filename is not valid")
+            if _is_reserved_managed_filename(p.name):
+                raise ValueError("The kb__ filename namespace is reserved for Backend-managed knowledge")
             resolved_files.append(p)
 
         uploads_dir = self._get_uploads_dir(thread_id)
+        upload_config = get_uploads_config()
         uploaded_files: list[dict] = []
 
         for src_path in resolved_files:
-            dest = uploads_dir / src_path.name
-            shutil.copy2(src_path, dest)
+            needs_markdown_conversion = src_path.suffix.lower() in get_markdown_extensions()
+            stored_filename = _allocate_unique_filename(
+                uploads_dir,
+                src_path.name,
+                reserve_markdown_path=needs_markdown_conversion,
+            )
+            dest = uploads_dir / stored_filename
+            md_path: Path | None = None
+            with tempfile.TemporaryDirectory(
+                prefix="lumen-client-upload-"
+            ) as temp_dir:
+                source_snapshot = Path(temp_dir) / f"source{src_path.suffix}"
+                _copy_conversion_output(
+                    src_path,
+                    source_snapshot,
+                    max_bytes=upload_config.max_file_size_bytes,
+                    chunk_size=upload_config.stream_chunk_size_bytes,
+                )
+                converted_snapshot = (
+                    _convert_file_to_markdown_sync(source_snapshot)
+                    if needs_markdown_conversion
+                    else None
+                )
+                dest_size = _copy_conversion_output(
+                    source_snapshot,
+                    dest,
+                    max_bytes=upload_config.max_file_size_bytes,
+                    chunk_size=upload_config.stream_chunk_size_bytes,
+                )
+                if converted_snapshot is not None:
+                    candidate_md_path = dest.with_suffix(".md")
+                    try:
+                        _copy_conversion_output(
+                            converted_snapshot,
+                            candidate_md_path,
+                            max_bytes=upload_config.max_file_size_bytes,
+                            chunk_size=upload_config.stream_chunk_size_bytes,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to publish converted upload (%s)",
+                            type(exc).__name__,
+                        )
+                    else:
+                        md_path = candidate_md_path
 
             info: dict[str, Any] = {
-                "filename": src_path.name,
-                "size": str(dest.stat().st_size),
+                "filename": stored_filename,
+                "size": dest_size,
                 "path": str(dest),
-                "virtual_path": f"/mnt/user-data/uploads/{src_path.name}",
-                "artifact_url": f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{src_path.name}",
+                "virtual_path": f"/mnt/user-data/uploads/{stored_filename}",
+                "artifact_url": f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{stored_filename}",
             }
 
-            if src_path.suffix.lower() in get_markdown_extensions():
-                try:
-                    try:
-                        asyncio.get_running_loop()
-                        import concurrent.futures
-
-                        with concurrent.futures.ThreadPoolExecutor() as pool:
-                            md_path = pool.submit(lambda: asyncio.run(convert_file_to_markdown(dest))).result()
-                    except RuntimeError:
-                        md_path = asyncio.run(convert_file_to_markdown(dest))
-                except Exception:
-                    logger.warning("Failed to convert %s to markdown", src_path.name, exc_info=True)
-                    md_path = None
-
-                if md_path is not None:
-                    info["markdown_file"] = md_path.name
-                    info["markdown_virtual_path"] = f"/mnt/user-data/uploads/{md_path.name}"
-                    info["markdown_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{md_path.name}"
+            if md_path is not None:
+                info["markdown_file"] = md_path.name
+                info["markdown_virtual_path"] = f"/mnt/user-data/uploads/{md_path.name}"
+                info["markdown_artifact_url"] = f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{md_path.name}"
 
             uploaded_files.append(info)
 
@@ -787,17 +805,20 @@ class InsightFlowClient:
 
         files = []
         for fp in sorted(uploads_dir.iterdir()):
-            if fp.is_file():
-                stat = fp.stat()
+            try:
+                file_stat = fp.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(file_stat.st_mode) and not fp.name.casefold().startswith("kb__"):
                 files.append(
                     {
                         "filename": fp.name,
-                        "size": str(stat.st_size),
+                        "size": str(file_stat.st_size),
                         "path": str(fp),
                         "virtual_path": f"/mnt/user-data/uploads/{fp.name}",
                         "artifact_url": f"/api/threads/{thread_id}/artifacts/mnt/user-data/uploads/{fp.name}",
                         "extension": fp.suffix,
-                        "modified": stat.st_mtime,
+                        "modified": file_stat.st_mtime,
                     }
                 )
         return {"files": files, "count": len(files)}
@@ -817,19 +838,25 @@ class InsightFlowClient:
             FileNotFoundError: 文件不存在时抛出。
             PermissionError: 检测到路径穿越时抛出。
         """
+        from src.gateway.routers.uploads import _normalize_filename
+
+        safe_filename = _normalize_filename(filename)
+        if safe_filename is None or safe_filename != filename:
+            raise PermissionError("Access denied: invalid upload filename")
+        if safe_filename.casefold().startswith("kb__"):
+            raise PermissionError("Backend-managed knowledge must be deleted through the Gateway")
+
         uploads_dir = self._get_uploads_dir(thread_id)
-        file_path = (uploads_dir / filename).resolve()
-
+        file_path = uploads_dir / safe_filename
         try:
-            file_path.relative_to(uploads_dir.resolve())
-        except ValueError as exc:
-            raise PermissionError("Access denied: path traversal detected") from exc
-
-        if not file_path.is_file():
-            raise FileNotFoundError(f"File not found: {filename}")
+            file_stat = file_path.lstat()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"File not found: {safe_filename}") from exc
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise PermissionError("Access denied: upload is not a regular file")
 
         file_path.unlink()
-        return {"success": True, "message": f"Deleted {filename}"}
+        return {"success": True, "message": f"Deleted {safe_filename}"}
 
     # ------------------------------------------------------------------
     # 对外 API：产物文件
@@ -849,23 +876,38 @@ class InsightFlowClient:
             FileNotFoundError: 产物文件不存在时抛出。
             ValueError: 路径非法时抛出。
         """
+        clean_path = str(path or "").lstrip("/")
         virtual_prefix = "mnt/user-data"
-        clean_path = path.lstrip("/")
-        if not clean_path.startswith(virtual_prefix):
+        if not clean_path.startswith(virtual_prefix + "/"):
             raise ValueError(f"Path must start with /{virtual_prefix}")
 
-        relative = clean_path[len(virtual_prefix) :].lstrip("/")
-        base_dir = get_paths().sandbox_user_data_dir(thread_id)
-        actual = (base_dir / relative).resolve()
+        try:
+            resolved = resolve_thread_file(get_paths(), thread_id, path)
+            file_fd, _ = open_thread_file(
+                resolved,
+                max_bytes=_MAX_EMBEDDED_ARTIFACT_BYTES,
+            )
+        except ThreadFileNotFoundError as exc:
+            raise FileNotFoundError("Artifact not found") from exc
+        except ThreadFileNotRegularError as exc:
+            raise ValueError("Artifact path is not a regular file") from exc
+        except ThreadFileTooLargeError as exc:
+            raise ValueError("Artifact exceeds the embedded client size limit") from exc
+        except ThreadFileAccessError as exc:
+            raise PermissionError("Access denied") from exc
 
         try:
-            actual.relative_to(base_dir.resolve())
-        except ValueError as exc:
-            raise PermissionError("Access denied: path traversal detected") from exc
-        if not actual.exists():
-            raise FileNotFoundError(f"Artifact not found: {path}")
-        if not actual.is_file():
-            raise ValueError(f"Path is not a file: {path}")
+            try:
+                with os.fdopen(file_fd, "rb") as stream:
+                    file_fd = -1
+                    content = stream.read(_MAX_EMBEDDED_ARTIFACT_BYTES + 1)
+            except OSError as exc:
+                raise OSError("Artifact read failed") from exc
+        finally:
+            if file_fd >= 0:
+                os.close(file_fd)
+        if len(content) > _MAX_EMBEDDED_ARTIFACT_BYTES:
+            raise ValueError("Artifact exceeds the embedded client size limit")
 
-        mime_type, _ = mimetypes.guess_type(actual)
-        return actual.read_bytes(), mime_type or "application/octet-stream"
+        mime_type, _ = mimetypes.guess_type(resolved.parts[-1])
+        return content, mime_type or "application/octet-stream"

@@ -39,6 +39,16 @@ Translate the full academic paper into Chinese and deliver a Markdown file. Do n
    - Confirm the references section is present and untranslated when the source has references.
 6. Publish the final Markdown file with `present_files`.
 
+## Execution Discipline
+
+- Translate directly from source text read with `read_file` and append with `write_file`.
+- Do not use `bash`, Python or other generated scripts, temporary translation files, heading maps, `str_replace`, or global search-and-replace to translate or repair the paper.
+- Process contiguous logical batches containing one or more complete sections. Do not make a separate tool call for every sentence or paragraph.
+- Never reread, rewrite, or append a section that is already complete in the output.
+- If an existing output file is provided for continuation, inspect only its ending and the corresponding source location, then resume from the next incomplete section. Do not restart the document.
+- Perform at most one final completeness check. Minor stylistic differences are not a reason to enter a debugging or rewrite loop.
+- Once the output is complete, call `present_files` immediately and return the required final response. Do not continue polishing after publication.
+
 ## Translation Rules
 
 - Output language: Chinese.

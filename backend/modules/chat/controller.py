@@ -10,13 +10,13 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from config.database import get_db
-from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity, get_current_user
+from middlewares.auth import AuthenticatedIdentity, get_current_chat_identity
 from models.user import User
 from schemas.workspace import WorkspaceAttachmentInput
 from utils.audit_logger import record_user_prompt_event
@@ -25,7 +25,6 @@ from utils.audit_logger import record_user_prompt_event
 router = APIRouter(prefix="/chat", tags=["Chat"])
 logger = logging.getLogger(__name__)
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
-_ARTIFACT_URL_EXPIRES_SECONDS = 3600
 _GUEST_MESSAGE_LIMIT = 3
 
 
@@ -66,10 +65,10 @@ def _create_workspace_service(session_id: str, user_id: str):
     return WorkspaceService(session_id=session_id, user_id=user_id)
 
 
-def _get_minio_helpers():
-    from utils.minio_client import get_file_url, object_exists
+def _get_minio_object_exists():
+    from utils.minio_client import object_exists
 
-    return get_file_url, object_exists
+    return object_exists
 
 
 def _get_insight_runtime_service():
@@ -151,22 +150,6 @@ def _is_allowed_session_object_path(session, user_id: UUID, session_id: UUID, ob
         _is_allowed_artifact_object_path(user_id, session_id, object_path)
         or _is_allowed_insight_artifact_path(session, object_path)
     )
-
-
-def _build_insight_artifact_url(session, object_path: str) -> Optional[str]:
-    session_config = dict(getattr(session, "config", {}) or {})
-    if str(session_config.get("runtime") or "").strip().lower() != "lumen":
-        return None
-
-    thread_id = str(session_config.get("threadId") or "").strip()
-    normalized_object_path = str(object_path or "").strip().lstrip("/")
-    if not thread_id or not normalized_object_path:
-        return None
-
-    encoded_path = quote(normalized_object_path, safe="/")
-    insight_runtime_service = _get_insight_runtime_service()
-    gateway_base_url = insight_runtime_service.gateway_public_base_url
-    return f"{gateway_base_url}/api/threads/{thread_id}/artifacts/{encoded_path}"
 
 
 def _build_internal_insight_artifact_url(session, object_path: str) -> Optional[str]:
@@ -815,11 +798,9 @@ async def get_messages(
     chat_service = _create_chat_service(db)
     chat_repo = chat_service.chat_repo
     current_user = identity.user
-    session = await chat_repo.get_session(session_id)
+    session = await chat_repo.get_session_for_user(session_id, current_user.id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     messages = await chat_repo.get_session_messages(session_id)
     workspace_assets = []
@@ -830,7 +811,10 @@ async def get_messages(
         )
         workspace_assets = list((await workspace_service.load_manifest()).assets)
     except Exception as exc:
-        logger.warning(f"Failed to load workspace manifest for chat session {session_id}: {exc}")
+        logger.warning(
+            "Failed to load workspace manifest (error_type=%s)",
+            type(exc).__name__,
+        )
         workspace_assets = []
 
     message_payloads = _merge_message_attachments_with_workspace_assets(
@@ -989,56 +973,6 @@ async def add_message(
     return message_payload
 
 
-@router.get("/sessions/{session_id}/artifacts/url")
-async def get_session_artifact_url(
-    session_id: UUID,
-    object_path: str = Query(..., min_length=1),
-    db: AsyncSession = Depends(get_db),
-    identity: AuthenticatedIdentity = Depends(get_current_chat_identity),
-):
-    """获取当前会话产物文件下载地址（带权限校验）。"""
-    chat_service = _create_chat_service(db)
-    current_user = identity.user
-
-    session = await chat_service.get_session(session_id, current_user.id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    normalized_object_path = object_path.strip().lstrip("/")
-    if not normalized_object_path:
-        raise HTTPException(status_code=422, detail="object_path 不能为空")
-    if ".." in normalized_object_path or "\\" in normalized_object_path:
-        raise HTTPException(status_code=422, detail="object_path 包含非法路径字符")
-
-    if not _is_allowed_session_object_path(session, current_user.id, session_id, normalized_object_path):
-        raise HTTPException(status_code=403, detail="Forbidden artifact path")
-
-    insight_artifact_url = _build_insight_artifact_url(session, normalized_object_path)
-    if insight_artifact_url:
-        file_name = normalized_object_path.rsplit("/", 1)[-1]
-        return {
-            "objectPath": normalized_object_path,
-            "name": file_name,
-            "url": insight_artifact_url,
-            "expiresIn": _ARTIFACT_URL_EXPIRES_SECONDS,
-        }
-
-    get_file_url, object_exists = _get_minio_helpers()
-    exists = await object_exists(normalized_object_path)
-    if not exists:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-
-    file_url = get_file_url(normalized_object_path, expires_seconds=_ARTIFACT_URL_EXPIRES_SECONDS)
-    file_name = normalized_object_path.rsplit("/", 1)[-1]
-
-    return {
-        "objectPath": normalized_object_path,
-        "name": file_name,
-        "url": file_url,
-        "expiresIn": _ARTIFACT_URL_EXPIRES_SECONDS,
-    }
-
-
 @router.get("/sessions/{session_id}/artifacts/download")
 async def download_session_artifact(
     session_id: UUID,
@@ -1070,7 +1004,12 @@ async def download_session_artifact(
     internal_insight_artifact_url = _build_internal_insight_artifact_url(session, normalized_object_path)
     if internal_insight_artifact_url:
         insight_runtime_service = _get_insight_runtime_service()
-        client = httpx.AsyncClient(timeout=insight_runtime_service.request_timeout_seconds)
+        client = httpx.AsyncClient(
+            timeout=insight_runtime_service.request_timeout_seconds,
+            headers=insight_runtime_service.gateway_request_headers(),
+            follow_redirects=False,
+            trust_env=False,
+        )
         try:
             artifact_request = client.build_request("GET", internal_insight_artifact_url)
             artifact_response = await client.send(artifact_request, stream=True)
@@ -1097,7 +1036,7 @@ async def download_session_artifact(
             background=BackgroundTask(_close_httpx_stream, artifact_response, client),
         )
 
-    _get_file_url, object_exists = _get_minio_helpers()
+    object_exists = _get_minio_object_exists()
     exists = await object_exists(normalized_object_path)
     if not exists:
         raise HTTPException(status_code=404, detail="Artifact not found")

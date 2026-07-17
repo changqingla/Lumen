@@ -135,30 +135,6 @@ class ChunkBatchEditRequest(BaseModel):
     password: Optional[str] = Field(None, description="ES密码")
     timeout: int = Field(default=60, description="超时时间(秒)")
 
-class ChunkListRequest(BaseModel):
-    """分块列表查询请求模型"""
-    document_id: str = Field(..., description="文档ID")
-    es_host: str = Field(default="http://localhost:9200", description="Elasticsearch地址")
-    index_name: str = Field(..., description="ES索引名称")
-    page: int = Field(default=1, ge=1, description="页码")
-    page_size: int = Field(default=10, ge=1, le=1000, description="每页数量")
-    username: Optional[str] = Field(None, description="ES用户名")
-    password: Optional[str] = Field(None, description="ES密码")
-    timeout: int = Field(default=60, description="超时时间(秒)")
-
-class ChunkSearchRequest(BaseModel):
-    """分块搜索请求模型"""
-    document_id: str = Field(..., description="文档ID")
-    es_host: str = Field(default="http://localhost:9200", description="Elasticsearch地址")
-    index_name: str = Field(..., description="ES索引名称")
-    query: str = Field(..., description="搜索关键词")
-    page: int = Field(default=1, ge=1, description="页码")
-    page_size: int = Field(default=10, ge=1, le=1000, description="每页数量")
-    highlight: bool = Field(default=False, description="是否高亮显示匹配文本")
-    username: Optional[str] = Field(None, description="ES用户名")
-    password: Optional[str] = Field(None, description="ES密码")
-    timeout: int = Field(default=60, description="超时时间(秒)")
-
 class DocumentDeleteRequest(BaseModel):
     """文档删除请求模型"""
     document_id: str = Field(..., description="要删除的文档ID")
@@ -167,59 +143,6 @@ class DocumentDeleteRequest(BaseModel):
     username: Optional[str] = Field(None, description="ES用户名")
     password: Optional[str] = Field(None, description="ES密码")
     timeout: int = Field(default=60, description="超时时间(秒)")
-
-class DocumentParseRequest(BaseModel):
-    """文档解析请求模型（分块+向量化+存储一体化）"""
-    # 分块配置
-    parser_type: str = Field(default="auto", description="解析器类型")
-    chunk_token_num: int = Field(default=256, ge=1, le=2048, description="每个分块的最大token数")
-    delimiter: str = Field(default="\n。；！？", description="文本分割符")
-    language: str = Field(default="Chinese", description="文档语言")
-    layout_recognize: str = Field(default="DeepDOC", description="布局识别方法")
-    zoomin: int = Field(default=3, ge=1, le=10, description="OCR缩放因子")
-    from_page: int = Field(default=0, ge=0, description="起始页码")
-    to_page: int = Field(default=100000, ge=1, description="结束页码")
-    document_id: Optional[str] = Field(default=None, description="文档ID")
-    
-    # 向量化配置
-    model_factory: str = Field(..., description="模型工厂名称")
-    model_name: str = Field(..., description="模型名称")
-    api_key: Optional[str] = Field(None, description="API密钥")
-    base_url: Optional[str] = Field(None, description="服务端点URL")
-    embedding_batch_size: int = Field(default=16, description="向量化批处理大小")
-    filename_embd_weight: float = Field(default=0.1, description="文件名嵌入权重")
-    
-    # 存储配置
-    es_host: str = Field(default="http://localhost:9200", description="Elasticsearch地址")
-    index_name: str = Field(..., description="ES索引名称")
-    store_batch_size: int = Field(default=100, ge=1, le=1000, description="存储批量大小")
-    es_username: Optional[str] = Field(default=None, description="ES用户名")
-    es_password: Optional[str] = Field(default=None, description="ES密码")
-    es_timeout: int = Field(default=60, ge=10, le=300, description="ES超时时间(秒)")
-
-class VisionExtractRequest(BaseModel):
-    """视觉提取完整内容请求模型"""
-    # CV 模型配置（必需）
-    model_factory: str = Field(..., description="模型工厂 (OpenAI/Tongyi-Qianwen/ZHIPU-AI等)")
-    model_name: Optional[str] = Field(default=None, description="模型名称")
-    api_key: str = Field(..., description="API密钥")
-    model_url: Optional[str] = Field(default=None, description="模型服务地址（可选）")
-
-    # 文档处理参数
-    language: str = Field(default="Chinese", description="文档语言 (Chinese/English)")
-    from_page: int = Field(default=0, ge=0, description="起始页码（从0开始）")
-    to_page: int = Field(default=100000, ge=1, description="结束页码")
-
-    # 视觉解析参数
-    vision_dpi: int = Field(default=50, ge=10, le=300, description="图片DPI分辨率")
-    vision_batch_size: int = Field(default=10, ge=1, le=20, description="批量并发处理大小")
-
-    # 提示词配置
-    use_custom_prompt: bool = Field(default=False, description="是否使用自定义提示词")
-    custom_prompt: Optional[str] = Field(default=None, description="自定义提示词内容")
-
-    # 格式化参数
-    page_separator: str = Field(default=";", description="页面之间的分隔符")
 
 class TaskStatusResponse(BaseModel):
     """任务状态响应模型"""

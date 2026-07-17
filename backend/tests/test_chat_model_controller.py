@@ -1,6 +1,6 @@
 import os
 
-os.environ.setdefault("DEBUG", "false")
+os.environ["DEBUG"] = "false"
 
 from types import SimpleNamespace
 from uuid import uuid4

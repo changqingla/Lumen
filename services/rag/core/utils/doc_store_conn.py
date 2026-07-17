@@ -15,59 +15,12 @@
 #
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 import numpy as np
 
 # 默认向量匹配返回的 top-N 数量
 DEFAULT_MATCH_VECTOR_TOPN = 10
-# 默认稀疏向量匹配返回的 top-N 数量
-DEFAULT_MATCH_SPARSE_TOPN = 10
 # 向量类型定义：可以是列表或 numpy 数组
 VEC = list | np.ndarray
-
-
-@dataclass
-class SparseVector:
-    """
-    稀疏向量类
-
-    用于表示稀疏向量，包含索引和对应的值
-    """
-    indices: list[int]  # 非零元素的索引列表
-    values: list[float] | list[int] | None = None  # 对应索引的值列表
-
-    def __post_init__(self):
-        """初始化后验证：确保索引和值的长度一致"""
-        assert (self.values is None) or (len(self.indices) == len(self.values))
-
-    def to_dict_old(self):
-        """转换为旧格式的字典表示"""
-        d = {"indices": self.indices}
-        if self.values is not None:
-            d["values"] = self.values
-        return d
-
-    def to_dict(self):
-        """转换为字典表示，索引作为键，值作为值"""
-        if self.values is None:
-            raise ValueError("SparseVector.values is None")
-        result = {}
-        for i, v in zip(self.indices, self.values):
-            result[str(i)] = v
-        return result
-
-    @staticmethod
-    def from_dict(d):
-        """从字典创建稀疏向量实例"""
-        return SparseVector(d["indices"], d.get("values"))
-
-    def __str__(self):
-        """字符串表示"""
-        return f"SparseVector(indices={self.indices}{'' if self.values is None else f', values={self.values}'})"
-
-    def __repr__(self):
-        """对象表示"""
-        return str(self)
 
 
 class MatchTextExpr(ABC):
@@ -112,48 +65,6 @@ class MatchDenseExpr(ABC):
         self.extra_options = extra_options
 
 
-class MatchSparseExpr(ABC):
-    """
-    稀疏向量匹配表达式
-
-    用于稀疏向量相似度搜索的匹配表达式
-    """
-    def __init__(
-        self,
-        vector_column_name: str,    # 向量列名
-        sparse_data: SparseVector | dict,  # 稀疏向量数据
-        distance_type: str,         # 距离计算类型
-        topn: int,                  # 返回的 top-N 结果数量
-        opt_params: dict | None = None,  # 可选参数
-    ):
-        self.vector_column_name = vector_column_name
-        self.sparse_data = sparse_data
-        self.distance_type = distance_type
-        self.topn = topn
-        self.opt_params = opt_params
-
-
-class MatchTensorExpr(ABC):
-    """
-    张量匹配表达式
-
-    用于张量数据匹配的表达式
-    """
-    def __init__(
-        self,
-        column_name: str,           # 列名
-        query_data: VEC,            # 查询数据
-        query_data_type: str,       # 查询数据类型
-        topn: int,                  # 返回的 top-N 结果数量
-        extra_option: dict | None = None,  # 额外选项
-    ):
-        self.column_name = column_name
-        self.query_data = query_data
-        self.query_data_type = query_data_type
-        self.topn = topn
-        self.extra_option = extra_option
-
-
 class FusionExpr(ABC):
     """
     融合表达式
@@ -167,7 +78,7 @@ class FusionExpr(ABC):
 
 
 # 匹配表达式的联合类型定义
-MatchExpr = MatchTextExpr | MatchDenseExpr | MatchSparseExpr | MatchTensorExpr | FusionExpr
+MatchExpr = MatchTextExpr | MatchDenseExpr | FusionExpr
 
 class OrderByExpr(ABC):
     """
@@ -187,10 +98,6 @@ class OrderByExpr(ABC):
         """添加降序排序字段"""
         self.fields.append((field, 1))  # 1 表示降序
         return self
-
-    def fields(self):
-        """获取排序字段列表"""
-        return self.fields
 
 class DocStoreConnection(ABC):
     """

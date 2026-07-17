@@ -27,8 +27,6 @@ from collections.abc import Iterator, Sequence
 from langgraph.checkpoint.base import CheckpointTuple, copy_checkpoint
 from langgraph.types import Checkpointer
 
-from src.config.app_config import get_app_config
-from src.config.checkpointer_config import CheckpointerConfig
 from src.agents.checkpointer.utils import (
     _checkpoint_id,
     _checkpoint_namespace,
@@ -38,6 +36,8 @@ from src.agents.checkpointer.utils import (
     _select_latest_checkpoints_per_namespace,
     _sort_checkpoints_oldest_first,
 )
+from src.config.app_config import get_app_config
+from src.config.checkpointer_config import CheckpointerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -263,8 +263,11 @@ def reset_checkpointer() -> None:
     if _checkpointer_ctx is not None:
         try:
             _checkpointer_ctx.__exit__(None, None, None)
-        except Exception:
-            logger.warning("清理 checkpointer 时发生错误", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "清理 checkpointer 时发生错误（%s）",
+                type(exc).__name__,
+            )
         _checkpointer_ctx = None
     _checkpointer = None
 

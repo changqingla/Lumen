@@ -26,7 +26,12 @@ class ChannelService:
 
     """
 
-    def __init__(self, channels_config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        channels_config: dict[str, Any] | None = None,
+        *,
+        gateway_internal_api_token: str | None = None,
+    ) -> None:
         self.bus = MessageBus()
         self.store = ChannelStore()
         config = dict(channels_config or {})
@@ -43,6 +48,7 @@ class ChannelService:
             store=self.store,
             langgraph_url=langgraph_url,
             gateway_url=gateway_url,
+            gateway_internal_api_token=gateway_internal_api_token,
             default_session=default_session if isinstance(default_session, dict) else None,
             channel_sessions=channel_sessions,
         )
@@ -54,6 +60,7 @@ class ChannelService:
     def from_app_config(cls) -> ChannelService:
         """根据应用配置创建 ChannelService。"""
         from src.config.app_config import get_app_config
+        from src.gateway.config import get_gateway_config
 
         config = get_app_config()
         channels_config = {}
@@ -61,7 +68,13 @@ class ChannelService:
         extra = config.model_extra or {}
         if "channels" in extra:
             channels_config = extra["channels"]
-        return cls(channels_config=channels_config)
+        gateway_token = (
+            get_gateway_config().internal_api_token.get_secret_value()
+        )
+        return cls(
+            channels_config=channels_config,
+            gateway_internal_api_token=gateway_token,
+        )
 
     async def start(self) -> None:
         """启动管理器和所有已启用通道。"""
@@ -84,15 +97,21 @@ class ChannelService:
 
     async def stop(self) -> None:
         """停止所有通道和管理器。"""
+        # Stop new work and cancel in-flight handlers before tearing down the
+        # outbound channel callbacks they may still use.
+        await self.manager.stop()
+
         for name, channel in list(self._channels.items()):
             try:
                 await channel.stop()
                 logger.info("Channel %s stopped", name)
-            except Exception:
-                logger.exception("Error stopping channel %s", name)
+            except Exception as exc:
+                logger.error(
+                    "Error stopping channel %s (%s)",
+                    name,
+                    type(exc).__name__,
+                )
         self._channels.clear()
-
-        await self.manager.stop()
         self._running = False
         logger.info("ChannelService stopped")
 
@@ -101,8 +120,12 @@ class ChannelService:
         if name in self._channels:
             try:
                 await self._channels[name].stop()
-            except Exception:
-                logger.exception("Error stopping channel %s for restart", name)
+            except Exception as exc:
+                logger.error(
+                    "Error stopping channel %s for restart (%s)",
+                    name,
+                    type(exc).__name__,
+                )
             del self._channels[name]
 
         config = self._config.get(name)
@@ -123,8 +146,12 @@ class ChannelService:
             from src.reflection import resolve_class
 
             channel_cls = resolve_class(import_path, base_class=None)
-        except Exception:
-            logger.exception("Failed to import channel class for %s", name)
+        except Exception as exc:
+            logger.error(
+                "Failed to import channel class for %s (%s)",
+                name,
+                type(exc).__name__,
+            )
             return False
 
         try:
@@ -133,8 +160,12 @@ class ChannelService:
             self._channels[name] = channel
             logger.info("Channel %s started", name)
             return True
-        except Exception:
-            logger.exception("Failed to start channel %s", name)
+        except Exception as exc:
+            logger.error(
+                "Failed to start channel %s (%s)",
+                name,
+                type(exc).__name__,
+            )
             return False
 
     def get_status(self) -> dict[str, Any]:

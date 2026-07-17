@@ -13,7 +13,7 @@ interface UserProfile {
   avatar: string | null;
   user_level: string;
   is_admin: boolean;
-  membership_expires_at: string | null;
+  member_expires_at: string | null;
 }
 
 interface OrganizationSummary {
@@ -50,14 +50,14 @@ function normalizeOrganizations(orgsData: OrganizationListResponse): Organizatio
 function toUserProfile(userData: CurrentUserResponse): UserProfile {
   return {
     ...userData,
-    membership_expires_at: userData.membership_expires_at ?? null,
+    member_expires_at: userData.member_expires_at ?? null,
   };
 }
 
 function toActivatedUserProfile(result: ActivationResponse): UserProfile {
   return {
     ...result,
-    membership_expires_at: result.member_expires_at,
+    member_expires_at: result.member_expires_at,
   };
 }
 
@@ -354,8 +354,8 @@ export default function ProfileModal({ isOpen, onClose, initialTab = 'profile' }
                       </div>
                       {(user.user_level === 'member' || user.user_level === 'premium') && (
                         <div className={styles.expiryDate}>
-                          {user.membership_expires_at 
-                            ? `有效期至 ${new Date(user.membership_expires_at).toLocaleDateString()}`
+                          {user.member_expires_at
+                            ? `有效期至 ${new Date(user.member_expires_at).toLocaleDateString()}`
                             : '永久有效'}
                         </div>
                       )}

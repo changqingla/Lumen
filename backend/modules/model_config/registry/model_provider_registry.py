@@ -355,17 +355,6 @@ def get_provider_definition(provider_code: str) -> ProviderDefinition | None:
     return _PROVIDER_BY_CODE.get(normalized)
 
 
-def get_provider_model_definition(provider_code: str, model_name: str) -> ProviderModelDefinition | None:
-    provider = get_provider_definition(provider_code)
-    if provider is None:
-        return None
-    normalized_model_name = str(model_name or "").strip()
-    for item in provider.models:
-        if item.name == normalized_model_name:
-            return item
-    return None
-
-
 def find_provider_for_runtime_model(runtime_model_name: str) -> tuple[ProviderDefinition, ProviderModelDefinition] | None:
     normalized = str(runtime_model_name or "").strip()
     if not normalized:

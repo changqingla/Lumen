@@ -19,8 +19,7 @@ import copy
 import re
 
 from io import BytesIO
-from core.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, docx_question_level
-from core.utils import num_tokens_from_string
+from core.nlp import rag_tokenizer, tokenize, tokenize_table, docx_question_level
 from deepdoc.parser import DocxParser
 from docx import Document
 from PIL import Image
@@ -40,14 +39,17 @@ class Docx(DocxParser):
             related_part = document.part.related_parts[embed]
         except KeyError:
             # 跳过损坏的图片引用（如指向 NULL 的关系）
-            logging.warning(f"跳过损坏的图片引用: {embed}")
+            logging.warning("DOCX image skipped: reason=damaged_relationship")
             return None
         try:
             image = related_part.image
             image = Image.open(BytesIO(image.blob))
             return image
-        except (AttributeError, Exception) as e:
-            logging.warning(f"无法读取图片 {embed}: {e}")
+        except (AttributeError, Exception) as error:
+            logging.warning(
+                "DOCX image skipped: reason=read_failure error_type=%s",
+                type(error).__name__,
+            )
             return None
 
     def concat_img(self, img1, img2):
@@ -157,14 +159,3 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return res
     else:
         raise NotImplementedError("file type not supported yet(docx supported)")
-    
-
-if __name__ == "__main__":
-    import sys
-
-
-    def dummy(prog=None, msg=""):
-        pass
-
-
-    chunk(sys.argv[1], callback=dummy)

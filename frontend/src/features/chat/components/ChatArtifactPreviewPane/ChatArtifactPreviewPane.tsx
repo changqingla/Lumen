@@ -57,7 +57,8 @@ export default function ChatArtifactPreviewPane({
               title={preview.fileName}
               src={preview.url}
               className={styles.htmlFrame}
-              sandbox="allow-same-origin"
+              sandbox=""
+              referrerPolicy="no-referrer"
             />
           </div>
         </div>

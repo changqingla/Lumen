@@ -51,7 +51,9 @@ def _patch_docx_null_references():
                     # 跳过目标为 NULL 的损坏关系链接
                     target = rel_elm.target_ref
                     if target in ('NULL', '../NULL', './NULL', '/NULL'):
-                        logging.warning(f"跳过损坏的 NULL 引用关系: {rel_elm.rId}")
+                        logging.warning(
+                            "DOCX relation skipped: stage=load_relationships reason=null_target"
+                        )
                         _skipped_rel_ids.add(rel_elm.rId)
                         continue
                     srels._srels.append(_SerializedRelationship(baseURI, rel_elm))
@@ -61,8 +63,11 @@ def _patch_docx_null_references():
         _SerializedRelationships.load_from_xml = _patched_load_from_xml
         logging.debug("已应用 python-docx NULL 引用修复补丁 (load_from_xml)")
         
-    except Exception as e:
-        logging.warning(f"无法应用 python-docx NULL 引用修复补丁 (load_from_xml): {e}")
+    except Exception as error:
+        logging.warning(
+            "DOCX compatibility patch failed: stage=load_from_xml error_type=%s",
+            type(error).__name__,
+        )
     
     # 补丁2：修复 RelationshipCollection 的 get_or_add 和 __getitem__ 方法
     try:
@@ -76,15 +81,18 @@ def _patch_docx_null_references():
                 return _original_getitem(self, rId)
             except KeyError:
                 if rId in _skipped_rel_ids:
-                    logging.debug(f"忽略被跳过的关系ID查找: {rId}")
+                    logging.debug("DOCX skipped relation lookup ignored")
                     return None
                 raise
         
         Relationships.__getitem__ = _patched_getitem
         logging.debug("已应用 python-docx NULL 引用修复补丁 (Relationships.__getitem__)")
         
-    except Exception as e:
-        logging.warning(f"无法应用 python-docx NULL 引用修复补丁 (Relationships): {e}")
+    except Exception as error:
+        logging.warning(
+            "DOCX compatibility patch failed: stage=relationships error_type=%s",
+            type(error).__name__,
+        )
     
     # 补丁3：修复 Part 的 related_parts 属性访问
     try:
@@ -99,15 +107,18 @@ def _patch_docx_null_references():
                     return _original_related_part(self, rId)
                 except (KeyError, AttributeError):
                     if rId in _skipped_rel_ids:
-                        logging.debug(f"忽略损坏关系的 related_part 查找: {rId}")
+                        logging.debug("DOCX damaged related-part lookup ignored")
                         return None
                     raise
             
             Part.related_part = _patched_related_part
             logging.debug("已应用 python-docx NULL 引用修复补丁 (Part.related_part)")
             
-    except Exception as e:
-        logging.warning(f"无法应用 python-docx NULL 引用修复补丁 (Part): {e}")
+    except Exception as error:
+        logging.warning(
+            "DOCX compatibility patch failed: stage=related_part error_type=%s",
+            type(error).__name__,
+        )
 
 
 # 在模块加载时应用补丁
@@ -230,24 +241,36 @@ class DeepRAGDocxParser:
                                 pn += 1
                         except Exception:
                             pass
-                except KeyError as e:
+                except KeyError as error:
                     # 跳过因损坏关系导致的错误
-                    logging.warning(f"跳过损坏的段落 run: {e}")
+                    logging.warning(
+                        "DOCX content skipped: stage=paragraph_run error_type=%s",
+                        type(error).__name__,
+                    )
                     continue
 
                 secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, 'name') else '')) # then concat run.text as part of the paragraph
-        except KeyError as e:
-            logging.warning(f"解析段落时遇到损坏的关系引用: {e}")
+        except KeyError as error:
+            logging.warning(
+                "DOCX content parsing stopped: stage=paragraphs error_type=%s",
+                type(error).__name__,
+            )
 
         tbls = []
         try:
             for tb in self.doc.tables:
                 try:
                     tbls.append(self.__extract_table_content(tb))
-                except KeyError as e:
-                    logging.warning(f"跳过损坏的表格: {e}")
+                except KeyError as error:
+                    logging.warning(
+                        "DOCX content skipped: stage=table error_type=%s",
+                        type(error).__name__,
+                    )
                     continue
-        except KeyError as e:
-            logging.warning(f"解析表格时遇到损坏的关系引用: {e}")
+        except KeyError as error:
+            logging.warning(
+                "DOCX content parsing stopped: stage=tables error_type=%s",
+                type(error).__name__,
+            )
             
         return secs, tbls

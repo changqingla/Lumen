@@ -8,11 +8,10 @@ DeepRAG API 共用工具模块
 
 import logging
 from typing import Optional, Dict, Any, List
-from embedding.chunk_embedder import ChunkEmbedder, EmbeddingConfig
 from embed_store.chunk_store import DocumentStore
-from recall.retriever import DeepRagPureRetriever, DeepRagRetrievalConfig
-from core.llm import EmbeddingModel, RerankModel
+from recall_lib import DeepRagPureRetriever, DeepRagRetrievalConfig
 from core.nlp import rag_tokenizer
+from error_boundary import log_rag_failure
 import re
 import time
 
@@ -20,70 +19,7 @@ logger = logging.getLogger(__name__)
 
 class DeepRAGCommonUtils:
     """DeepRAG 通用工具类"""
-    
-    @staticmethod
-    def create_embedding_model(model_factory: str, model_name: str, 
-                              base_url: Optional[str] = None, api_key: Optional[str] = None):
-        """创建向量化模型"""
-        # 打印用户传入的 API key（带掩码保护）
-        if api_key:
-            masked_key = f"{api_key[:8]}...{api_key[-8:]}" if len(api_key) > 16 else "***"
-            logger.info(f"[create_embedding_model] 用户传入的 api_key: {masked_key}")
-        else:
-            logger.info(f"[create_embedding_model] 用户传入的 api_key: None")
-        
-        if model_factory not in EmbeddingModel:
-            available_factories = list(EmbeddingModel.keys())
-            raise ValueError(f"不支持的嵌入模型工厂: {model_factory}. 可用工厂: {available_factories}")
 
-        model_class = EmbeddingModel[model_factory]
-
-        # SILICONFLOW, NovitaAI, GiteeAI 只需要 api_key 和 model_name，使用内置默认 URL
-        if model_factory in ["SILICONFLOW", "NovitaAI", "GiteeAI"]:
-            return model_class(api_key or "empty", model_name)
-        
-        # 其他需要 base_url 的模型
-        if model_factory in ["LocalAI", "VLLM", "openai", "LM-Studio", "GPUStack"]:
-            if not base_url:
-                raise ValueError(f"{model_factory} 嵌入模型需要 base_url 参数")
-            return model_class(api_key or "empty", model_name, base_url)
-        elif model_factory == "HuggingFace":
-            return model_class(api_key or "empty", model_name)
-        elif model_factory == "OpenAI":
-            if not api_key:
-                raise ValueError("OpenAI 模型需要 API 密钥")
-            return model_class(api_key, model_name)
-        else:
-            return model_class(api_key or "empty", model_name)
-    
-    @staticmethod
-    def create_rerank_model(rerank_factory: str, rerank_model_name: str,
-                           rerank_base_url: Optional[str] = None, rerank_api_key: Optional[str] = None):
-        """创建重排序模型"""
-        if rerank_factory not in RerankModel:
-            available_factories = list(RerankModel.keys())
-            raise ValueError(f"不支持的重排序模型工厂: {rerank_factory}. 可用工厂: {available_factories}")
-
-        rerank_class = RerankModel[rerank_factory]
-
-        # 准备参数
-        key = rerank_api_key or "empty"
-        model_name = rerank_model_name or ""
-        base_url = rerank_base_url
-
-        # 根据模型类型准备初始化参数
-        if rerank_factory in ["LocalAI", "VLLM", "openai", "LM-Studio", "GPUStack"]:
-            if not base_url:
-                raise ValueError(f"{rerank_factory} 重排序模型需要 base_url 参数")
-
-            return rerank_class(key, model_name, base_url)
-        else:
-            # 其他模型的标准初始化
-            init_params = {"key": key, "model_name": model_name}
-            if base_url:
-                init_params["base_url"] = base_url
-            return rerank_class(**init_params)
-    
     @staticmethod
     def create_retriever(es_host: str, index_names: List[str], page: int = 1, 
                         page_size: int = 10, similarity_threshold: float = 0.2,
@@ -229,8 +165,8 @@ class DeepRAGCommonUtils:
             else:
                 return None
                 
-        except Exception as e:
-            logger.error(f"获取块 {chunk_id} 失败: {e}")
+        except Exception as error:
+            log_rag_failure(logger, stage="chunk_edit", error=error)
             return None
     
     @staticmethod
@@ -262,15 +198,13 @@ class DeepRAGCommonUtils:
             original_chunk_id = original_chunk["chunk_id"]
         
         if not original_chunk_id:
-            error_msg = f"编辑操作失败：无法获取原有chunk ID。原始块数据包含的ID字段: {[k for k in original_chunk.keys() if 'id' in k.lower()]}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError("编辑操作缺少有效的文档块标识")
         
         # 确保保持原有的chunk_id不变
         updated_chunk["chunk_id"] = original_chunk_id
         updated_chunk["_id"] = original_chunk_id
         
-        logger.info(f"编辑块 {original_chunk_id}：保持原有ID不变")
+        logger.debug("编辑文档块时保留原有标识")
         
         # 自动分词处理 - 只处理明确提供的字段
         if content is not None:

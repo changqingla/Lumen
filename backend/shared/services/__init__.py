@@ -1,1 +1,0 @@
-"""Cross-domain shared services."""

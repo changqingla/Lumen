@@ -1,5 +1,19 @@
 import type { KnowledgeChatSession, QuotaExceededLikeError } from '@/features/knowledge/types/detail';
 import type { KnowledgeQuotaExceededModalState } from '@/features/knowledge/types/chat';
+import type { ChatUIMode } from '@/shared/contracts/chat-ui-mode';
+
+export const buildWholeKnowledgeBaseSessionConfig = (
+  kbId: string,
+  uiMode: ChatUIMode,
+) => ({
+  uiMode,
+  sourceType: 'knowledge' as const,
+  kbIds: [kbId],
+  // Empty docIds selects every document with committed Markdown. The backend
+  // resolves them in bounded pages instead of sending every ID here.
+  docIds: [] as string[],
+  isKBLocked: true,
+});
 
 export const defaultKnowledgeQuotaExceededModalState = (): KnowledgeQuotaExceededModalState => ({
   isOpen: false,

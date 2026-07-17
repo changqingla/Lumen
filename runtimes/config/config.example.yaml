@@ -198,6 +198,25 @@ tools:
     use: src.sandbox.tools:bash_tool
 
 # ============================================================================
+# 上传配置
+# ============================================================================
+# Gateway 以固定大小块从 multipart 临时文件写入线程目录，不会把完整文件
+# 再读入 Python 内存。限制按原始上传内容计算，不包含生成的 Markdown。
+
+uploads:
+  max_file_size_bytes: 104857600      # 单文件 100 MiB
+  max_request_size_bytes: 209715200   # 单次请求累计 200 MiB
+  stream_chunk_size_bytes: 1048576    # 每块 1 MiB（最大允许 8 MiB）
+  markdown_extensions:
+    - .pdf
+    - .ppt
+    - .pptx
+    - .xls
+    - .xlsx
+    - .doc
+    - .docx
+
+# ============================================================================
 # Agent Loop 配置
 # ============================================================================
 # 控制模型与工具往返过程中的运行时保护策略
@@ -224,6 +243,10 @@ agent_loop:
 sandbox:
   use: src.community.aio_sandbox:AioSandboxProvider
   # image: lumen-sandbox:ppt-master  # 示例：使用安装了 ppt-master 依赖的本地派生沙箱镜像
+  # Docker 沙箱默认启用 no-new-privileges、默认 seccomp、删除全部 capabilities，
+  # 并限制为最多 512 个进程。按工作负载需要可在 32..4096 范围调整。
+  pids_limit: 512
+  drop_all_capabilities: true
 
 #   # 注意：技能目录会自动从 skills.path 挂载到 skills.container_path
 #   # mounts:
@@ -240,12 +263,13 @@ sandbox:
 #   #   API_KEY: $MY_API_KEY        # 读取宿主机的 MY_API_KEY 环境变量
 #   #   DATABASE_URL: $DATABASE_URL  # 读取宿主机的 DATABASE_URL 环境变量
 
-# 选项 3：由 Provisioner 管理的 AIO 沙箱（与根目录 docker/docker-compose.yml 协同）
-# 每个 sandbox_id 都会在 k3s 中获得一个由 provisioner 管理的独立 Pod。
-# 适合追求更高隔离性和可扩展性的生产或高级场景：
+# 选项 3：由 Provisioner 管理的 AIO 沙箱。Compose 默认通过环境变量
+# SANDBOX_PROVISIONER_URL 启用这个模式，不需要修改共享配置文件。
+# Provisioner 是唯一持有 Docker socket 的服务，并在服务端固定镜像、端口、
+# 环境、安全参数和五个独立挂载；调用方只能提交绑定的 thread_id/sandbox_id。
 # sandbox:
 #   use: src.community.aio_sandbox:AioSandboxProvider
-#   provisioner_url: http://provisioner:8002
+#   provisioner_url: http://127.0.0.1:8002
 
 # ============================================================================
 # 子 Agent 配置
@@ -342,11 +366,11 @@ summarization:
 # ============================================================================
 # 记忆配置
 # ============================================================================
-# 全局记忆机制
-# 为个性化回复存储用户上下文和对话历史
+# 按 Backend 派生的租户 scope 隔离长期记忆
+# 为个性化回复存储用户上下文和对话历史；旧全局文件不会自动读取
 memory:
   enabled: true
-  storage_path: memory.json # 相对于 backend 目录的路径
+  storage_path: memory.json # 作为 scoped 存储根提示，实际写入 memory.json.scoped/
   debounce_seconds: 30 # 处理排队更新前的等待时间
   model_name: null # 使用默认模型
   max_facts: 100 # 最多存储的事实条数

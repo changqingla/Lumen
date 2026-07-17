@@ -29,17 +29,3 @@ class SandboxRuntimeError(SandboxError):
     """当沙箱运行时不可用或配置错误时抛出。"""
 
     pass
-
-
-class SandboxFileError(SandboxError):
-    """当沙箱内文件操作失败时抛出。"""
-
-    def __init__(self, message: str, path: str | None = None, operation: str | None = None):
-        details = {}
-        if path:
-            details["path"] = path
-        if operation:
-            details["operation"] = operation
-        super().__init__(message, details)
-        self.path = path
-        self.operation = operation

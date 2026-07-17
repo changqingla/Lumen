@@ -7,7 +7,8 @@ from typing import Any
 import uuid
 
 from cryptography.fernet import Fernet, InvalidToken
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 
 from config.settings import settings
 
@@ -66,7 +67,7 @@ def decode_runtime_model_binding_token(token: str) -> dict[str, Any]:
             settings.model_config_encryption_secret,
             algorithms=[settings.ALGORITHM],
         )
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise ValueError("模型绑定令牌无效或已过期") from exc
 
     if payload.get("purpose") != _MODEL_CONFIG_TOKEN_PURPOSE:

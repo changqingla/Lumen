@@ -1,7 +1,10 @@
+import logging
+
 from src.sandbox.local.local_sandbox import LocalSandbox
 from src.sandbox.sandbox import Sandbox
 from src.sandbox.sandbox_provider import SandboxProvider
 
+logger = logging.getLogger(__name__)
 _singleton: LocalSandbox | None = None
 
 
@@ -32,9 +35,12 @@ class LocalSandboxProvider(SandboxProvider):
             # 仅当技能目录存在时才添加映射
             if skills_path.exists():
                 mappings[container_path] = str(skills_path)
-        except Exception as e:
+        except Exception as exc:
             # 配置加载失败时仅记录告警，不阻塞启动
-            print(f"Warning: Could not setup skills path mapping: {e}")
+            logger.warning(
+                "Could not set up the local skills path mapping (error_type=%s)",
+                type(exc).__name__,
+            )
 
         return mappings
 

@@ -11,6 +11,15 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+_CONSUME_CODE_SCRIPT = """
+local value = redis.call('GET', KEYS[1])
+if value and value == ARGV[1] then
+    redis.call('DEL', KEYS[1])
+    return 1
+end
+return 0
+"""
+
 
 class EmailService:
     """Email service using SMTP protocol."""
@@ -58,13 +67,21 @@ class EmailService:
                     server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
                     server.sendmail(settings.SMTP_USERNAME, [to_email], msg.as_string())
 
-            logger.info(f"Email sent successfully to {to_email}")
+            logger.info("Email delivery completed")
             return True
-        except Exception as e:
-            logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        except Exception as exc:
+            logger.error("Email delivery failed (error_type=%s)", type(exc).__name__)
             return False
 
-    async def send_verification_code(self, email: str) -> bool:
+    @staticmethod
+    def _verification_key(email: str, purpose: str) -> str:
+        normalized_email = str(email or "").strip().lower()
+        normalized_purpose = str(purpose or "").strip().lower()
+        if normalized_purpose not in {"register", "reset"}:
+            raise ValueError("Unsupported verification-code purpose")
+        return f"verify_code:{normalized_purpose}:{normalized_email}"
+
+    async def send_verification_code(self, email: str, purpose: str) -> bool:
         """
         Generate a code, store it in Redis, and send it via email.
         
@@ -76,7 +93,7 @@ class EmailService:
         """
         code = self._generate_code()
         redis_client = await get_redis_client()
-        key = f"verify_code:{email}"
+        key = self._verification_key(email, purpose)
         await redis_client.set(key, code, ex=300)
 
         subject = "【Lumen】您的验证码"
@@ -109,13 +126,9 @@ class EmailService:
         if not success:
             await redis_client.delete(key)
 
-        if settings.DEBUG and not success:
-            logger.warning(f"[DEBUG] Verification code for {email}: {code}")
-            return True
-
         return success
 
-    async def verify_code(self, email: str, code: str) -> bool:
+    async def verify_code(self, email: str, code: str, purpose: str) -> bool:
         """
         Verify the code provided by the user.
         Deletes the code from Redis upon successful verification.
@@ -128,10 +141,6 @@ class EmailService:
             True if valid, False otherwise
         """
         redis_client = await get_redis_client()
-        key = f"verify_code:{email}"
-        stored_code = await redis_client.get(key)
-
-        if stored_code and stored_code == code:
-            await redis_client.delete(key)
-            return True
-        return False
+        key = self._verification_key(email, purpose)
+        consumed = await redis_client.eval(_CONSUME_CODE_SCRIPT, 1, key, code)
+        return bool(consumed)

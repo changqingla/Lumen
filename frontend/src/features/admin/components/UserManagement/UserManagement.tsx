@@ -17,7 +17,9 @@ interface User {
   is_admin: boolean;
   created_at: string;
   last_active_at: string | null;
-  weekly_token_total: number;
+  billing_cycle_token_total: number;
+  model_quota_limit: number;
+  quota_reset_date: string;
 }
 
 export default function UserManagement() {
@@ -133,6 +135,13 @@ export default function UserManagement() {
 
   const formatTokenTotal = (total: number) => `${total.toLocaleString('zh-CN')} tokens`;
 
+  const formatQuotaResetDate = (value: string) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+      ? '日期未知'
+      : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  };
+
   const filteredUsers = users.filter((user) =>
     user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     user.email.toLowerCase().includes(searchQuery.toLowerCase())
@@ -146,6 +155,7 @@ export default function UserManagement() {
           <input
             type="text"
             placeholder="搜索用户..."
+            aria-label="搜索用户名或邮箱"
             className={styles.searchInput}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -166,7 +176,7 @@ export default function UserManagement() {
             <div className={styles.col1}>用户</div>
             <div className={styles.col2}>身份等级</div>
             <div className={styles.col3}>最近活跃</div>
-            <div className={styles.col4}>近 7 日 Token</div>
+            <div className={styles.col4}>本计费周期 Token</div>
             <div className={styles.col5}>注册时间</div>
             <div className={styles.col6}>操作</div>
           </div>
@@ -207,7 +217,14 @@ export default function UserManagement() {
                 </div>
 
                 <div className={styles.col4}>
-                  <span className={styles.tokenValue}>{formatTokenTotal(user.weekly_token_total)}</span>
+                  <div className={styles.tokenCell}>
+                    <span className={styles.tokenValue}>
+                      {formatTokenTotal(user.billing_cycle_token_total)}
+                    </span>
+                    <span className={styles.tokenMeta}>
+                      额度 {formatTokenTotal(user.model_quota_limit)} · {formatQuotaResetDate(user.quota_reset_date)} 重置
+                    </span>
+                  </div>
                 </div>
 
                 <div className={styles.col5}>

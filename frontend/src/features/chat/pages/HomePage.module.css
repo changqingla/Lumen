@@ -131,12 +131,14 @@
 }
 
 .emptyContainer {
+  --home-welcome-top-inset: clamp(290px, 33vh, 370px);
+
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: 196px 20px 32px;
+  padding: var(--home-welcome-top-inset) 20px 32px;
   width: 100%;
   margin: 0 auto;
   height: 100%;
@@ -1351,7 +1353,9 @@
   }
 
   .emptyContainer {
-    padding: 156px 14px 20px;
+    --home-welcome-top-inset: 210px;
+
+    padding: var(--home-welcome-top-inset) 14px 20px;
   }
 
   .welcomeTitle {
@@ -1462,9 +1466,11 @@
   }
 }
 
-@media (max-height: 760px) {
+@media (max-height: 760px) and (min-width: 769px) {
   .emptyContainer {
-    padding: 116px 20px 24px;
+    --home-welcome-top-inset: clamp(265px, 38vh, 295px);
+
+    padding: var(--home-welcome-top-inset) 20px 24px;
   }
 }
 

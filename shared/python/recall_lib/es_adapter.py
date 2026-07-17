@@ -6,25 +6,27 @@
 将新的SimpleESConnection适配为DeepRAG的DocStoreConnection接口。
 """
 
-import sys
 import logging
-import json
-from pathlib import Path
 
-# 添加DeepRAG根目录到路径
-current_dir = Path(__file__).parent.absolute()
-deeprag_root = current_dir.parent / "rag"
-sys.path.insert(0, str(deeprag_root))
-
-# 导入DeepRAG核心组件
-from core.utils.doc_store_conn import DocStoreConnection, MatchExpr, OrderByExpr
-from core.utils.doc_store_conn import MatchTextExpr, MatchDenseExpr, FusionExpr
-from core.utils import rmSpace
-
-# 导入recall_lib内部的ES连接
+from ._logging import log_es_query_shape, log_operation_failure
+from ._paths import ensure_rag_root_on_path
 from .es_connection import SimpleESConnection
 
-logger = logging.getLogger('recall.es_adapter')
+# 添加DeepRAG根目录到路径
+deeprag_root = ensure_rag_root_on_path()
+
+# 导入DeepRAG核心组件
+from core.utils import rmSpace  # noqa: E402
+from core.utils.doc_store_conn import (  # noqa: E402
+    DocStoreConnection,
+    FusionExpr,
+    MatchDenseExpr,
+    MatchExpr,
+    MatchTextExpr,
+    OrderByExpr,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ESAdapter(DocStoreConnection):
@@ -57,15 +59,15 @@ class ESAdapter(DocStoreConnection):
         """
         try:
             return await self.es_conn.index_exists(indexName)
-        except Exception as e:
-            logger.error(f"检查索引失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter index check", error)
             return False
     
     async def search(self, selectFields: list[str], highlightFields: list[str],
             condition: dict, matchExprs: list[MatchExpr],
               orderBy: OrderByExpr, offset: int, limit: int,
               indexNames: str|list[str], 
-              aggFields: list[str] = [], rank_feature: dict | None = None):
+              aggFields: list[str] | None = None, rank_feature: dict | None = None):
         """
         异步搜索方法
 
@@ -84,6 +86,8 @@ class ESAdapter(DocStoreConnection):
         Returns:
             搜索结果
         """
+        aggFields = aggFields or []
+
         # 标准化索引名称
         if isinstance(indexNames, str):
             indexNames = indexNames.split(",")
@@ -117,11 +121,11 @@ class ESAdapter(DocStoreConnection):
 
             return res
 
-        except Exception as e:
-            logger.error(f"异步搜索失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter search", error)
 
             # 如果是向量字段相关错误，尝试降级为纯文本搜索
-            if "unknown field" in str(e) and "vec" in str(e):
+            if "unknown field" in str(error) and "vec" in str(error):
                 logger.warning("向量字段不存在，尝试纯文本搜索")
                 try:
                     fallback_query = await self._build_fallback_query(
@@ -137,11 +141,15 @@ class ESAdapter(DocStoreConnection):
 
                     return res
 
-                except Exception as fallback_e:
-                    logger.error(f"降级搜索也失败: {fallback_e}")
-                    raise e
+                except Exception as fallback_error:
+                    log_operation_failure(
+                        logger,
+                        "Elasticsearch adapter fallback search",
+                        fallback_error,
+                    )
+                    raise error from fallback_error
 
-            raise e
+            raise
 
     async def _build_es_query(self, selectFields, highlightFields, condition,
                        matchExprs, orderBy, offset, limit,
@@ -325,8 +333,7 @@ class ESAdapter(DocStoreConnection):
             query["from"] = offset
             query["size"] = limit
 
-        # 调试：打印生成的查询
-        logger.debug(f"生成的ES查询: {json.dumps(query, indent=2)}")
+        log_es_query_shape(logger, query)
 
         return query
 
@@ -398,14 +405,15 @@ class ESAdapter(DocStoreConnection):
         _ = knowledgebaseIds
 
         try:
+            await self.es_conn.ensure_connected()
             result = await self.es_conn.es.get(index=indexName, id=chunkId)
             if result["found"]:
                 chunk = result["_source"]
                 chunk["id"] = chunkId
                 return chunk
             return None
-        except Exception as e:
-            logger.error(f"获取文档失败 {chunkId}: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter document lookup", error)
             return None
 
     # 实现其他抽象方法（简化实现）
@@ -416,9 +424,14 @@ class ESAdapter(DocStoreConnection):
     async def health(self):
         """异步健康检查"""
         try:
+            await self.es_conn.ensure_connected()
             return await self.es_conn.es.cluster.health()
-        except Exception as e:
-            return {"status": "red", "error": str(e)}
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter health check", error)
+            return {
+                "status": "red",
+                "error": "Elasticsearch health check failed",
+            }
 
     async def createIdx(self, indexName: str, knowledgebaseId: str, schema: dict):
         """异步创建索引"""
@@ -441,8 +454,8 @@ class ESAdapter(DocStoreConnection):
                 logger.warning(f"schema中未找到向量维度配置，使用默认值: {vector_dim}")
 
             return await self.es_conn.create_index(indexName, vector_dim)
-        except Exception as e:
-            logger.error(f"创建索引失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter index creation", error)
             return False
 
     async def deleteIdx(self, indexName: str, knowledgebaseId: str):
@@ -452,8 +465,8 @@ class ESAdapter(DocStoreConnection):
 
         try:
             return await self.es_conn.delete_index(indexName)
-        except Exception as e:
-            logger.error(f"删除索引失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter index deletion", error)
             return False
 
     async def insert(self, documents: list[dict], indexName: str, knowledgebaseId: str = None) -> list[str]:
@@ -465,8 +478,8 @@ class ESAdapter(DocStoreConnection):
             result = await self.es_conn.bulk_index(indexName, documents)
             # 返回成功插入的文档ID列表
             return [doc.get("id", str(i)) for i, doc in enumerate(documents[:result["success"]])]
-        except Exception as e:
-            logger.error(f"插入文档失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter document insertion", error)
             return []
 
     async def update(self, documents: list[dict], indexName: str, knowledgebaseId: str = None) -> int:
@@ -478,8 +491,8 @@ class ESAdapter(DocStoreConnection):
             # 简化实现：使用bulk_index进行更新
             result = await self.es_conn.bulk_index(indexName, documents)
             return result["success"]
-        except Exception as e:
-            logger.error(f"更新文档失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter document update", error)
             return 0
 
     async def delete(self, condition: dict, indexName: str, knowledgebaseId: str) -> int:
@@ -496,8 +509,8 @@ class ESAdapter(DocStoreConnection):
             # 使用ES的delete_by_query API
             result = await self.es_conn.es.delete_by_query(index=indexName, body=query)
             return result.get("deleted", 0)
-        except Exception as e:
-            logger.error(f"删除文档失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch adapter document deletion", error)
             return 0
 
     def sql(self, sql: str, fetch_size: int, format: str):
@@ -505,13 +518,8 @@ class ESAdapter(DocStoreConnection):
         # 兼容参数，实际不使用
         _ = sql, fetch_size, format
 
-        try:
-            # 简化实现：不支持SQL查询
-            logger.warning("SQL查询功能未实现")
-            return None
-        except Exception as e:
-            logger.error(f"SQL查询失败: {e}")
-            return None
+        logger.warning("SQL查询功能未实现")
+        return None
 
     async def _build_fallback_query(self, selectFields, highlightFields, condition,
                            matchExprs, orderBy, offset, limit, aggFields):
@@ -578,11 +586,21 @@ class ESAdapter(DocStoreConnection):
                             field_type = properties[vector_field].get("type")
                             if field_type in ["dense_vector", "knn_vector"]:
                                 return True
-                except Exception as e:
-                    logging.warning(f"检查索引 {index_name} 映射失败: {e}")
+                except Exception as error:
+                    log_operation_failure(
+                        logger,
+                        "Elasticsearch mapping lookup",
+                        error,
+                        level=logging.WARNING,
+                    )
                     continue
 
             return False
-        except Exception as e:
-            logging.warning(f"检查向量字段失败: {e}")
+        except Exception as error:
+            log_operation_failure(
+                logger,
+                "Elasticsearch vector field check",
+                error,
+                level=logging.WARNING,
+            )
             return False

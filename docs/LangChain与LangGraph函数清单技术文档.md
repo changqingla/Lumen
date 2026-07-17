@@ -63,9 +63,9 @@
 
 **本项目用途**：
 
-- 主智能体：`backend/src/agents/lead_agent/agent.py`
-- 内嵌客户端：`backend/src/client.py`
-- 子 Agent 执行器：`backend/src/subagents/executor.py`
+- 主智能体：`runtimes/backend/src/agents/lead_agent/agent.py`
+- 内嵌客户端：`runtimes/backend/src/client.py`
+- 子 Agent 执行器：`runtimes/backend/src/subagents/executor.py`
 
 **最小示例**：
 

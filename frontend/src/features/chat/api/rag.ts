@@ -4,6 +4,8 @@ import {
   type ChatAttachment,
   type ChatRuntimePrepareResponse,
 } from '@/shared/api/client';
+import { fetchApi } from '@/shared/api/transport';
+import { consumeServerSentEvents } from '@/shared/api/sse';
 import { subscribeAuthSessionReset } from '@/shared/lib/auth-runtime';
 import type { ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 
@@ -257,14 +259,6 @@ const attachAuthSessionResetListener = () => {
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 attachAuthSessionResetListener();
-
-const normalizeBaseUrl = (value: string): string => value.replace(/\/+$/u, '');
-
-const joinUrl = (baseUrl: string, path: string): string => {
-  const normalizedBase = normalizeBaseUrl(baseUrl);
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${normalizedBase}${normalizedPath}`;
-};
 
 const normalizeVirtualPath = (value: string): string => (
   String(value || '').trim().replace(/^\/+/u, '')
@@ -864,8 +858,6 @@ class RAGAPIClient {
       throw new Error('Response body is null');
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     const seenArtifactPaths = new Set<string>();
     const emittedToolCallKeys = new Set<string>(handlers.resumeState?.emittedToolCallKeys || []);
     const lastAiContentByMessageId = new Map<string, string>(
@@ -879,9 +871,6 @@ class RAGAPIClient {
     );
     const taskLabelByTaskId = new Map<string, string>();
     let hasObservedMessagesEvent = false;
-    let buffer = '';
-    let eventName = 'message';
-    let dataLines: string[] = [];
 
     const emitRuntimeMessages = (
       payload: unknown,
@@ -1222,64 +1211,22 @@ class RAGAPIClient {
       return false;
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/u);
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) {
-          const shouldStop = dispatchEvent(eventName, dataLines.join('\n'));
-          eventName = 'message';
-          dataLines = [];
-          if (shouldStop) {
-            return;
-          }
-          continue;
-        }
-
-        if (line.startsWith(':')) {
-          continue;
-        }
-
-        if (line.startsWith('event:')) {
-          eventName = line.slice(6).trim();
-          continue;
-        }
-
-        if (line.startsWith('data:')) {
-          dataLines.push(line.slice(5).trimStart());
-        }
-      }
+    const stoppedByTerminalEvent = await consumeServerSentEvents(
+      response.body,
+      ({ event, data }) => dispatchEvent(event, data),
+    );
+    if (!stoppedByTerminalEvent) {
+      onDone();
     }
-
-    if (dataLines.length > 0 || eventName !== 'message') {
-      const shouldStop = dispatchEvent(eventName, dataLines.join('\n'));
-      if (shouldStop) {
-        return;
-      }
-    }
-
-    onDone();
   }
 
   private async fetchLiveRunByStatus(
     prepared: ChatRuntimePrepareResponse,
     status: 'running' | 'pending',
   ): Promise<RAGActiveRunInfo | null> {
-    const response = await fetch(
-      joinUrl(
-        prepared.langgraph_base_url,
-        `/threads/${prepared.thread_id}/runs?limit=1&status=${status}`,
-      ),
-      {
-        method: 'GET',
-      },
+    const response = await fetchApi(
+      `${prepared.runs_path}?limit=1&status=${status}`,
+      { method: 'GET' },
     );
     if (!response.ok) {
       let errorPayload: unknown = null;
@@ -1388,7 +1335,7 @@ class RAGAPIClient {
       const { prepared } = runtimeState;
       const runRequest = this.buildRunRequest(prepared, request);
 
-      const response = await fetch(joinUrl(prepared.langgraph_base_url, prepared.run_stream_path), {
+      const response = await fetchApi(prepared.run_stream_path, {
         method: 'POST',
         headers: {
           Accept: 'text/event-stream',
@@ -1431,12 +1378,8 @@ class RAGAPIClient {
     }
 
     runtimeState.activeRunId = runId;
-    const streamMode = encodeURIComponent(JSON.stringify(['messages-tuple', 'values', 'custom']));
-    const response = await fetch(
-      joinUrl(
-        runtimeState.prepared.langgraph_base_url,
-        `/threads/${runtimeState.prepared.thread_id}/runs/${runId}/stream?stream_mode=${streamMode}&cancel_on_disconnect=false`,
-      ),
+    const response = await fetchApi(
+      `${runtimeState.prepared.runs_path}/${encodeURIComponent(runId)}/stream`,
       {
         method: 'GET',
         headers: {
@@ -1456,11 +1399,6 @@ class RAGAPIClient {
     }
   }
 
-  async chat(request: ChatRequest): Promise<never> {
-    void request;
-    throw new Error('Non-streaming chat endpoint is not available. Use streamChat() instead.');
-  }
-
   async cancelRun(
     sessionId: string,
     runId?: string,
@@ -1477,11 +1415,8 @@ class RAGAPIClient {
         };
       }
 
-      const response = await fetch(
-        joinUrl(
-          prepared.langgraph_base_url,
-          `/threads/${prepared.thread_id}/runs/${activeRunId}/cancel?action=interrupt&wait=0`,
-        ),
+      const response = await fetchApi(
+        `${prepared.runs_path}/${encodeURIComponent(activeRunId)}/cancel`,
         {
           method: 'POST',
         },
@@ -1512,9 +1447,6 @@ class RAGAPIClient {
     }
   }
 
-  async cancelStream(sessionId: string): Promise<{ success: boolean; message?: string; error?: string }> {
-    return this.cancelRun(sessionId);
-  }
 }
 
 export const ragAPI = new RAGAPIClient();

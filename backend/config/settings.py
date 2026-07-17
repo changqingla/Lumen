@@ -1,10 +1,11 @@
 """Application configuration settings."""
+
 import base64
 import hashlib
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
-    
+
     # ============================================================================
     # 应用基础配置
     # ============================================================================
@@ -28,19 +29,22 @@ class Settings(BaseSettings):
         "http://localhost:3003",
         "http://127.0.0.1:3003",
     ]
-    
+
     # ============================================================================
     # 数据库配置
     # ============================================================================
     DATABASE_URL: str
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
-    
+    THREAD_MATERIALIZATION_LOCK_BACKEND: Literal["postgresql", "process"] = "postgresql"
+    THREAD_MATERIALIZATION_LOCK_TIMEOUT_SECONDS: float = 30.0
+    THREAD_MATERIALIZATION_LOCK_POLL_INTERVAL_SECONDS: float = 0.1
+
     # ============================================================================
     # Redis 配置
     # ============================================================================
     REDIS_URL: str
-    
+
     # ============================================================================
     # MinIO/S3 对象存储配置
     # ============================================================================
@@ -50,25 +54,31 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str
     MINIO_BUCKET: str = "reader-uploads"
     MINIO_SECURE: bool = False
-    
+
     # ============================================================================
     # JWT 认证配置
     # ============================================================================
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-    
+    GUEST_TOKEN_EXPIRE_DAYS: int = 30
+
     # ============================================================================
     # 上传限制配置
     # ============================================================================
     MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100MB
     MAX_AVATAR_SIZE: int = 10 * 1024 * 1024  # 10MB
-    
+
     # MinerU 文档解析服务配置
     # ============================================================================
     MINERU_API_BASE_URL: str = "https://mineru.net/api/v4"
     MINERU_API_TOKEN: str = ""
     MINERU_MODEL_VERSION: str = "vlm"
+    MINERU_DNS_TIMEOUT_SECONDS: float = 5.0
+    MINERU_MAX_ZIP_DOWNLOAD_BYTES: int = 128 * 1024 * 1024
+    MINERU_MAX_ZIP_MEMBER_COUNT: int = 2048
+    MINERU_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES: int = 64 * 1024 * 1024
+    MINERU_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES: int = 256 * 1024 * 1024
 
     # ============================================================================
     # RAG Agent 文档处理服务配置
@@ -81,18 +91,24 @@ class Settings(BaseSettings):
     # ============================================================================
     INSIGHT_GATEWAY_URL: str = "http://lumen_gateway:8001"
     INSIGHT_LANGGRAPH_URL: str = "http://lumen_langgraph:2024"
-    INSIGHT_GATEWAY_PUBLIC_BASE_URL: str = ""
-    INSIGHT_LANGGRAPH_PUBLIC_BASE_URL: str = ""
+    GATEWAY_INTERNAL_API_TOKEN: SecretStr = SecretStr("")
+    MODEL_RESOLVER_INTERNAL_TOKEN: SecretStr = SecretStr("")
     INSIGHT_ASSISTANT_ID: str = "lead_agent"
     INSIGHT_ON_DISCONNECT: str = "continue"
     INSIGHT_RECURSION_LIMIT: int = 300
     INSIGHT_REQUEST_TIMEOUT_SECONDS: float = 120.0
-    
+
+    # Runtime token accounting and run-level quota reservations
+    TOKEN_QUOTA_RUN_RESERVATION_TOKENS: int = 250_000
+    TOKEN_QUOTA_RESERVATION_TTL_SECONDS: int = 6 * 60 * 60
+    TOKEN_USAGE_STREAM_CLAIM_IDLE_SECONDS: int = 30
+    TOKEN_USAGE_STREAM_BLOCK_MILLISECONDS: int = 2_000
+
     # ============================================================================
     # Elasticsearch 配置
     # ============================================================================
     ES_HOST: str = "http://elasticsearch:9200"
-    
+
     # ============================================================================
     # Embedding 模型配置
     # ============================================================================
@@ -102,24 +118,20 @@ class Settings(BaseSettings):
     EMBEDDING_API_KEY: str = ""
 
     # ============================================================================
-    # Rerank 模型配置
-    # ============================================================================
-    RERANK_FACTORY: str = "Tongyi-Qianwen"
-    RERANK_MODEL_NAME: str = "qwen3-rerank"
-    RERANK_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    RERANK_API_KEY: str = ""
-    
-    # ============================================================================
     # 文档处理配置
     # ============================================================================
     DEFAULT_CHUNK_TOKEN_NUM: int = 512
     DEFAULT_PARSER_TYPE: str = "general"
-    
-    # ============================================================================
-    # 搜索配置
-    # ============================================================================
-    SIMILARITY_THRESHOLD: float = 0.01
-    VECTOR_SIMILARITY_WEIGHT: float = 0.3
+    KNOWLEDGE_DOCUMENT_WORKER_CONCURRENCY: int = 1
+    KNOWLEDGE_DOCUMENT_QUEUE_VISIBILITY_TIMEOUT_SECONDS: float = 120.0
+    KNOWLEDGE_DOCUMENT_QUEUE_HEARTBEAT_INTERVAL_SECONDS: float = 10.0
+    KNOWLEDGE_DOCUMENT_QUEUE_MAX_RETRIES: int = 2
+    KNOWLEDGE_DOCUMENT_QUEUE_RETRY_DELAY_SECONDS: float = 5.0
+    KNOWLEDGE_DOCUMENT_QUEUE_RECONCILE_INTERVAL_SECONDS: float = 30.0
+    KNOWLEDGE_DOCUMENT_QUEUE_RECONCILE_BATCH_SIZE: int = 100
+    KNOWLEDGE_DOCUMENT_QUEUE_RECONCILE_MAX_DOCUMENTS: int = 1000
+    KNOWLEDGE_DOCUMENT_QUEUE_CANCEL_WAIT_SECONDS: float = 15.0
+    KNOWLEDGE_DOCUMENT_RAG_CANCEL_WAIT_SECONDS: float = 15.0
 
     # ============================================================================
     # 邮件服务配置
@@ -137,7 +149,9 @@ class Settings(BaseSettings):
     # ============================================================================
     MODEL_CONFIG_ENCRYPTION_KEY: str = ""
     MODEL_CONFIG_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 6
-    
+    MODEL_PROVIDER_ALLOW_PRIVATE_ENDPOINTS: bool = False
+    MODEL_PROVIDER_DNS_TIMEOUT_SECONDS: float = 5.0
+
     # ============================================================================
     # HTTP 客户端超时配置（秒）
     # ============================================================================
@@ -152,20 +166,31 @@ class Settings(BaseSettings):
     CREATIVE_WORKSHOP_IMAGE_API_KEY: str = ""
     CREATIVE_WORKSHOP_IMAGE_MODEL: str = "gpt-image-2"
     CREATIVE_WORKSHOP_IMAGE_TIMEOUT: float = 180.0
-    CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR: str = "logs/creative-workshop/paper-translation"
+    CREATIVE_WORKSHOP_IMAGE_MAX_RESPONSE_BYTES: int = 50 * 1024 * 1024
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR: str = (
+        "logs/creative-workshop/paper-translation"
+    )
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_MINERU_POLL_INTERVAL_SECONDS: float = 5.0
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_MINERU_MAX_ATTEMPTS: int = 180
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_TIMEOUT_SECONDS: float = 1800.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_RECURSION_LIMIT: int = 300
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_MAX_CONTINUATIONS: int = 2
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_WORKER_CONCURRENCY: int = 1
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_VISIBILITY_TIMEOUT_SECONDS: float = 120.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_HEARTBEAT_INTERVAL_SECONDS: float = 10.0
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_MAX_RETRIES: int = 0
     CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_RETRY_DELAY_SECONDS: float = 5.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_RECONCILE_INTERVAL_SECONDS: float = 30.0
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_MAINTENANCE_BATCH_SIZE: int = 100
+    CREATIVE_WORKSHOP_PAPER_TRANSLATION_QUEUE_RECONCILE_MAX_TASKS: int = 1000
 
     # ============================================================================
     # 审计日志配置
     # ============================================================================
     AUDIT_LOG_DIR: str = "logs"
-    
+    AUDIT_LOG_INCLUDE_PROMPTS: bool = False
+    AUDIT_LOG_RETENTION_DAYS: int = 30
+
     # ============================================================================
     # 安全配置
     # ============================================================================
@@ -179,7 +204,9 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_SEND_CODE_IP_MAX: int = 20
     AUTH_RATE_LIMIT_REGISTER_IP_MAX: int = 20
     AUTH_RATE_LIMIT_RESET_PASSWORD_IP_MAX: int = 20
-    
+    AUTH_RATE_LIMIT_GUEST_SESSION_WINDOW_SECONDS: int = 24 * 60 * 60
+    AUTH_RATE_LIMIT_GUEST_SESSION_MAX: int = 10
+
     # ============================================================================
     # 用户默认配置
     # ============================================================================
@@ -218,6 +245,79 @@ class Settings(BaseSettings):
             raise ValueError("SECRET_KEY 长度至少需要 32 个字符")
         return value
 
+    @field_validator(
+        "TOKEN_QUOTA_RUN_RESERVATION_TOKENS",
+        "TOKEN_QUOTA_RESERVATION_TTL_SECONDS",
+        "TOKEN_USAGE_STREAM_CLAIM_IDLE_SECONDS",
+        "TOKEN_USAGE_STREAM_BLOCK_MILLISECONDS",
+    )
+    @classmethod
+    def validate_positive_accounting_setting(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Token accounting settings must be positive")
+        return value
+
+    @field_validator(
+        "MINERU_MAX_ZIP_DOWNLOAD_BYTES",
+        "MINERU_MAX_ZIP_MEMBER_COUNT",
+        "MINERU_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES",
+        "MINERU_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES",
+    )
+    @classmethod
+    def validate_positive_mineru_limit(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("MinerU ZIP limits must be positive")
+        return value
+
+    @field_validator("MINERU_DNS_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_positive_mineru_dns_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("MinerU DNS timeout must be positive")
+        return value
+
+    @field_validator("CREATIVE_WORKSHOP_IMAGE_MAX_RESPONSE_BYTES")
+    @classmethod
+    def validate_positive_image_response_limit(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Image provider response limit must be positive")
+        return value
+
+    @field_validator(
+        "THREAD_MATERIALIZATION_LOCK_TIMEOUT_SECONDS",
+        "THREAD_MATERIALIZATION_LOCK_POLL_INTERVAL_SECONDS",
+    )
+    @classmethod
+    def validate_positive_thread_lock_setting(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Thread materialization lock settings must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_thread_materialization_lock(self) -> "Settings":
+        database_scheme = self.DATABASE_URL.split(":", 1)[0].lower()
+        if (
+            self.THREAD_MATERIALIZATION_LOCK_BACKEND == "postgresql"
+            and not database_scheme.startswith("postgresql")
+        ):
+            raise ValueError(
+                "THREAD_MATERIALIZATION_LOCK_BACKEND=postgresql requires a "
+                "PostgreSQL DATABASE_URL"
+            )
+        if self.THREAD_MATERIALIZATION_LOCK_BACKEND == "process" and not self.DEBUG:
+            raise ValueError(
+                "THREAD_MATERIALIZATION_LOCK_BACKEND=process is only allowed "
+                "when DEBUG=true"
+            )
+        if (
+            self.THREAD_MATERIALIZATION_LOCK_POLL_INTERVAL_SECONDS
+            > self.THREAD_MATERIALIZATION_LOCK_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                "Thread materialization lock poll interval cannot exceed its timeout"
+            )
+        return self
+
     @model_validator(mode="after")
     def validate_cors_origins(self) -> "Settings":
         if "*" in self.CORS_ORIGINS:
@@ -231,7 +331,9 @@ class Settings(BaseSettings):
 
     @property
     def model_config_fernet_key(self) -> str:
-        digest = hashlib.sha256(self.model_config_encryption_secret.encode("utf-8")).digest()
+        digest = hashlib.sha256(
+            self.model_config_encryption_secret.encode("utf-8")
+        ).digest()
         return base64.urlsafe_b64encode(digest).decode("utf-8")
 
 

@@ -440,7 +440,7 @@ LangChain 的 `SummarizationMiddleware` 并不是简单地“删掉旧消息”�
 
 lumen 在：
 
-- `backend/src/agents/lead_agent/agent.py`
+- `runtimes/backend/src/agents/lead_agent/agent.py`
 
 中创建并接入 `SummarizationMiddleware`。
 
@@ -453,13 +453,13 @@ lumen 在：
 
 当前项目里与之直接相关的位置包括：
 
-- `backend/src/config/summarization_config.py`
+- `runtimes/backend/src/config/summarization_config.py`
   摘要配置模型
 
-- `backend/src/config/app_config.py`
+- `runtimes/backend/src/config/app_config.py`
   启动时加载摘要配置
 
-- `backend/src/agents/lead_agent/agent.py`
+- `runtimes/backend/src/agents/lead_agent/agent.py`
   创建并挂载摘要中间件
 
 ### 16.1 为什么 lumen 还要配 TodoMiddleware
@@ -468,7 +468,7 @@ lumen 在：
 
 为了解决这个问题，lumen 增加了：
 
-- `backend/src/agents/middlewares/todo_middleware.py`
+- `runtimes/backend/src/agents/middlewares/todo_middleware.py`
 
 这个中间件会在 todo 状态仍存在、但原始 todo 消息已经不可见时，再注入一条提醒消息，告诉模型当前待办状态。
 

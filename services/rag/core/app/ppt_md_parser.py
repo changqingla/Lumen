@@ -10,7 +10,6 @@ PPT Markdown 解析器
 import re
 import copy
 import logging
-from io import BytesIO
 from core.nlp import rag_tokenizer, tokenize
 
 
@@ -118,10 +117,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     if callback:
         callback(0.9, f"分词完成，生成 {len(res)} 个 chunks...")
     
-    logging.info(f"PPT Markdown 解析完成: {filename}, 共 {len(res)} 个 chunks")
+    logging.info("PPT Markdown parsing completed: chunk_count=%s", len(res))
     
     if callback:
         callback(1.0, "解析完成")
     
     return res
-

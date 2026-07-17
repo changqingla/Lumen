@@ -10,7 +10,7 @@ from src.config.app_config import AppConfig
 from src.config.model_config import ModelConfig
 from src.config.sandbox_config import SandboxConfig
 from src.models import factory as factory_module
-from src.models.resolver import ResolvedChatModelSpec, dump_resolved_chat_model_spec
+from src.models.resolver import ResolvedChatModelSpec
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -153,8 +153,7 @@ def test_raises_when_model_not_found(monkeypatch):
 
 
 def test_thinking_enabled_raises_when_not_supported_but_when_thinking_enabled_is_set(monkeypatch):
-    """
-    """
+    """ """
     wte = {"thinking": {"type": "enabled", "budget_tokens": 5000}}
     cfg = _make_app_config([_make_model("no-think", supports_thinking=False, when_thinking_enabled=wte)])
     _patch_factory(monkeypatch, cfg)
@@ -192,8 +191,7 @@ def test_thinking_enabled_merges_when_thinking_enabled_settings(monkeypatch):
 
 
 def test_thinking_disabled_openai_gateway_format(monkeypatch):
-    """
-    """
+    """ """
     wte = {"extra_body": {"thinking": {"type": "enabled", "budget_tokens": 10000}}}
     cfg = _make_app_config(
         [
@@ -224,8 +222,7 @@ def test_thinking_disabled_openai_gateway_format(monkeypatch):
 
 
 def test_thinking_disabled_langchain_anthropic_format(monkeypatch):
-    """
-    """
+    """ """
     wte = {"thinking": {"type": "enabled", "budget_tokens": 8000}}
     cfg = _make_app_config(
         [
@@ -333,14 +330,16 @@ def test_reasoning_effort_preserved_when_supported(monkeypatch):
 
 
 def test_runtime_overrides_take_precedence_over_model_config(monkeypatch):
-    cfg = _make_app_config([
-        _make_model(
-            "override-model",
-            supports_reasoning_effort=True,
-            temperature=0.2,
-            reasoning_effort="low",
-        )
-    ])
+    cfg = _make_app_config(
+        [
+            _make_model(
+                "override-model",
+                supports_reasoning_effort=True,
+                temperature=0.2,
+                reasoning_effort="low",
+            )
+        ]
+    )
     _patch_factory(monkeypatch, cfg)
 
     captured: dict = {}
@@ -538,7 +537,7 @@ def test_invalid_max_tokens_is_removed(monkeypatch, caplog):
     assert "Ignoring invalid max_tokens=0 for model 'invalid-model' from config" in caplog.text
 
 
-def test_request_payload_is_logged_with_user_content(monkeypatch, caplog):
+def test_request_payload_is_never_written_to_info_logs(monkeypatch, caplog):
     cfg = _make_app_config([_make_model("logged-model", max_tokens=1234)])
     _patch_factory(monkeypatch, cfg)
 
@@ -546,10 +545,7 @@ def test_request_payload_is_logged_with_user_content(monkeypatch, caplog):
         def _get_request_payload(self, input_, *, stop=None, **kwargs):
             return {
                 "model": FakeChatModel.captured_kwargs.get("model"),
-                "messages": [
-                    {"role": getattr(message, "type", type(message).__name__), "content": getattr(message, "content", None)}
-                    for message in input_
-                ],
+                "messages": [{"role": getattr(message, "type", type(message).__name__), "content": getattr(message, "content", None)} for message in input_],
                 "max_completion_tokens": FakeChatModel.captured_kwargs.get("max_tokens"),
                 **kwargs,
             }
@@ -564,11 +560,10 @@ def test_request_payload_is_logged_with_user_content(monkeypatch, caplog):
             tools=[{"type": "function", "function": {"name": "demo"}}],
         )
 
-    assert "LLM request payload (config=logged-model, provider_model=logged-model)" in caplog.text
-    assert '"content": "你好"' in caplog.text
-    assert '"max_completion_tokens": 1234' in caplog.text
-    assert '"Authorization": "***REDACTED***"' in caplog.text
-    assert '"X-Trace": "trace-1"' in caplog.text
+    assert "LLM request payload" not in caplog.text
+    assert "你好" not in caplog.text
+    assert "secret-token" not in caplog.text
+    assert "trace-1" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -724,36 +719,115 @@ def test_dynamic_model_token_forwards_thread_id_to_resolver(monkeypatch):
     assert captured["thread_id"] == "thread-abc"
 
 
-def test_resolved_spec_payload_bypasses_runtime_resolution(monkeypatch):
-    cfg = _make_app_config([_make_model("fallback-model")])
+def test_dynamic_openai_model_gets_request_validating_http_clients(monkeypatch):
+    cfg = _make_app_config([_make_model("dynamic-model")])
     _patch_factory(monkeypatch, cfg)
+    sync_client = object()
+    async_client = object()
+    policy_calls = []
 
-    payload = dump_resolved_chat_model_spec(
-        ResolvedChatModelSpec(
-            name="serialized-model",
-            display_name="Serialized Model",
-            description=None,
-            use="langchain_openai:ChatOpenAI",
-            config={"model": "resolved-from-payload", "temperature": 0.3},
-            supports_vision=True,
-            supports_thinking=False,
-            supports_reasoning_effort=False,
-        )
-    )
+    class FakePolicy:
+        def validate_url(self, value):
+            policy_calls.append(value)
+            return "https://models.example.com/v1"
+
+        def build_http_clients(self):
+            return sync_client, async_client
 
     monkeypatch.setattr(
-        factory_module,
-        "resolve_chat_model_spec",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("resolver should not be called")),
+        factory_module.OutboundEndpointPolicy,
+        "from_environment",
+        classmethod(lambda cls: FakePolicy()),
+    )
+    spec = ResolvedChatModelSpec(
+        name="user-model:1",
+        display_name="Dynamic",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        config={
+            "model": "provider-model",
+            "api_key": "secret",
+            "base_url": "HTTPS://Models.Example.COM/v1/",
+            "client": "bypass",
+            "openai_proxy": "http://proxy.invalid",
+        },
+        supports_vision=False,
+        supports_thinking=False,
+        supports_reasoning_effort=False,
+        enforce_outbound_endpoint_policy=True,
     )
 
+    factory_module.create_chat_model_from_spec(spec)
+
+    assert policy_calls == ["HTTPS://Models.Example.COM/v1/"]
+    assert FakeChatModel.captured_kwargs["base_url"] == "https://models.example.com/v1"
+    assert FakeChatModel.captured_kwargs["http_client"] is sync_client
+    assert FakeChatModel.captured_kwargs["http_async_client"] is async_client
+    assert FakeChatModel.captured_kwargs["openai_proxy"] is None
+    assert "client" not in FakeChatModel.captured_kwargs
+
+
+def test_dynamic_model_rejects_private_endpoint_before_sdk_creation(monkeypatch):
+    cfg = _make_app_config([_make_model("dynamic-model")])
+    _patch_factory(monkeypatch, cfg)
     FakeChatModel.captured_kwargs = {}
-    factory_module.create_chat_model(
-        name="ignored-model-name",
-        dynamic_model_token="ignored-token",
-        thread_id="ignored-thread",
-        resolved_spec_payload=payload,
+    spec = ResolvedChatModelSpec(
+        name="user-model:1",
+        display_name="Dynamic",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        config={"model": "provider-model", "api_key": "secret", "base_url": "http://169.254.169.254/v1"},
+        supports_vision=False,
+        supports_thinking=False,
+        supports_reasoning_effort=False,
+        enforce_outbound_endpoint_policy=True,
     )
 
-    assert FakeChatModel.captured_kwargs["model"] == "resolved-from-payload"
-    assert FakeChatModel.captured_kwargs["temperature"] == 0.3
+    with pytest.raises(ValueError, match="outbound security requirements"):
+        factory_module.create_chat_model_from_spec(spec)
+
+    assert FakeChatModel.captured_kwargs == {}
+
+
+def test_dynamic_model_rejects_conflicting_endpoint_aliases(monkeypatch):
+    cfg = _make_app_config([_make_model("dynamic-model")])
+    _patch_factory(monkeypatch, cfg)
+    spec = ResolvedChatModelSpec(
+        name="user-model:1",
+        display_name="Dynamic",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        config={
+            "model": "provider-model",
+            "api_key": "secret",
+            "base_url": "https://models.example.com/v1",
+            "openai_api_base": "http://169.254.169.254/v1",
+        },
+        supports_vision=False,
+        supports_thinking=False,
+        supports_reasoning_effort=False,
+        enforce_outbound_endpoint_policy=True,
+    )
+
+    with pytest.raises(ValueError, match="outbound security requirements"):
+        factory_module.create_chat_model_from_spec(spec)
+
+
+def test_static_model_endpoint_keeps_existing_deployment_semantics(monkeypatch):
+    cfg = _make_app_config([_make_model("internal-static")])
+    _patch_factory(monkeypatch, cfg)
+    spec = ResolvedChatModelSpec(
+        name="internal-static",
+        display_name="Internal",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        config={"model": "provider-model", "api_key": "secret", "base_url": "http://model-gateway:8000/v1"},
+        supports_vision=False,
+        supports_thinking=False,
+        supports_reasoning_effort=False,
+    )
+
+    factory_module.create_chat_model_from_spec(spec)
+
+    assert FakeChatModel.captured_kwargs["base_url"] == "http://model-gateway:8000/v1"
+    assert "http_client" not in FakeChatModel.captured_kwargs

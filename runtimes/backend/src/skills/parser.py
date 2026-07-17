@@ -1,7 +1,10 @@
+import logging
 import re
 from pathlib import Path
 
 from .types import Skill
+
+logger = logging.getLogger(__name__)
 
 
 def parse_skill_file(skill_file: Path, category: str, relative_path: Path | None = None) -> Skill | None:
@@ -59,6 +62,9 @@ def parse_skill_file(skill_file: Path, category: str, relative_path: Path | None
             enabled=True,  # 默认启用，实际状态以配置文件为准
         )
 
-    except Exception as e:
-        print(f"Error parsing skill file {skill_file}: {e}")
+    except Exception as exc:
+        logger.warning(
+            "Skipping an invalid skill definition (error_type=%s)",
+            type(exc).__name__,
+        )
         return None

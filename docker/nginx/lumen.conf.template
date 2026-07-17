@@ -2,16 +2,20 @@ upstream backend_api {
     server lumen_api:13000;
 }
 
-upstream lumen_gateway_api {
-    server lumen_gateway:8001;
-}
-
-upstream lumen_langgraph_api {
-    server lumen_langgraph:2024;
-}
-
 upstream minio_server {
     server lumen_minio:9000;
+}
+
+map "${LUMEN_HTTP_MODE}" $lumen_force_https {
+    default 0;
+    redirect 1;
+}
+
+# Keep ACME HTTP-01 reachable while redirecting every other HTTP request.
+map "$lumen_force_https:$uri" $lumen_redirect_https {
+    default 0;
+    ~^1:/\.well-known/acme-challenge(?:/|$) 0;
+    ~^1: 1;
 }
 
 server {
@@ -26,6 +30,14 @@ server {
     access_log /var/log/nginx/lumen_access.log;
     error_log /var/log/nginx/lumen_error.log;
 
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    if ($lumen_redirect_https) {
+        return 308 https://$host$request_uri;
+    }
+
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
@@ -36,62 +48,8 @@ server {
         root /var/www/certbot;
     }
 
-    location ~ ^/api/kb/[^/]+/documents$ {
-        proxy_pass http://backend_api;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-        proxy_read_timeout 300;
-        proxy_buffering off;
-        proxy_request_buffering off;
-        chunked_transfer_encoding on;
-    }
-
-    location /api/threads/ {
-        proxy_pass http://lumen_gateway_api;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header Accept-Encoding "";
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-        proxy_read_timeout 300;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_request_buffering off;
-        chunked_transfer_encoding on;
-        gzip off;
-    }
-
-    location /threads/ {
-        proxy_pass http://lumen_langgraph_api;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header Accept-Encoding "";
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-        proxy_read_timeout 300;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_request_buffering off;
-        chunked_transfer_encoding on;
-        gzip off;
-    }
+    location ^~ /api/threads/ { return 404; }
+    location ^~ /threads/ { return 404; }
 
     location ^~ /api/ {
         proxy_pass http://backend_api;
@@ -107,6 +65,7 @@ server {
         proxy_read_timeout 300;
         proxy_buffering off;
         proxy_cache off;
+        proxy_request_buffering off;
         chunked_transfer_encoding on;
     }
 
@@ -174,62 +133,8 @@ server {
     gzip_comp_level 5;
     gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss application/xml image/svg+xml;
 
-    location ~ ^/api/kb/[^/]+/documents$ {
-        proxy_pass http://backend_api;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-        proxy_read_timeout 300;
-        proxy_buffering off;
-        proxy_request_buffering off;
-        chunked_transfer_encoding on;
-    }
-
-    location /api/threads/ {
-        proxy_pass http://lumen_gateway_api;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header Accept-Encoding "";
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-        proxy_read_timeout 300;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_request_buffering off;
-        chunked_transfer_encoding on;
-        gzip off;
-    }
-
-    location /threads/ {
-        proxy_pass http://lumen_langgraph_api;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header Accept-Encoding "";
-        proxy_connect_timeout 300;
-        proxy_send_timeout 300;
-        proxy_read_timeout 300;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_request_buffering off;
-        chunked_transfer_encoding on;
-        gzip off;
-    }
+    location ^~ /api/threads/ { return 404; }
+    location ^~ /threads/ { return 404; }
 
     location ^~ /api/ {
         proxy_pass http://backend_api;
@@ -245,6 +150,7 @@ server {
         proxy_read_timeout 300;
         proxy_buffering off;
         proxy_cache off;
+        proxy_request_buffering off;
         chunked_transfer_encoding on;
     }
 

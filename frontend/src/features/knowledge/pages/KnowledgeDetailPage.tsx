@@ -81,6 +81,7 @@ import { uploadKnowledgeDocuments } from '@/features/knowledge/utils/upload';
 import type { KnowledgeQuotaExceededModalState } from '@/features/knowledge/types/chat';
 import {
   defaultKnowledgeQuotaExceededModalState,
+  buildWholeKnowledgeBaseSessionConfig,
   isKnowledgeChatSessionForKb,
   resolveKnowledgeQuotaExceededModalState,
 } from '@/features/knowledge/utils/chat';
@@ -148,8 +149,6 @@ export default function KnowledgeDetail() {
   const [uiMode] = useState<ChatUIMode>('normal');
   const [selectedModelName, setSelectedModelName] = useState<string | undefined>(undefined);
   const [hasRestoredSession, setHasRestoredSession] = useState(false);
-  // 当前知识库的所有文档ID（用于对话）
-  const [kbDocIds, setKbDocIds] = useState<string[]>([]);
   
   // PDF Preview State
   const [previewDoc, setPreviewDoc] = useState<KnowledgeDocument | null>(null);
@@ -174,6 +173,8 @@ export default function KnowledgeDetail() {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const documentLoadSequenceRef = useRef(0);
+  const wholeKbScopeSyncRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
 
   useEffect(() => {
     if (chatInput !== '') {
@@ -261,6 +262,29 @@ export default function KnowledgeDetail() {
     toast.info('已停止生成');
   }, [toast]);
 
+  const ensureWholeKnowledgeBaseScope = useCallback((): Promise<void> => {
+    if (!currentSessionId || !kbId || isGuestMode) {
+      return Promise.resolve();
+    }
+
+    const key = `${currentSessionId}:${kbId}:${uiMode}`;
+    if (wholeKbScopeSyncRef.current?.key === key) {
+      return wholeKbScopeSyncRef.current.promise;
+    }
+
+    const promise = api.updateChatSessionConfig(
+      currentSessionId,
+      buildWholeKnowledgeBaseSessionConfig(kbId, uiMode),
+    ).then(() => undefined).catch((error) => {
+      if (wholeKbScopeSyncRef.current?.promise === promise) {
+        wholeKbScopeSyncRef.current = null;
+      }
+      throw error;
+    });
+    wholeKbScopeSyncRef.current = { key, promise };
+    return promise;
+  }, [currentSessionId, isGuestMode, kbId, uiMode]);
+
   // RAG Chat Hook - 知识库页面对话
   const {
     messages,
@@ -271,7 +295,6 @@ export default function KnowledgeDetail() {
     stopGeneration,
   } = useRAGChat({
     kbId: kbId,           // 传递当前知识库ID
-    docIds: kbDocIds,     // 传递该知识库的所有文档ID
     sessionId: currentSessionId,
     modelName: selectedModelName,
     uiMode,
@@ -333,24 +356,38 @@ export default function KnowledgeDetail() {
 
     if (isGuestMode && hasReachedGuestMessageLimit) {
       promptLogin({
-        title: '登陆解锁更多功能',
+        title: '登录解锁更多功能',
         message: '游客试用仅支持发送 3 条消息，登录后可继续完整体验。',
         confirmText: '去登录',
       });
       return;
     }
 
+    try {
+      await ensureWholeKnowledgeBaseScope();
+    } catch (error) {
+      console.error('Failed to sync whole knowledge-base chat scope:', error);
+      toast.error('同步知识库文档范围失败，请重试');
+      return;
+    }
+
     // 在流式回答开始前立即清空输入框，避免已发送内容继续停留在编辑区。
     setChatInput('');
 
-    await sendMessage(text);
-    if (isGuestMode) {
+    const didPersistGuestMessage = await sendMessage(text);
+    if (isGuestMode && didPersistGuestMessage) {
       consumeGuestMessage();
     }
     if (quotaExceededModal.isOpen) {
       setQuotaExceededModal((previous) => ({ ...previous, isOpen: false }));
     }
   };
+
+  useEffect(() => {
+    void ensureWholeKnowledgeBaseScope().catch((error) => {
+      console.error('Failed to migrate knowledge session to whole-KB scope:', error);
+    });
+  }, [ensureWholeKnowledgeBaseScope]);
 
   useEffect(() => {
     const check = () => {
@@ -455,23 +492,25 @@ export default function KnowledgeDetail() {
 
   const loadDocuments = useCallback(async (): Promise<KnowledgeDocument[]> => {
     if (!kbId) return [];
+    const loadSequence = documentLoadSequenceRef.current + 1;
+    documentLoadSequenceRef.current = loadSequence;
 
     try {
       const response = await kbAPI.listDocuments(kbId);
+      if (documentLoadSequenceRef.current !== loadSequence) {
+        return [];
+      }
       const nextDocuments = (response.items || []) as KnowledgeDocument[];
       setDocuments(nextDocuments);
-
-      // 只提取 ready 状态的文档ID用于对话
-      const docIds = nextDocuments
-        .filter((doc) => doc.status === 'ready')
-        .map((doc) => doc.id);
-      setKbDocIds(docIds);
 
       // 检查文档收藏状态
       if (!isGuestMode && nextDocuments.length > 0) {
         try {
           const items = nextDocuments.map((doc) => ({ type: 'document', id: doc.id }));
           const favoriteStatus = await favoriteAPI.checkFavorites(items);
+          if (documentLoadSequenceRef.current !== loadSequence) {
+            return [];
+          }
           const favoritedIds = new Set<string>();
           for (const [key, isFavorited] of Object.entries(favoriteStatus)) {
             if (isFavorited) {
@@ -503,6 +542,7 @@ export default function KnowledgeDetail() {
   }, [loadChatSessions, loadKnowledgeBases, loadUserInfo]);
 
   useEffect(() => {
+    documentLoadSequenceRef.current += 1;
     previewRequestSequenceRef.current += 1;
     setHasRestoredSession(false);
     setCurrentSessionId(undefined);
@@ -580,22 +620,26 @@ export default function KnowledgeDetail() {
     if (!hasProcessingDocs) {
       return;
     }
+
+    let isActive = true;
+    let requestInFlight = false;
     
     // 启动轮询
     pollingRef.current = setInterval(async () => {
+      if (requestInFlight) {
+        return;
+      }
+      requestInFlight = true;
       try {
         const response = await kbAPI.listDocuments(kbId);
+        if (!isActive) {
+          return;
+        }
         const prevStatuses = documents.map(d => d.status);
         const nextDocuments = (response.items || []) as KnowledgeDocument[];
         const newStatuses = nextDocuments.map((doc) => doc.status);
         
         setDocuments(nextDocuments);
-        
-        // 只提取 ready 状态的文档ID用于对话
-        const docIds = nextDocuments
-          .filter((doc) => doc.status === 'ready')
-          .map((doc) => doc.id);
-        setKbDocIds(docIds);
         
         // 检查是否有文档状态从处理中变为完成或失败
         const statusChanged = prevStatuses.some((status, i) => 
@@ -619,11 +663,16 @@ export default function KnowledgeDetail() {
           pollingRef.current = null;
         }
       } catch (error) {
-        console.error('[Polling] Error fetching documents:', error);
+        if (isActive) {
+          console.error('[Polling] Error fetching documents:', error);
+        }
+      } finally {
+        requestInFlight = false;
       }
     }, 3000);
     
     return () => {
+      isActive = false;
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;

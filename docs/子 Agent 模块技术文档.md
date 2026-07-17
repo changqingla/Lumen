@@ -42,28 +42,28 @@ lumen 的主架构是“单主 Agent + 可选子 Agent 委派”。子 Agent 模
 
 和子 Agent 最相关的实现主要分布在这些位置：
 
-- `backend/src/tools/builtins/task_tool.py`
+- `runtimes/backend/src/tools/builtins/task_tool.py`
   这是主 Agent 触发子 Agent 的唯一正式入口。主 Agent 并不是直接调用执行器，而是通过 `task` 工具进入子 Agent 流程。
 
-- `backend/src/subagents/config.py`
+- `runtimes/backend/src/subagents/config.py`
   定义 `SubagentConfig`，即子 Agent 的静态配置模型，包括名称、提示词、工具白名单、拒绝名单、模型策略、最大轮数和超时。
 
-- `backend/src/subagents/builtins/*`
+- `runtimes/backend/src/subagents/builtins/*`
   定义内置子 Agent 类型，目前主要有 `general-purpose` 和 `bash` 两种。
 
-- `backend/src/subagents/registry.py`
+- `runtimes/backend/src/subagents/registry.py`
   提供子 Agent 配置注册表，并负责把 `config.yaml` 中的超时覆盖应用到内置配置上。
 
-- `backend/src/subagents/executor.py`
+- `runtimes/backend/src/subagents/executor.py`
   这是子 Agent 模块的核心。它负责创建子 Agent、执行任务、后台调度、状态记录、超时控制、消息流式采集和任务清理。
 
-- `backend/src/agents/middlewares/subagent_limit_middleware.py`
+- `runtimes/backend/src/agents/middlewares/subagent_limit_middleware.py`
   这是对主 Agent 模型输出进行硬限制的中间件，防止一轮响应里生成过多 `task` 调用，导致子 Agent 并发失控。
 
-- `backend/src/tools/tools.py`
+- `runtimes/backend/src/tools/tools.py`
   决定什么时候把 `task` 工具加入主 Agent 的工具集合。
 
-- `backend/src/agents/lead_agent/prompt.py`
+- `runtimes/backend/src/agents/lead_agent/prompt.py`
   在启用子 Agent 时，向主 Agent 注入专门的 orchestrator 提示词，指导模型如何拆解、批次化和综合子任务。
 
 ## 4. 子 Agent 不是默认启用，而是运行时可选能力
@@ -165,7 +165,7 @@ lumen 的主架构是“单主 Agent + 可选子 Agent 委派”。子 Agent 模
 
 ### 8.1 内置注册表
 
-`backend/src/subagents/builtins/__init__.py` 里有一个 `BUILTIN_SUBAGENTS` 字典，把子 Agent 名称映射到内置配置。
+`runtimes/backend/src/subagents/builtins/__init__.py` 里有一个 `BUILTIN_SUBAGENTS` 字典，把子 Agent 名称映射到内置配置。
 
 这意味着内置子 Agent 不是从磁盘动态扫描出来的，而是明确注册的。好处是：
 
@@ -175,7 +175,7 @@ lumen 的主架构是“单主 Agent + 可选子 Agent 委派”。子 Agent 模
 
 ### 8.2 配置文件覆盖
 
-`backend/src/config/subagents_config.py` 支持在 `config.yaml` 中为子 Agent 系统配置默认超时，也支持对单个子 Agent 做超时覆盖。
+`runtimes/backend/src/config/subagents_config.py` 支持在 `config.yaml` 中为子 Agent 系统配置默认超时，也支持对单个子 Agent 做超时覆盖。
 
 `registry.get_subagent_config()` 在读取内置配置后，会再应用这些覆盖项。这里最值得注意的点是：它会返回一个覆盖后的副本，而不是直接修改内置对象本身。
 

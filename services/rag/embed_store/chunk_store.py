@@ -6,38 +6,17 @@
 专注于将解析后的文档分块存储到Elasticsearch
 """
 
-import json
 import logging
 import uuid
 import base64
 import io
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
-from pathlib import Path
-from dataclasses import dataclass
-from PIL import Image
 
-from .es_connection import SimpleESConnection
+from recall_lib import SimpleESConnection
+from recall_lib._logging import log_operation_failure
 
 logger = logging.getLogger('embed_store.chunk_store')
-
-
-@dataclass
-class SimpleStoreConfig:
-    """简化的存储配置类"""
-    index_name: str = "deeprag_vectors"
-    es_config: Dict[str, Any] = None
-    batch_size: int = 100
-    timeout: int = 60
-
-    def __post_init__(self):
-        if self.es_config is None:
-            self.es_config = {"hosts": "http://localhost:9200", "timeout": 600}
-
-    @classmethod
-    def create_simple(cls, index_name: str = "deeprag_vectors", **kwargs):
-        """创建简单配置"""
-        return cls(index_name=index_name, **kwargs)
 
 
 class DocumentStore:
@@ -118,10 +97,15 @@ class DocumentStore:
                         "encoding": "base64"
                     }
                     logger.debug(f"PIL.Image转换为base64成功，尺寸: {image_obj.size}")
-                except Exception as e:
-                    logger.warning(f"PIL.Image转换失败: {e}，将移除image字段")
+                except Exception as error:
+                    log_operation_failure(
+                        logger,
+                        "Chunk image conversion",
+                        error,
+                        level=logging.WARNING,
+                    )
                     normalized["image"] = None
-                    normalized["image_info"] = {"error": str(e)}
+                    normalized["image_info"] = {"error": "Image conversion failed"}
 
         # 检查其他可能包含PIL.Image对象的字段
         for key, value in list(normalized.items()):
@@ -134,8 +118,13 @@ class DocumentStore:
                     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
                     normalized[key] = image_base64
                     logger.debug(f"字段 {key} 中的PIL.Image转换为base64成功")
-                except Exception as e:
-                    logger.warning(f"字段 {key} 中的PIL.Image转换失败: {e}，将设为None")
+                except Exception as error:
+                    log_operation_failure(
+                        logger,
+                        "Chunk image field conversion",
+                        error,
+                        level=logging.WARNING,
+                    )
                     normalized[key] = None
 
         # 第二步：添加必要的标识字段
@@ -153,7 +142,7 @@ class DocumentStore:
                 raise ValueError(error_msg)
             normalized["id"] = chunk_id
             normalized["chunk_id"] = chunk_id
-            logger.info(f"编辑模式：使用原有chunk ID {chunk_id}")
+            logger.info("编辑模式：复用已有 chunk ID")
         else:
             # 新建模式：优先使用已有ID，否则生成新ID
             if chunk_id:
@@ -164,7 +153,7 @@ class DocumentStore:
                 new_id = str(uuid.uuid4())
                 normalized["id"] = new_id
                 normalized["chunk_id"] = new_id
-                logger.debug(f"新建模式：生成新的chunk ID {new_id}")
+                logger.debug("新建模式：已生成 chunk ID")
         
         # 优先使用输入数据中的document_id，如果没有则使用文档名
         if "document_id" in chunk and chunk["document_id"]:
@@ -257,7 +246,7 @@ class DocumentStore:
 
         # 异步确保向量字段存在（自动处理索引创建或字段添加）
         if not await self.ensure_vector_field(self.vector_dim):
-            raise Exception(f"确保向量字段存在失败: 索引={self.index_name}, 维度={self.vector_dim}")
+            raise RuntimeError("Elasticsearch vector field reconciliation failed")
 
         # 标准化分块数据
         if progress_callback:
@@ -268,8 +257,8 @@ class DocumentStore:
             try:
                 normalized = self._normalize_chunk(chunk, i, is_edit_mode)
                 normalized_chunks.append(normalized)
-            except Exception as e:
-                logger.error(f"标准化分块 {i} 失败: {e}")
+            except Exception as error:
+                log_operation_failure(logger, "Chunk normalization", error)
                 continue
 
         logger.info(f"标准化完成: {len(normalized_chunks)}/{len(chunks)} 个分块")
@@ -295,10 +284,9 @@ class DocumentStore:
                     progress = 0.2 + 0.7 * (i + len(batch)) / len(normalized_chunks)
                     progress_callback(progress, f"已存储 {total_success} 个分块")
 
-            except Exception as e:
-                error_msg = f"批次 {i//batch_size + 1} 存储失败: {e}"
-                logger.error(error_msg)
-                all_errors.append(error_msg)
+            except Exception as error:
+                log_operation_failure(logger, "Chunk batch storage", error)
+                all_errors.append("Document batch storage failed")
 
         if progress_callback:
             progress_callback(1.0, f"存储完成: {total_success} 个分块")
@@ -326,18 +314,21 @@ class DocumentStore:
         """
         try:
             result = await self.es_conn.delete_documents_by_doc_id(self.index_name, document_id)
-            logger.info(f"删除文档 {document_id} 的分块: {result}")
+            logger.info(
+                "文档分块删除完成: success=%s deleted_count=%s",
+                bool(result.get("success")),
+                int(result.get("deleted_count", 0)),
+            )
             return result
-        except Exception as e:
-            error_msg = f"删除文档 {document_id} 的分块失败: {e}"
-            logger.error(error_msg)
+        except Exception as error:
+            log_operation_failure(logger, "Document chunk deletion", error)
             return {
                 "success": False,
                 "deleted_count": 0,
                 "document_id": document_id,
                 "index_name": self.index_name,
-                "error": str(e),
-                "message": error_msg
+                "error": "Elasticsearch document deletion failed",
+                "message": "文档删除失败",
             }
 
     async def get_health(self) -> Dict[str, Any]:
@@ -349,6 +340,11 @@ class DocumentStore:
         if self.es_conn:
             try:
                 await self.es_conn.close()
-                logger.info(f"DocumentStore ES连接已关闭")
-            except Exception as e:
-                logger.warning(f"关闭DocumentStore ES连接时出错: {e}")
+                logger.info("DocumentStore ES连接已关闭")
+            except Exception as error:
+                log_operation_failure(
+                    logger,
+                    "Document store connection close",
+                    error,
+                    level=logging.WARNING,
+                )

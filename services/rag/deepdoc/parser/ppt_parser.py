@@ -61,8 +61,11 @@ class DeepRAGPptParser:
                     txt = self.__extract(shape)
                     if txt:
                         texts.append(txt)
-                except Exception as e:
-                    logging.exception(e)
+                except Exception as error:
+                    logging.warning(
+                        "PPT shape extraction failed: error_type=%s",
+                        type(error).__name__,
+                    )
             txts.append("\n".join(texts))
 
         return txts

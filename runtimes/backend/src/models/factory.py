@@ -1,31 +1,15 @@
-import json
 import logging
-import types
 from collections.abc import Mapping
 
 from langchain.chat_models import BaseChatModel
 
 from src.config import get_app_config, get_tracing_config, is_tracing_enabled
-from src.models.resolver import (
-    ResolvedChatModelSpec,
-    load_resolved_chat_model_spec,
-    resolve_chat_model_spec,
-)
+from src.models.resolver import ResolvedChatModelSpec, resolve_chat_model_spec
 from src.reflection import resolve_class
+from src.utils.outbound_endpoint_policy import OutboundEndpointError, OutboundEndpointPolicy
 
 logger = logging.getLogger(__name__)
 
-_REDACTED = "***REDACTED***"
-_SENSITIVE_FIELD_NAMES = frozenset(
-    {
-        "api_key",
-        "authorization",
-        "openai_api_key",
-        "anthropic_api_key",
-        "google_api_key",
-    }
-)
-_SENSITIVE_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "x-api-key", "api-key"})
 _OPENAI_COMPATIBLE_MODEL_USE = "langchain_openai:ChatOpenAI"
 _PATCHED_OPENAI_COMPATIBLE_MODEL_USE = "src.models.patched_openai:PatchedChatOpenAI"
 _OPENAI_COMPATIBLE_MODEL_USES = frozenset(
@@ -53,78 +37,6 @@ def _get_supported_model_config_keys(model_class: type[BaseChatModel]) -> set[st
         if isinstance(alias, str) and alias:
             supported_keys.add(alias)
     return supported_keys
-
-
-def _serialize_value_for_logging(value):
-    """将请求体递归转换为可 JSON 序列化的结构，并对敏感字段做脱敏。"""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-
-    if isinstance(value, bytes):
-        return {"type": "bytes", "size": len(value)}
-
-    if hasattr(value, "model_dump") and callable(value.model_dump):
-        try:
-            return _serialize_value_for_logging(value.model_dump(mode="json"))
-        except TypeError:
-            return _serialize_value_for_logging(value.model_dump())
-        except Exception:
-            return repr(value)
-
-    if isinstance(value, Mapping):
-        serialized = {}
-        for key, item in value.items():
-            key_str = str(key)
-            key_lower = key_str.lower()
-            if key_lower in _SENSITIVE_FIELD_NAMES or key_lower.endswith("_api_key"):
-                serialized[key_str] = _REDACTED
-                continue
-            if key_lower == "headers" and isinstance(item, Mapping):
-                serialized[key_str] = {
-                    str(header_name): (
-                        _REDACTED if str(header_name).lower() in _SENSITIVE_HEADER_NAMES else _serialize_value_for_logging(header_value)
-                    )
-                    for header_name, header_value in item.items()
-                }
-                continue
-            serialized[key_str] = _serialize_value_for_logging(item)
-        return serialized
-
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [_serialize_value_for_logging(item) for item in value]
-
-    return repr(value)
-
-
-def _attach_request_payload_logger(model_instance: BaseChatModel, *, config_name: str) -> None:
-    """为支持 `_get_request_payload()` 的模型实例打印最终请求体。"""
-    original_get_request_payload = getattr(model_instance, "_get_request_payload", None)
-    if not callable(original_get_request_payload):
-        return
-
-    if getattr(original_get_request_payload, "_lumen_request_payload_logging", False):
-        return
-
-    def _wrapped_get_request_payload(self, input_, *, stop=None, **kwargs):
-        payload = original_get_request_payload(input_, stop=stop, **kwargs)
-        if logger.isEnabledFor(logging.INFO):
-            try:
-                logger.info(
-                    "LLM request payload (config=%s, provider_model=%s): %s",
-                    config_name,
-                    getattr(self, "model_name", None) or getattr(self, "model", None) or config_name,
-                    json.dumps(_serialize_value_for_logging(payload), ensure_ascii=False, default=repr),
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to serialize LLM request payload for config '%s' and provider model '%s'",
-                    config_name,
-                    getattr(self, "model_name", None) or getattr(self, "model", None) or config_name,
-                )
-        return payload
-
-    _wrapped_get_request_payload._lumen_request_payload_logging = True
-    model_instance._get_request_payload = types.MethodType(_wrapped_get_request_payload, model_instance)
 
 
 def _sanitize_max_tokens(settings: dict, *, model_name: str, model_use: str, source: str) -> dict:
@@ -177,6 +89,52 @@ def _with_openai_compatible_default_headers(settings: dict, *, model_use: str) -
     return updated
 
 
+def _with_dynamic_endpoint_policy(
+    settings: dict,
+    *,
+    spec: ResolvedChatModelSpec,
+) -> dict:
+    """Validate dynamic endpoints and secure OpenAI-compatible HTTP clients."""
+
+    if not spec.enforce_outbound_endpoint_policy:
+        return settings
+
+    updated = dict(settings)
+    base_url_keys = [key for key in ("base_url", "openai_api_base") if key in updated]
+    if not base_url_keys:
+        raise OutboundEndpointError()
+    raw_base_urls = [updated[key] for key in base_url_keys]
+    if any(not isinstance(value, str) or not value.strip() for value in raw_base_urls):
+        raise OutboundEndpointError()
+    normalized_inputs = {str(value).strip() for value in raw_base_urls}
+    if len(normalized_inputs) != 1:
+        raise OutboundEndpointError()
+    raw_base_url = str(raw_base_urls[0])
+
+    policy = OutboundEndpointPolicy.from_environment()
+    validated_base_url = policy.validate_url(raw_base_url)
+    for base_url_key in base_url_keys:
+        updated[base_url_key] = validated_base_url
+
+    # Custom endpoints are OpenAI-compatible today. Injecting both clients makes
+    # sync, async, streaming, and SDK retries pass through the same request hook.
+    if spec.use in _OPENAI_COMPATIBLE_MODEL_USES:
+        http_client, http_async_client = policy.build_http_clients()
+        for client_key in ("client", "async_client", "root_client", "root_async_client"):
+            updated.pop(client_key, None)
+        updated.update(
+            {
+                "http_client": http_client,
+                "http_async_client": http_async_client,
+                # Explicit None prevents SDK/environment proxy settings from
+                # bypassing the checked destination.
+                "openai_proxy": None,
+            }
+        )
+
+    return updated
+
+
 def create_chat_model_from_spec(
     spec: ResolvedChatModelSpec,
     *,
@@ -196,9 +154,7 @@ def create_chat_model_from_spec(
                 spec.use,
                 ", ".join(unsupported_keys),
             )
-            model_settings_from_config = {
-                key: value for key, value in model_settings_from_config.items() if key in supported_config_keys
-            }
+            model_settings_from_config = {key: value for key, value in model_settings_from_config.items() if key in supported_config_keys}
 
     has_thinking_settings = (spec.when_thinking_enabled is not None) or (spec.thinking is not None)
     effective_wte: dict = dict(spec.when_thinking_enabled) if spec.when_thinking_enabled else {}
@@ -208,10 +164,7 @@ def create_chat_model_from_spec(
 
     if thinking_enabled and has_thinking_settings:
         if not spec.supports_thinking:
-            raise ValueError(
-                f"Model {spec.name} does not support thinking. "
-                "Set `supports_thinking` to true in the model registry/config to enable thinking."
-            ) from None
+            raise ValueError(f"Model {spec.name} does not support thinking. Set `supports_thinking` to true in the model registry/config to enable thinking.") from None
         if effective_wte:
             model_settings_from_config.update(effective_wte)
     if thinking_enabled and not has_thinking_settings and not spec.supports_thinking:
@@ -243,8 +196,11 @@ def create_chat_model_from_spec(
         final_model_settings,
         model_use=spec.use,
     )
+    final_model_settings = _with_dynamic_endpoint_policy(
+        final_model_settings,
+        spec=spec,
+    )
     model_instance = model_class(**final_model_settings)
-    _attach_request_payload_logger(model_instance, config_name=spec.name)
 
     if is_tracing_enabled():
         try:
@@ -257,8 +213,11 @@ def create_chat_model_from_spec(
             existing_callbacks = model_instance.callbacks or []
             model_instance.callbacks = [*existing_callbacks, tracer]
             logger.debug(f"LangSmith tracing attached to model '{spec.name}' (project='{tracing_config.project}')")
-        except Exception as e:
-            logger.warning(f"Failed to attach LangSmith tracing to model '{spec.name}': {e}")
+        except Exception as exc:
+            logger.warning(
+                "Failed to attach LangSmith tracing (%s)",
+                type(exc).__name__,
+            )
     return model_instance
 
 
@@ -268,7 +227,6 @@ def create_chat_model(
     *,
     dynamic_model_token: str | None = None,
     thread_id: str | None = None,
-    resolved_spec_payload: dict | None = None,
     **kwargs,
 ) -> BaseChatModel:
     """创建聊天模型实例。
@@ -280,10 +238,7 @@ def create_chat_model(
     返回：
         聊天模型实例。
     """
-    resolved_spec = load_resolved_chat_model_spec(resolved_spec_payload)
-    if resolved_spec is not None:
-        spec = resolved_spec
-    elif dynamic_model_token:
+    if dynamic_model_token:
         spec = resolve_chat_model_spec(
             name,
             dynamic_model_token=dynamic_model_token,

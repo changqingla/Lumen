@@ -254,6 +254,7 @@ You: "Deploying to staging..." [proceed]
 
 <working_directory existed="true">
 - User uploads: `/mnt/user-data/uploads` - Files uploaded by the user (automatically listed in context)
+- Managed knowledge: `/mnt/user-data/knowledge` - Read-only knowledge-base Markdown selected for this thread
 - User workspace: `/mnt/user-data/workspace` - Working directory for temporary files
 - Output files: `/mnt/user-data/outputs` - Final deliverables must be saved here
 
@@ -298,36 +299,46 @@ Recent breakthroughs in language models have also accelerated progress
 """
 
 
-def _get_memory_context(agent_name: str | None = None) -> str:
+def _get_memory_context(
+    *,
+    memory_scope: str | None,
+    agent_name: str | None = None,
+) -> str:
     """获取用于系统提示词注入的记忆上下文。
 
     参数：
-        agent_name: 若提供则加载该 agent 的记忆；否则加载全局记忆。
+        memory_scope: Backend-issued opaque tenant partition. Missing scope
+            disables injection.
+        agent_name: Optional agent subpartition within the tenant scope.
 
     返回：
         以 XML 标签包裹的格式化记忆上下文；若禁用则返回空字符串。
     """
-    try:
-        from src.agents.memory import format_memory_for_injection, get_memory_data
-        from src.config.memory_config import get_memory_config
+    from src.agents.memory import format_memory_for_injection, get_memory_data
+    from src.agents.memory.scope import normalize_memory_scope
+    from src.config.memory_config import get_memory_config
 
-        config = get_memory_config()
-        if not config.enabled or not config.injection_enabled:
-            return ""
+    scope = normalize_memory_scope(memory_scope, allow_none=True)
+    if scope is None:
+        return ""
 
-        memory_data = get_memory_data(agent_name)
-        memory_content = format_memory_for_injection(memory_data, max_tokens=config.max_injection_tokens)
+    config = get_memory_config()
+    if not config.enabled or not config.injection_enabled:
+        return ""
 
-        if not memory_content.strip():
-            return ""
+    memory_data = get_memory_data(scope, agent_name)
+    memory_content = format_memory_for_injection(
+        memory_data,
+        max_tokens=config.max_injection_tokens,
+    )
 
-        return f"""<memory>
+    if not memory_content.strip():
+        return ""
+
+    return f"""<memory>
 {memory_content}
 </memory>
 """
-    except Exception as e:
-        print(f"Failed to load memory context: {e}")
-        return ""
 
 
 def get_skills_prompt_section(available_skills: set[str] | None = None) -> str:
@@ -382,9 +393,21 @@ def get_agent_soul(agent_name: str | None) -> str:
     return ""
 
 
-def apply_prompt_template(subagent_enabled: bool = False, max_concurrent_subagents: int = 3, *, agent_name: str | None = None, available_skills: set[str] | None = None) -> str:
-    # 获取记忆上下文
-    memory_context = _get_memory_context(agent_name)
+def apply_prompt_template(
+    subagent_enabled: bool = False,
+    max_concurrent_subagents: int = 3,
+    *,
+    memory_scope: str | None = None,
+    agent_name: str | None = None,
+    available_skills: set[str] | None = None,
+) -> str:
+    # Static graph prompts call this without a scope and therefore cannot
+    # capture one tenant's memory. ScopedMemoryPromptMiddleware injects it at
+    # model-call time from the trusted Runtime context.
+    memory_context = _get_memory_context(
+        memory_scope=memory_scope,
+        agent_name=agent_name,
+    )
 
     # 仅在运行时启用子代理时注入对应片段
     n = max_concurrent_subagents

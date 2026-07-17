@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from src.skills.loader import load_skills
 
 
@@ -55,3 +57,16 @@ def test_load_skills_skips_hidden_directories(tmp_path: Path):
 
     assert "ok-skill" in names
     assert "secret-skill" not in names
+
+
+def test_load_skills_rejects_ambiguous_duplicate_names(tmp_path: Path):
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root / "public" / "canonical", "same-name", "Canonical")
+    _write_skill(
+        skills_root / "public" / "parent" / "stale-copy",
+        "same-name",
+        "Stale copy",
+    )
+
+    with pytest.raises(ValueError, match="Duplicate skill name: same-name"):
+        load_skills(skills_path=skills_root, use_config=False, enabled_only=False)

@@ -1,27 +1,32 @@
 import logging
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.runnables import RunnableConfig
 
 from src.agents.lead_agent.prompt import apply_prompt_template
 from src.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from src.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
 from src.agents.middlewares.memory_middleware import MemoryMiddleware
+from src.agents.middlewares.scoped_memory_prompt_middleware import (
+    ScopedMemoryPromptMiddleware,
+)
 from src.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
 from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
 from src.agents.middlewares.title_middleware import TitleMiddleware
 from src.agents.middlewares.todo_middleware import TodoMiddleware
 from src.agents.middlewares.tool_call_loop_guard_middleware import ToolCallLoopGuardMiddleware
 from src.agents.middlewares.uploads_middleware import UploadsMiddleware
+from src.agents.middlewares.usage_accounting_middleware import UsageAccountingMiddleware
+from src.agents.middlewares.usage_summarization_middleware import UsageSummarizationMiddleware
 from src.agents.middlewares.view_image_middleware import ViewImageMiddleware
+from src.agents.runtime_context import RuntimeContext
 from src.agents.thread_state import ThreadState
 from src.config.agents_config import load_agent_config
 from src.config.app_config import get_app_config
 from src.config.summarization_config import get_summarization_config
 from src.models import create_chat_model
 from src.models.factory import create_chat_model_from_spec
-from src.models.resolver import dump_resolved_chat_model_spec, resolve_chat_model_spec
+from src.models.resolver import resolve_chat_model_spec
 from src.sandbox.middleware import SandboxMiddleware
 
 logger = logging.getLogger(__name__)
@@ -38,14 +43,11 @@ def _resolve_model_name(requested_model_name: str | None = None) -> str:
         return requested_model_name
 
     if requested_model_name:
-        raise ValueError(
-            f"Model '{requested_model_name}' not found in config.yaml. "
-            f"Available models: {', '.join(model.name for model in app_config.models)}."
-        )
+        raise ValueError(f"Model '{requested_model_name}' not found in config.yaml. Available models: {', '.join(model.name for model in app_config.models)}.")
     return default_model_name
 
 
-def _create_summarization_middleware() -> SummarizationMiddleware | None:
+def _create_summarization_middleware() -> UsageSummarizationMiddleware | None:
     """根据配置创建并初始化摘要中间件。"""
     config = get_summarization_config()
 
@@ -84,7 +86,7 @@ def _create_summarization_middleware() -> SummarizationMiddleware | None:
     if config.summary_prompt is not None:
         kwargs["summary_prompt"] = config.summary_prompt
 
-    return SummarizationMiddleware(**kwargs)
+    return UsageSummarizationMiddleware(**kwargs)
 
 
 def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
@@ -228,6 +230,8 @@ def _build_middlewares(
     """
     app_config = get_app_config()
     middlewares = [
+        ScopedMemoryPromptMiddleware(agent_name=agent_name),
+        UsageAccountingMiddleware(request_type="lead", finalize_run=True),
         ThreadDataMiddleware(),
         UploadsMiddleware(),
         SandboxMiddleware(),
@@ -252,9 +256,8 @@ def _build_middlewares(
     # 加入 MemoryMiddleware（位于 TitleMiddleware 之后）
     middlewares.append(MemoryMiddleware(agent_name=agent_name))
 
-    # 仅当当前模型支持视觉能力时才加入 ViewImageMiddleware。
-    if supports_vision:
-        middlewares.append(ViewImageMiddleware())
+    # 始终启用历史图片状态清理；仅视觉模型会向临时模型请求注入图片。
+    middlewares.append(ViewImageMiddleware(enable_image_injection=supports_vision))
 
     # 加入 SubagentLimitMiddleware，截断超出并发上限的子代理调用
     subagent_enabled = config.get("configurable", {}).get("subagent_enabled", False)
@@ -300,11 +303,11 @@ def make_lead_agent(config: RunnableConfig):
             thread_id=thread_id,
         )
     except Exception as exc:
-        logger.exception("Failed to resolve chat model spec for model '%s'", model_name)
-        raise ValueError(
-            "No chat model could be resolved. Please configure at least one model in config.yaml "
-            "or provide a valid model binding."
-        ) from exc
+        logger.error(
+            "Failed to resolve chat model spec (%s)",
+            type(exc).__name__,
+        )
+        raise ValueError("No chat model could be resolved. Please configure at least one model in config.yaml or provide a valid model binding.") from exc
 
     if model_spec is None:
         raise ValueError("No chat model could be resolved. Please configure at least one model in config.yaml or provide a valid 'model_name'/'model' in the request.")
@@ -330,21 +333,18 @@ def make_lead_agent(config: RunnableConfig):
         disable_model_streaming,
     )
 
-    # 注入运行元数据，用于 LangSmith 链路追踪标记
+    # 仅注入无密的可观测性字段。动态绑定令牌和解析后的模型配置可能包含
+    # 用户 API key，不能进入 checkpoint / tracing 会采集的 metadata。
     if "metadata" not in config:
         config["metadata"] = {}
 
+    config["metadata"].pop("dynamic_model_token", None)
+    config["metadata"].pop("resolved_model_spec", None)
+    config["metadata"].pop("usage_context", None)
     config["metadata"].update(
         {
             "agent_name": agent_name or "default",
             "model_name": model_spec.name or "default",
-            "thinking_enabled": thinking_enabled,
-            "reasoning_effort": effective_reasoning_effort,
-            "is_plan_mode": is_plan_mode,
-            "subagent_enabled": subagent_enabled,
-            "disable_model_streaming": disable_model_streaming,
-            "dynamic_model_token": dynamic_model_token,
-            "resolved_model_spec": dump_resolved_chat_model_spec(model_spec),
         }
     )
 
@@ -360,7 +360,8 @@ def make_lead_agent(config: RunnableConfig):
                 thread_id=thread_id,
                 supports_vision_override=model_spec.supports_vision,
                 subagent_enabled=subagent_enabled,
-            ) + [setup_agent],
+            )
+            + [setup_agent],
             middleware=_build_middlewares(
                 config,
                 model_name=model_spec.name,
@@ -368,6 +369,7 @@ def make_lead_agent(config: RunnableConfig):
             ),
             system_prompt=system_prompt,
             state_schema=ThreadState,
+            context_schema=RuntimeContext,
         )
 
     # 默认 lead agent（保持原有行为）
@@ -399,4 +401,5 @@ def make_lead_agent(config: RunnableConfig):
         ),
         system_prompt=apply_prompt_template(subagent_enabled=subagent_enabled, max_concurrent_subagents=max_concurrent_subagents, agent_name=agent_name),
         state_schema=ThreadState,
+        context_schema=RuntimeContext,
     )

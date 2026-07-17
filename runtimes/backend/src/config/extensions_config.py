@@ -2,6 +2,12 @@
 
 import json
 import os
+import stat
+import tempfile
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from fcntl import LOCK_EX, LOCK_UN, flock
 from pathlib import Path
 from typing import Any, Literal
 
@@ -9,8 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 _RUNTIMES_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_CONFIG_DIR = _RUNTIMES_ROOT / "config"
-_DEFAULT_EXTENSIONS_CONFIG_PATH = _DEFAULT_CONFIG_DIR / "extensions_config.json"
+_DEFAULT_EXTENSIONS_CONFIG_PATH = _DEFAULT_CONFIG_DIR / "extensions" / "extensions_config.json"
+_DEFAULT_LEGACY_EXTENSIONS_CONFIG_PATH = _DEFAULT_CONFIG_DIR / "extensions_config.json"
 _DEFAULT_LEGACY_MCP_CONFIG_PATH = _DEFAULT_CONFIG_DIR / "mcp_config.json"
+_EXTENSIONS_UPDATE_LOCK = threading.RLock()
 
 
 class McpOAuthConfig(BaseModel):
@@ -78,8 +86,8 @@ class ExtensionsConfig(BaseModel):
         优先级：
         1. 若传入 `config_path` 参数，则使用该路径。
         2. 若设置 `LUMEN_EXTENSIONS_CONFIG_PATH` 环境变量，则使用该路径。
-        3. 否则先在当前目录查找 `extensions_config.json`，再查找父目录。
-        4. 为兼容旧版本，若未找到 `extensions_config.json`，还会检查 `mcp_config.json`。
+        3. 否则先在当前目录和父目录查找，再使用默认的 `config/extensions/` 路径。
+        4. 为兼容旧版本，还会检查旧的 `config/extensions_config.json` 与 `mcp_config.json`。
         5. 若都未找到，返回 None（扩展配置是可选的）。
 
         参数：
@@ -95,14 +103,15 @@ class ExtensionsConfig(BaseModel):
             return path
         elif os.getenv("LUMEN_EXTENSIONS_CONFIG_PATH"):
             path = Path(os.getenv("LUMEN_EXTENSIONS_CONFIG_PATH"))
-            if not path.exists():
-                raise FileNotFoundError(f"环境变量 `LUMEN_EXTENSIONS_CONFIG_PATH` 指定的扩展配置文件不存在：{path}")
+            # The deployment path is mutable state. It may not exist on the
+            # first boot; callers must still know where Gateway should create it.
             return path
         else:
             candidates = [
                 Path(os.getcwd()) / "extensions_config.json",
                 Path(os.getcwd()).parent / "extensions_config.json",
                 _DEFAULT_EXTENSIONS_CONFIG_PATH,
+                _DEFAULT_LEGACY_EXTENSIONS_CONFIG_PATH,
                 Path(os.getcwd()) / "mcp_config.json",
                 Path(os.getcwd()).parent / "mcp_config.json",
                 _DEFAULT_LEGACY_MCP_CONFIG_PATH,
@@ -127,13 +136,12 @@ class ExtensionsConfig(BaseModel):
             ExtensionsConfig: 读取到的配置；若文件不存在则返回空配置。
         """
         resolved_path = cls.resolve_config_path(config_path)
-        if resolved_path is None:
+        if resolved_path is None or not resolved_path.exists():
             # 未找到扩展配置文件时返回空配置
             return cls(mcp_servers={}, skills={})
 
         try:
-            with open(resolved_path, encoding="utf-8") as f:
-                config_data = json.load(f)
+            config_data = load_raw_extensions_config(resolved_path)
             cls.resolve_env_variables(config_data)
             return cls.model_validate(config_data)
         except json.JSONDecodeError as e:
@@ -196,6 +204,107 @@ class ExtensionsConfig(BaseModel):
         return skill_config.enabled
 
 
+def load_raw_extensions_config(config_path: str | Path | None = None) -> dict[str, Any]:
+    """读取未做环境变量解析的扩展配置，供无损更新使用。"""
+    resolved_path = Path(config_path) if config_path is not None else ExtensionsConfig.resolve_config_path()
+    if resolved_path is None or not resolved_path.exists():
+        return {"mcpServers": {}, "skills": {}}
+
+    with resolved_path.open(encoding="utf-8") as file:
+        config_data = json.load(file)
+    if not isinstance(config_data, dict):
+        raise ValueError(f"Extensions config file at {resolved_path} must contain a JSON object")
+    return config_data
+
+
+def get_extensions_config_write_path() -> Path:
+    """返回扩展配置的明确写入位置。"""
+    return ExtensionsConfig.resolve_config_path() or _DEFAULT_EXTENSIONS_CONFIG_PATH
+
+
+@contextmanager
+def _locked_extensions_config(config_path: Path) -> Iterator[None]:
+    """Serialize read-modify-write transactions across threads and processes."""
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = config_path.with_name(f".{config_path.name}.lock")
+    flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    with _EXTENSIONS_UPDATE_LOCK:
+        lock_fd = os.open(lock_path, flags, 0o600)
+        try:
+            lock_stat = os.fstat(lock_fd)
+            if not stat.S_ISREG(lock_stat.st_mode):
+                raise OSError("Extensions config lock is not a regular file")
+            os.fchmod(lock_fd, 0o600)
+            flock(lock_fd, LOCK_EX)
+            try:
+                yield
+            finally:
+                flock(lock_fd, LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+
+def _write_raw_extensions_config_unlocked(
+    config_data: dict[str, Any],
+    resolved_path: Path,
+) -> None:
+    ExtensionsConfig.model_validate(config_data)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_path: Path | None = None
+    try:
+        file_descriptor, temp_name = tempfile.mkstemp(
+            dir=resolved_path.parent,
+            prefix=f".{resolved_path.name}.",
+            suffix=".tmp",
+        )
+        temp_path = Path(temp_name)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as file:
+            json.dump(config_data, file, indent=2, ensure_ascii=False)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        temp_path.chmod(0o600)
+        os.replace(temp_path, resolved_path)
+        directory_fd = os.open(
+            resolved_path.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def write_raw_extensions_config(config_data: dict[str, Any], config_path: str | Path | None = None) -> Path:
+    """校验并原子写入扩展配置，避免读进程看到半个 JSON 文件。"""
+    resolved_path = Path(config_path) if config_path is not None else get_extensions_config_write_path()
+    with _locked_extensions_config(resolved_path):
+        _write_raw_extensions_config_unlocked(config_data, resolved_path)
+    return resolved_path
+
+
+def update_raw_extensions_config[UpdateResult](
+    updater: Callable[[dict[str, Any]], UpdateResult],
+    config_path: str | Path | None = None,
+) -> UpdateResult:
+    """Atomically load, mutate, validate, and durably replace deployment state."""
+
+    resolved_path = Path(config_path) if config_path is not None else get_extensions_config_write_path()
+    with _locked_extensions_config(resolved_path):
+        config_data = load_raw_extensions_config(resolved_path)
+        result = updater(config_data)
+        _write_raw_extensions_config_unlocked(config_data, resolved_path)
+        return result
+
+
 _extensions_config: ExtensionsConfig | None = None
 
 
@@ -238,15 +347,3 @@ def reset_extensions_config() -> None:
     """
     global _extensions_config
     _extensions_config = None
-
-
-def set_extensions_config(config: ExtensionsConfig) -> None:
-    """设置自定义扩展配置实例。
-
-    可用于在测试场景中注入自定义或 mock 配置。
-
-    参数：
-        config: 要使用的 ExtensionsConfig 实例。
-    """
-    global _extensions_config
-    _extensions_config = config

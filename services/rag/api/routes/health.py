@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter
 
 from config import settings
+from runtime_state import RagStateDependency
 
 router = APIRouter()
 
@@ -15,7 +16,6 @@ router = APIRouter()
 @router.get("/")
 async def root():
     """根路径 - 服务状态"""
-    from app import stats
     return {
         "service": "DeepRAG 统一网关服务",
         "version": "1.0.0",
@@ -31,22 +31,22 @@ async def root():
             "queue_stats_service": "/api/queue-stats",
             "cancel_task_service": "/api/task/{task_id}",
             "cleanup_tasks_service": "/api/cleanup-tasks",
-            "document_delete_service": "/api/delete-document"
+            "document_delete_service": "/api/delete-document",
         },
         "supported_formats": list(settings.SUPPORTED_FORMATS),
         "max_file_size": f"{settings.MAX_FILE_SIZE / 1024 / 1024:.0f}MB",
         "chunk_process_workers": settings.CHUNK_PROCESS_WORKERS,
-        "api_docs": "/docs"
+        "api_docs": "/docs",
     }
 
 
 @router.get("/health")
-async def health_check():
+async def health_check(state: RagStateDependency):
     """健康检查"""
-    from app import stats
+    stats = state.stats
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "uptime": (datetime.now() - stats["start_time"]).total_seconds(),
-        "stats": stats
+        "stats": stats,
     }

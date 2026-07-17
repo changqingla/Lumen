@@ -2,10 +2,15 @@
  * PDF查看器组件
  * 使用 react-pdf-highlighter 库渲染PDF，支持精确的文本选择
  */
-import { useState, useCallback, useRef } from 'react';
-import { PdfLoader, PdfHighlighter } from 'react-pdf-highlighter';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { PdfHighlighter } from 'react-pdf-highlighter/dist/components/PdfHighlighter';
 import type { Content, ScaledPosition } from 'react-pdf-highlighter';
-import pdfjsPkg from 'pdfjs-dist/package.json';
+import {
+  GlobalWorkerOptions,
+  getDocument,
+  type PDFDocumentProxy,
+} from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { FileText, Star, X } from 'lucide-react';
 import { getFileIcon } from '@/shared/utils/fileIcons';
 import styles from './PDFViewer.module.css';
@@ -15,6 +20,67 @@ import 'react-pdf-highlighter/dist/style/AreaHighlight.css';
 import 'react-pdf-highlighter/dist/style/MouseSelection.css';
 import 'react-pdf-highlighter/dist/style/Tip.css';
 import 'react-pdf-highlighter/dist/style/pdf_viewer.css';
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+interface LocalPdfLoaderProps {
+  url: string;
+  beforeLoad: ReactNode;
+  errorMessage: ReactNode;
+  children: (pdfDocument: PDFDocumentProxy) => ReactNode;
+  onError: (error: Error) => void;
+}
+
+function LocalPdfLoader({
+  url,
+  beforeLoad,
+  errorMessage,
+  children,
+  onError,
+}: LocalPdfLoaderProps) {
+  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const [loadError, setLoadError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setPdfDocument(null);
+    setLoadError(null);
+
+    const loadingTask = getDocument({
+      url,
+      cMapUrl: '/cmaps/',
+      cMapPacked: true,
+    });
+
+    void loadingTask.promise.then((document) => {
+      if (!active) {
+        void document.destroy();
+        return;
+      }
+      setPdfDocument(document);
+    }).catch((error: unknown) => {
+      if (!active) {
+        return;
+      }
+      const normalizedError = error instanceof Error ? error : new Error('PDF document load failed');
+      setLoadError(normalizedError);
+      onError(normalizedError);
+    });
+
+    return () => {
+      active = false;
+      void loadingTask.destroy();
+    };
+  }, [onError, url]);
+
+  if (loadError) {
+    return errorMessage;
+  }
+  if (!pdfDocument) {
+    return beforeLoad;
+  }
+  return children(pdfDocument);
+}
 
 interface PDFViewerProps {
   url: string;
@@ -42,6 +108,14 @@ export default function PDFViewer({
   
   const containerRef = useRef<HTMLDivElement>(null);
   const justSelectedRef = useRef<boolean>(false); // 用于防止选择后立即触发点击隐藏
+
+  useEffect(() => {
+    setError('');
+  }, [url]);
+
+  const handlePdfLoadError = useCallback((loadError: Error) => {
+    setError(loadError.message);
+  }, []);
 
   // 将相对路径转换为绝对路径，上传预览会直接传入 blob URL
   const absoluteUrl = /^(https?:|blob:)/.test(url) ? url : `${window.location.origin}${url}`;
@@ -141,11 +215,8 @@ export default function PDFViewer({
             <p>{error}</p>
           </div>
         ) : (
-          <PdfLoader
+          <LocalPdfLoader
             url={absoluteUrl}
-            workerSrc={`https://unpkg.com/pdfjs-dist@${pdfjsPkg.version}/build/pdf.worker.min.mjs`}
-            cMapUrl="/cmaps/"
-            cMapPacked={true}
             beforeLoad={
               <div className={styles.loading}>
                 <div className={styles.loadingSpinner} />
@@ -158,7 +229,7 @@ export default function PDFViewer({
                 <p>PDF文档加载失败</p>
               </div>
             }
-            onError={(err) => setError(err.message)}
+            onError={handlePdfLoadError}
           >
             {(pdfDocument) => (
               <PdfHighlighter
@@ -172,7 +243,7 @@ export default function PDFViewer({
                 pdfScaleValue="page-width"
               />
             )}
-          </PdfLoader>
+          </LocalPdfLoader>
         )}
       </div>
 

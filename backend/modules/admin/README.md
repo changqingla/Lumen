@@ -2,7 +2,7 @@
 
 管理域模块入口。
 
-后续收敛的域内实现：
+当前主要域内实现：
 
 - `modules/admin/controller.py`
 - `modules/admin/entities/activation_code.py`

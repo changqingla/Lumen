@@ -8,9 +8,22 @@ import logging
 import os
 from typing import Any
 
-import requests
+from src.utils.provider_http import provider_post
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+_MAX_REQUEST_TIMEOUT_SECONDS = 120.0
+
+
+def _request_timeout(configured: int | float) -> float:
+    try:
+        value = float(configured)
+    except (TypeError, ValueError):
+        return _DEFAULT_REQUEST_TIMEOUT_SECONDS
+    if value <= 0:
+        return _DEFAULT_REQUEST_TIMEOUT_SECONDS
+    return min(value, _MAX_REQUEST_TIMEOUT_SECONDS)
 
 
 class InfoQuestClient:
@@ -39,11 +52,10 @@ class InfoQuestClient:
 
     def fetch(self, url: str, return_format: str = "html") -> str:
         if logger.isEnabledFor(logging.DEBUG):
-            url_truncated = url[:50] + "..." if len(url) > 50 else url
             logger.debug(
                 f"InfoQuest - Fetch API request initiated | "
                 f"operation=crawl url | "
-                f"url_truncated={url_truncated} | "
+                f"url_length={len(url)} | "
                 f"has_timeout_filter={self.fetch_timeout > 0} | timeout_filter={self.fetch_timeout} | "
                 f"has_fetch_time_filter={self.fetch_time > 0} | fetch_time_filter={self.fetch_time} | "
                 f"has_navigation_timeout_filter={self.fetch_navigation_timeout > 0} | navi_timeout_filter={self.fetch_navigation_timeout} | "
@@ -58,18 +70,26 @@ class InfoQuestClient:
 
         logger.debug("Sending crawl request to InfoQuest API")
         try:
-            response = requests.post("https://reader.infoquest.bytepluses.com", headers=headers, json=data)
+            response = provider_post(
+                "https://reader.infoquest.bytepluses.com",
+                headers=headers,
+                json=data,
+                timeout=_request_timeout(self.fetch_timeout),
+            )
 
             # 检查状态码是否为 200
             if response.status_code != 200:
-                error_message = f"fetch API returned status {response.status_code}: {response.text}"
-                logger.debug("InfoQuest Crawler fetch API return status %d: %s for URL: %s", response.status_code, response.text, url)
-                return f"Error: {error_message}"
+                logger.debug(
+                    "InfoQuest Crawler returned status %d (response_bytes=%d)",
+                    response.status_code,
+                    len(response.content),
+                )
+                return f"Error: fetch API returned status {response.status_code}"
 
             # 检查是否为空响应
             if not response.text or not response.text.strip():
                 error_message = "no result found"
-                logger.debug("InfoQuest Crawler returned empty response for URL: %s", url)
+                logger.debug("InfoQuest Crawler returned an empty response")
                 return f"Error: {error_message}"
 
             # 尝试解析 JSON 并提取 reader_result
@@ -81,7 +101,9 @@ class InfoQuestClient:
                     return response_data["reader_result"]
                 elif "content" in response_data:
                     # 若 `reader_result` 不存在，则回退到 `content` 字段
-                    logger.debug("reader_result missing in JSON response, falling back to content field: %s", response_data["content"])
+                    logger.debug(
+                        "reader_result missing in JSON response; using content field"
+                    )
                     return response_data["content"]
                 else:
                     # 两个字段都不存在时，返回原始响应
@@ -91,15 +113,14 @@ class InfoQuestClient:
                 logger.debug("Response is not in JSON format, returning as-is")
                 return response.text
 
-            # 打印部分响应用于调试
-            if logger.isEnabledFor(logging.DEBUG):
-                response_sample = response.text[:200] + ("..." if len(response.text) > 200 else "")
-                logger.debug("Successfully received response, content length: %d bytes, first 200 chars: %s", len(response.text), response_sample)
+            logger.debug(
+                "Successfully received InfoQuest response (content_chars=%d)",
+                len(response.text),
+            )
             return response.text
-        except Exception as e:
-            error_message = f"fetch API failed: {str(e)}"
-            logger.error(error_message)
-            return f"Error: {error_message}"
+        except Exception as exc:
+            logger.error("InfoQuest fetch API failed (%s)", type(exc).__name__)
+            return "Error: fetch API failed"
 
     @staticmethod
     def _prepare_headers() -> dict[str, str]:
@@ -159,14 +180,20 @@ class InfoQuestClient:
         if site != "":
             params["site"] = site
 
-        response = requests.post("https://search.infoquest.bytepluses.com", headers=headers, json=params)
+        response = provider_post(
+            "https://search.infoquest.bytepluses.com",
+            headers=headers,
+            json=params,
+            timeout=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()
 
-        # 打印部分响应用于调试
         response_json = response.json()
-        if logger.isEnabledFor(logging.DEBUG):
-            response_sample = json.dumps(response_json)[:200] + ("..." if len(json.dumps(response_json)) > 200 else "")
-            logger.debug(f"Search API request completed successfully | service=InfoQuest | status=success | response_sample={response_sample}")
+        logger.debug(
+            "Search API request completed successfully | service=InfoQuest | "
+            "status=success | top_level_fields=%d",
+            len(response_json) if isinstance(response_json, dict) else 0,
+        )
 
         return response_json
 
@@ -233,13 +260,12 @@ class InfoQuestClient:
         output_format: str = "JSON",
     ) -> str:
         if logger.isEnabledFor(logging.DEBUG):
-            query_truncated = query[:50] + "..." if len(query) > 50 else query
             logger.debug(
                 f"InfoQuest - Search API request initiated | "
                 f"operation=search webs | "
-                f"query_truncated={query_truncated} | "
+                f"query_length={len(query)} | "
                 f"has_time_filter={self.search_time_range > 0} | time_filter={self.search_time_range} | "
-                f"has_site_filter={bool(site)} | site={site} | "
+                f"has_site_filter={bool(site)} | site_length={len(site)} | "
                 f"request_type=sync"
             )
 
@@ -265,17 +291,21 @@ class InfoQuestClient:
             elif "content" in raw_results:
                 # 若 `search_result` 不存在，则回退到 `content` 字段
                 error_message = "web search API return wrong format"
-                logger.error("web search API return wrong format, no search_result nor content field found in JSON response, content: %s", raw_results["content"])
+                logger.error(
+                    "Web search API returned an unexpected content-only response"
+                )
                 return f"Error: {error_message}"
             else:
                 # 两个字段都不存在时，返回原始响应
                 logger.warning("InfoQuest Web-Search - Neither search_result nor content field found in JSON response")
                 return json.dumps(raw_results, indent=2, ensure_ascii=False)
 
-        except Exception as e:
-            error_message = f"InfoQuest Web-Search - Search tool execution failed | mode=synchronous | error={str(e)}"
-            logger.error(error_message)
-            return f"Error: {error_message}"
+        except Exception as exc:
+            logger.error(
+                "InfoQuest Web-Search failed (%s)",
+                type(exc).__name__,
+            )
+            return "Error: InfoQuest Web-Search failed"
 
     @staticmethod
     def clean_results_with_image_search(raw_results: list[dict[str, dict[str, dict[str, Any]]]]) -> list[dict]:

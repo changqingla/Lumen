@@ -41,19 +41,19 @@ lumen 的 Checkpointer 模块，本质上是 LangGraph 线程状态的持久化�
 
 与会话持久化最相关的实现主要分布在以下位置：
 
-- `backend/langgraph.json`
+- `runtimes/backend/langgraph.json`
   这是图服务层入口。它声明主图为 `lead_agent`，并指定 checkpointer 工厂为异步版 `make_checkpointer`。
 
-- `backend/src/config/checkpointer_config.py`
+- `runtimes/backend/src/config/checkpointer_config.py`
   定义 checkpointer 配置模型与全局配置缓存。
 
-- `backend/src/agents/checkpointer/provider.py`
+- `runtimes/backend/src/agents/checkpointer/provider.py`
   提供同步版 checkpointer 工厂、同步单例和同步上下文管理器。
 
-- `backend/src/agents/checkpointer/async_provider.py`
+- `runtimes/backend/src/agents/checkpointer/async_provider.py`
   提供异步上下文管理器，供 LangGraph Server 或其他长生命周期异步服务使用。
 
-- `backend/src/config/app_config.py`
+- `runtimes/backend/src/config/app_config.py`
   负责从 `config.yaml` 读取 checkpointer 配置并写入全局配置对象。
 
 这说明项目不是把持久化逻辑散落在业务代码里，而是把它集中封装在 checkpointer provider 层。
@@ -101,7 +101,7 @@ LangGraph 的持久化语义是围绕 thread 展开的，而 lumen 又把很多�
 
 ## 6. 为什么 `langgraph.json` 要使用异步 checkpointer 工厂
 
-`backend/langgraph.json` 中显式声明了：
+`runtimes/backend/langgraph.json` 中显式声明了：
 
 - 主图入口是 `src.agents:make_lead_agent`
 - checkpointer 路径是 `./src/agents/checkpointer/async_provider.py:make_checkpointer`

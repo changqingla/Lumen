@@ -38,12 +38,18 @@ class PatchedChatOpenAI(ChatOpenAI):
         try:
             patched_response = response.model_copy(update={"output": []})
             return chunk.model_copy(update={"response": patched_response})
-        except Exception:
-            logger.debug("Unable to copy Responses API final chunk with empty output", exc_info=True)
+        except Exception as exc:
+            logger.debug(
+                "Unable to copy Responses API final chunk with empty output (%s)",
+                type(exc).__name__,
+            )
             try:
                 response.output = []
-            except Exception:
-                logger.debug("Unable to mutate Responses API final chunk output", exc_info=True)
+            except Exception as mutation_exc:
+                logger.debug(
+                    "Unable to mutate Responses API final chunk output (%s)",
+                    type(mutation_exc).__name__,
+                )
             return chunk
 
     async def _astream(

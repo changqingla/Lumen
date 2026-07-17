@@ -7,9 +7,11 @@ DeepRAG 文档块编辑服务类
 """
 
 import logging
-from typing import Dict, List, Optional, Any
-from embedding.chunk_embedder import ChunkEmbedder, EmbeddingConfig
+from typing import Any, Dict, List, Optional
+
 from common_utils import DeepRAGCommonUtils
+from embedding.chunk_embedder import ChunkEmbedder, EmbeddingConfig
+from error_boundary import log_rag_failure, public_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -117,22 +119,31 @@ class ChunkEditService:
             
             # 使用编辑模式存储，确保严格使用原有ID
             try:
-                success_count, errors = await store.store_chunks(
+                _success_count, errors = await store.store_chunks(
                     [updated_chunk], batch_size=1, is_edit_mode=True
                 )
             finally:
                 # 清理ES连接
                 try:
                     await store.close()
-                except Exception as e:
-                    logger.warning(f"关闭ES连接时出错: {e}")
+                except Exception as error:
+                    log_rag_failure(
+                        logger,
+                        stage="store_cleanup",
+                        error=error,
+                    )
             
             if errors:
+                logger.error(
+                    "RAG operation failed: stage=chunk_edit "
+                    "error_type=StoreResultFailure error_count=%s",
+                    len(errors),
+                )
                 return {
                     "success": False,
-                    "message": f"存储更新后的块失败: {errors[0]}",
+                    "message": public_error_message("chunk_edit"),
                     "chunk_id": chunk_id,
-                    "errors": errors
+                    "errors": [],
                 }
             
             # 构建返回的更新字段列表
@@ -156,12 +167,12 @@ class ChunkEditService:
                 }
             }
             
-        except Exception as e:
-            logger.error(f"处理块编辑失败: {e}")
+        except Exception as error:
+            log_rag_failure(logger, stage="chunk_edit", error=error)
             return {
                 "success": False,
-                "message": f"处理块编辑失败: {str(e)}",
-                "chunk_id": chunk_id
+                "message": public_error_message("chunk_edit"),
+                "chunk_id": chunk_id,
             }
         finally:
             # 清理retriever资源
@@ -169,8 +180,12 @@ class ChunkEditService:
                 try:
                     await retriever.close()
                     logger.debug("Retriever ES连接已清理")
-                except Exception as e:
-                    logger.warning(f"关闭Retriever ES连接时出错: {e}")
+                except Exception as error:
+                    log_rag_failure(
+                        logger,
+                        stage="retriever_cleanup",
+                        error=error,
+                    )
     
     async def process_batch_chunks_edit(self, chunks: List[Dict[str, Any]], es_host: str, 
                                  index_name: str, model_factory: str, model_name: str,
@@ -200,6 +215,7 @@ class ChunkEditService:
             处理结果
         """
         retriever = None
+        store = None
         try:
             total_chunks = len(chunks)
             if total_chunks > max_batch_size:
@@ -246,13 +262,13 @@ class ChunkEditService:
             updated_chunks = []
             
             # 处理每个块
-            for chunk_edit in chunks:
+            for position, chunk_edit in enumerate(chunks):
                 try:
                     chunk_id = chunk_edit.get("chunk_id")
                     if not chunk_id:
                         errors.append({
-                            "chunk_data": chunk_edit,
-                            "error": "缺少chunk_id字段"
+                            "position": position,
+                            "error": "缺少chunk_id字段",
                         })
                         failed_chunks += 1
                         continue
@@ -261,8 +277,8 @@ class ChunkEditService:
                     original_chunk = await self.utils.fetch_chunk_by_id(retriever, chunk_id)
                     if not original_chunk:
                         errors.append({
-                            "chunk_id": chunk_id,
-                            "error": f"未找到chunk_id为 {chunk_id} 的块"
+                            "position": position,
+                            "error": "未找到指定文档块",
                         })
                         failed_chunks += 1
                         continue
@@ -276,44 +292,51 @@ class ChunkEditService:
                     updated_chunks.append(updated_chunk)
                     successful_chunks += 1
                     
-                except Exception as e:
+                except Exception as error:
+                    log_rag_failure(logger, stage="chunk_edit", error=error)
                     errors.append({
-                        "chunk_data": chunk_edit,
-                        "error": str(e)
+                        "position": position,
+                        "error": public_error_message("chunk_edit"),
                     })
                     failed_chunks += 1
             
             # 批量重新向量化
             if updated_chunks:
                 try:
-                    token_count, vector_size = embedder.embed_chunks_sync(updated_chunks)
+                    _token_count, _vector_size = embedder.embed_chunks_sync(updated_chunks)
                     
                     # 批量存储（编辑模式）
-                    try:
-                        store_success_count, store_errors = await store.store_chunks(
-                            updated_chunks, batch_size=batch_size, is_edit_mode=True
-                        )
-                    finally:
-                        # 清理ES连接
-                        try:
-                            await store.close()
-                        except Exception as e:
-                            logger.warning(f"关闭ES连接时出错: {e}")
+                    _store_success_count, store_errors = await store.store_chunks(
+                        updated_chunks, batch_size=batch_size, is_edit_mode=True
+                    )
                     
                     if store_errors:
-                        errors.extend([{"error": err} for err in store_errors])
+                        logger.error(
+                            "RAG operation failed: stage=chunk_edit "
+                            "error_type=StoreResultFailure error_count=%s",
+                            len(store_errors),
+                        )
+                        errors.extend(
+                            {"error": public_error_message("chunk_edit")}
+                            for _ in store_errors
+                        )
                         failed_chunks += len(store_errors)
-                        successful_chunks -= len(store_errors)
+                        successful_chunks = max(
+                            0,
+                            successful_chunks - len(store_errors),
+                        )
                     
-                except Exception as e:
-                    logger.error(f"批量向量化或存储失败: {e}")
+                except Exception as error:
+                    log_rag_failure(logger, stage="chunk_edit", error=error)
                     return {
                         "success": False,
-                        "message": f"批量处理失败: {str(e)}",
+                        "message": public_error_message("chunk_edit"),
                         "total_chunks": total_chunks,
                         "successful_chunks": 0,
                         "failed_chunks": total_chunks,
-                        "errors": errors + [{"error": str(e)}]
+                        "errors": errors + [
+                            {"error": public_error_message("chunk_edit")}
+                        ],
                     }
             
             return {
@@ -325,21 +348,34 @@ class ChunkEditService:
                 "errors": errors[:10]  # 只返回前10个错误
             }
             
-        except Exception as e:
-            logger.error(f"批量编辑处理失败: {e}")
+        except Exception as error:
+            log_rag_failure(logger, stage="chunk_edit", error=error)
             return {
                 "success": False,
-                "message": f"批量编辑处理失败: {str(e)}",
+                "message": public_error_message("chunk_edit"),
                 "total_chunks": len(chunks),
                 "successful_chunks": 0,
                 "failed_chunks": len(chunks),
-                "errors": [{"error": str(e)}]
+                "errors": [{"error": public_error_message("chunk_edit")}],
             }
         finally:
+            if store:
+                try:
+                    await store.close()
+                except Exception as error:
+                    log_rag_failure(
+                        logger,
+                        stage="store_cleanup",
+                        error=error,
+                    )
             # 清理retriever资源
             if retriever:
                 try:
                     await retriever.close()
                     logger.debug("批量编辑 - Retriever ES连接已清理")
-                except Exception as e:
-                    logger.warning(f"关闭批量编辑Retriever ES连接时出错: {e}")
+                except Exception as error:
+                    log_rag_failure(
+                        logger,
+                        stage="retriever_cleanup",
+                        error=error,
+                    )

@@ -302,45 +302,49 @@ class TestListCustomAgents:
 
 
 class TestMemoryFilePath:
-    def test_global_memory_path(self, tmp_path):
-        """None agent_name should return global memory file."""
+    def test_default_agent_memory_path_is_tenant_scoped(self, tmp_path):
         import src.agents.memory.updater as updater_mod
         from src.config.memory_config import MemoryConfig
 
+        scope = "a" * 64
         with (
             patch("src.agents.memory.updater.get_paths", return_value=_make_paths(tmp_path)),
             patch("src.agents.memory.updater.get_memory_config", return_value=MemoryConfig(storage_path="")),
         ):
-            path = updater_mod._get_memory_file_path(None)
-        assert path == tmp_path / "memory.json"
+            path = updater_mod._get_memory_file_path(scope)
+        assert path == tmp_path / "memories" / scope / "memory.json"
 
     def test_agent_memory_path(self, tmp_path):
-        """Providing agent_name should return per-agent memory file."""
         import src.agents.memory.updater as updater_mod
         from src.config.memory_config import MemoryConfig
 
+        scope = "a" * 64
         with (
             patch("src.agents.memory.updater.get_paths", return_value=_make_paths(tmp_path)),
             patch("src.agents.memory.updater.get_memory_config", return_value=MemoryConfig(storage_path="")),
         ):
-            path = updater_mod._get_memory_file_path("code-reviewer")
-        assert path == tmp_path / "agents" / "code-reviewer" / "memory.json"
+            path = updater_mod._get_memory_file_path(scope, "code-reviewer")
+        assert path == (tmp_path / "memories" / scope / "agents" / "code-reviewer" / "memory.json")
 
-    def test_different_paths_for_different_agents(self, tmp_path):
+    def test_different_paths_for_tenants_and_agents(self, tmp_path):
         import src.agents.memory.updater as updater_mod
         from src.config.memory_config import MemoryConfig
 
+        scope_a = "a" * 64
+        scope_b = "b" * 64
         with (
             patch("src.agents.memory.updater.get_paths", return_value=_make_paths(tmp_path)),
             patch("src.agents.memory.updater.get_memory_config", return_value=MemoryConfig(storage_path="")),
         ):
-            path_global = updater_mod._get_memory_file_path(None)
-            path_a = updater_mod._get_memory_file_path("agent-a")
-            path_b = updater_mod._get_memory_file_path("agent-b")
+            path_default = updater_mod._get_memory_file_path(scope_a)
+            path_a = updater_mod._get_memory_file_path(scope_a, "agent-a")
+            path_b = updater_mod._get_memory_file_path(scope_a, "agent-b")
+            other_tenant = updater_mod._get_memory_file_path(scope_b, "agent-a")
 
-        assert path_global != path_a
-        assert path_global != path_b
+        assert path_default != path_a
+        assert path_default != path_b
         assert path_a != path_b
+        assert path_a != other_tenant
 
 
 # ===========================================================================
@@ -396,6 +400,14 @@ class TestAgentsAPI:
         response = agent_client.post("/api/agents", json=payload)
         assert response.status_code == 422
 
+    def test_create_agent_rejects_trailing_newline(self, agent_client):
+        response = agent_client.post(
+            "/api/agents",
+            json={"name": "newline-agent\n", "soul": "test"},
+        )
+
+        assert response.status_code == 422
+
     def test_create_duplicate_agent_409(self, agent_client):
         payload = {"name": "my-agent", "soul": "test"}
         agent_client.post("/api/agents", json=payload)
@@ -403,6 +415,34 @@ class TestAgentsAPI:
         # Second create should fail
         response = agent_client.post("/api/agents", json=payload)
         assert response.status_code == 409
+
+    def test_create_race_does_not_delete_competing_agent(
+        self,
+        agent_client,
+        tmp_path,
+        monkeypatch,
+    ):
+        target = tmp_path / "agents" / "raced-agent"
+        marker = target / "keep.txt"
+        original_mkdir = Path.mkdir
+
+        def raced_mkdir(path, *args, **kwargs):
+            if path == target:
+                original_mkdir(path, parents=True, exist_ok=False)
+                marker.write_text("competitor", encoding="utf-8")
+                raise FileExistsError
+            return original_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", raced_mkdir)
+
+        response = agent_client.post(
+            "/api/agents",
+            json={"name": "raced-agent", "soul": "ours"},
+        )
+
+        assert response.status_code == 409
+        assert marker.read_text(encoding="utf-8") == "competitor"
+        assert not (target / "SOUL.md").exists()
 
     def test_list_agents_after_create(self, agent_client):
         agent_client.post("/api/agents", json={"name": "agent-one", "soul": "p1"})

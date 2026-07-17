@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from src.config.app_config import get_app_config
 from src.gateway.config import get_gateway_config
+from src.gateway.internal_auth import GatewayInternalAuthMiddleware
 from src.gateway.routers import (
     agents,
     artifacts,
@@ -36,10 +37,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         get_app_config()
         logger.info("配置加载成功")
-    except Exception as e:
-        error_msg = f"Gateway 启动时加载配置失败：{e}"
-        logger.exception(error_msg)
-        raise RuntimeError(error_msg) from e
+    except Exception as exc:
+        logger.error("Gateway 启动时加载配置失败（%s）", type(exc).__name__)
+        raise RuntimeError("Gateway 启动时加载配置失败") from exc
     config = get_gateway_config()
     logger.info(f"正在启动 API Gateway：{config.host}:{config.port}")
 
@@ -54,8 +54,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         channel_service = await start_channel_service()
         logger.info("渠道服务已启动：%s", channel_service.get_status())
-    except Exception:
-        logger.exception("未配置 IM 通道，或渠道服务启动失败")
+    except Exception as exc:
+        logger.error("未配置 IM 通道，或渠道服务启动失败（%s）", type(exc).__name__)
 
     yield
 
@@ -64,8 +64,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from src.channels.service import stop_channel_service
 
         await stop_channel_service()
-    except Exception:
-        logger.exception("停止渠道服务失败")
+    except Exception as exc:
+        logger.error("停止渠道服务失败（%s）", type(exc).__name__)
     logger.info("正在关闭 API Gateway")
 
 
@@ -83,7 +83,7 @@ lumen 的 API Gateway，是一个基于 LangGraph、支持沙箱执行的 AI Age
 
 - **模型管理**：查询可用 AI 模型及其配置
 - **MCP 配置**：管理 Model Context Protocol（MCP）服务配置
-- **记忆管理**：读取和管理全局记忆数据，用于个性化对话
+- **记忆管理**：读取和管理按租户隔离的记忆数据，用于个性化对话
 - **技能管理**：查询技能并控制启用状态
 - **产物访问**：读取线程产物与生成文件
 - **健康检查**：查看服务状态
@@ -109,7 +109,7 @@ Gateway 主要提供模型、MCP、技能、记忆、产物等自定义接口。
             },
             {
                 "name": "memory",
-                "description": "访问和管理全局记忆数据，用于个性化对话",
+                "description": "访问和管理按租户隔离的记忆数据，用于个性化对话",
             },
             {
                 "name": "skills",
@@ -143,6 +143,10 @@ Gateway 主要提供模型、MCP、技能、记忆、产物等自定义接口。
     )
 
     # 当前不在应用层启用 CORS；如需跨域，请在部署层统一配置。
+
+    # Gateway 是内部控制面。health/docs 保持可用于本机诊断，所有 /api
+    # 路由（包括未来新增路由）统一在 ASGI 边界执行服务认证。
+    app.add_middleware(GatewayInternalAuthMiddleware)
 
     # 注册路由
     # 模型接口挂载于 /api/models

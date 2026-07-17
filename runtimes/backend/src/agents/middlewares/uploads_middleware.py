@@ -120,7 +120,7 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         """在进入 agent 前注入上传文件上下文。
 
         新上传文件来自当前消息的 `additional_kwargs.files`；
-        历史文件来自线程 uploads 目录（排除本轮新文件）。
+        历史文件来自线程 uploads 与只读 knowledge 目录（排除本轮新文件）。
 
         会将 `<uploaded_files>` 区块前置到最后一条 human 消息内容中。
         同时保留原始 `additional_kwargs`（含文件元数据），便于前端
@@ -146,22 +146,36 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         # 解析 uploads 目录，用于文件存在性校验
         thread_id = runtime.context.get("thread_id")
         uploads_dir = self._paths.sandbox_uploads_dir(thread_id) if thread_id else None
+        knowledge_dir = (
+            self._paths.sandbox_knowledge_dir(thread_id) if thread_id else None
+        )
 
         # 从当前消息 additional_kwargs.files 获取本轮新上传文件
         new_files = self._files_from_kwargs(last_message, uploads_dir) or []
 
-        # 从 uploads 目录收集历史文件（排除本轮新文件）
+        # Collect ordinary uploads and Backend-managed, read-only knowledge files.
         new_filenames = {f["filename"] for f in new_files}
         historical_files: list[dict] = []
-        if uploads_dir and uploads_dir.exists():
-            for file_path in sorted(uploads_dir.iterdir()):
-                if file_path.is_file() and file_path.name not in new_filenames:
+        for directory, virtual_subdir in (
+            (uploads_dir, "uploads"),
+            (knowledge_dir, "knowledge"),
+        ):
+            if directory and directory.exists():
+                for file_path in sorted(directory.iterdir()):
+                    if (
+                        file_path.is_symlink()
+                        or not file_path.is_file()
+                        or file_path.name in new_filenames
+                    ):
+                        continue
                     stat = file_path.stat()
                     historical_files.append(
                         {
                             "filename": file_path.name,
                             "size": stat.st_size,
-                            "path": f"/mnt/user-data/uploads/{file_path.name}",
+                            "path": (
+                                f"/mnt/user-data/{virtual_subdir}/{file_path.name}"
+                            ),
                             "extension": file_path.suffix,
                         }
                     )
@@ -169,7 +183,11 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         if not new_files and not historical_files:
             return None
 
-        logger.debug(f"New files: {[f['filename'] for f in new_files]}, historical: {[f['filename'] for f in historical_files]}")
+        logger.debug(
+            "Resolved uploads: new=%d, historical=%d",
+            len(new_files),
+            len(historical_files),
+        )
 
         # 生成文件说明并前置到最后一条 human 消息内容
         files_message = self._create_files_message(new_files, historical_files)

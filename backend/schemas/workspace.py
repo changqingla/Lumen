@@ -167,29 +167,6 @@ class WorkspaceAttachmentRecord(BaseModel):
     def validate_record_lists(cls, value: Optional[Iterable[Any]]) -> list[str]:
         return _normalize_text_list(value)
 
-    def to_agent_payload(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "attachment_id": self.attachment_id,
-            "name": self.name,
-            "mime_type": self.mime_type,
-            "workspace_path": self.workspace_path,
-            "source_kind": self.source_kind,
-            "role": self.role,
-            "input_mode": self.input_mode,
-            "size_bytes": self.size_bytes,
-        }
-        if self.parent_attachment_id:
-            payload["parent_attachment_id"] = self.parent_attachment_id
-        if self.view_type:
-            payload["view_type"] = self.view_type
-        if self.available_views:
-            payload["available_views"] = list(self.available_views)
-        if self.capabilities:
-            payload["capabilities"] = list(self.capabilities)
-        if self.parse_status:
-            payload["parse_status"] = self.parse_status
-        return {key: value for key, value in payload.items() if value is not None}
-
     def to_metadata_payload(self) -> Dict[str, Any]:
         return self.model_dump(exclude_none=True)
 

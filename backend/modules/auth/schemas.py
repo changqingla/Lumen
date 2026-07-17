@@ -4,30 +4,40 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, constr
+from pydantic import BaseModel, EmailStr, constr, field_validator
+
+from utils.security import validate_password_length
 
 
-class LoginRequest(BaseModel):
+class PasswordRequest(BaseModel):
+    """Base request that applies bcrypt's UTF-8 byte limit consistently."""
+
+    password: constr(min_length=6)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        return validate_password_length(value)
+
+
+class LoginRequest(PasswordRequest):
     """Login request body."""
 
     email: EmailStr
-    password: constr(min_length=6)
 
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(PasswordRequest):
     """Register request body."""
 
     email: EmailStr
-    password: constr(min_length=6)
     name: constr(min_length=1, max_length=50)
     code: constr(min_length=6, max_length=6)
 
 
-class ResetPasswordRequest(BaseModel):
+class ResetPasswordRequest(PasswordRequest):
     """Reset password request body."""
 
     email: EmailStr
-    password: constr(min_length=6)
     code: constr(min_length=6, max_length=6)
 
 
@@ -43,6 +53,13 @@ class AuthResponse(BaseModel):
 
     token: str
     user: dict
+
+
+class GuestSessionResponse(BaseModel):
+    """Server-issued credential for the anonymous chat trial."""
+
+    guest_token: str
+    expires_in: int
 
 
 class UserProfile(BaseModel):

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class MemoryConfig(BaseModel):
-    """全局记忆机制配置。"""
+    """Tenant-scoped long-term memory configuration."""
 
     enabled: bool = Field(
         default=True,
@@ -13,14 +13,12 @@ class MemoryConfig(BaseModel):
     storage_path: str = Field(
         default="",
         description=(
-            "用于存储记忆数据的路径。"
-            "若为空，默认使用 `{base_dir}/memory.json`（见 Paths.memory_file）。"
-            "绝对路径会原样使用。"
-            "相对路径将基于 `Paths.base_dir` 解析"
-            "（而非 backend 的工作目录）。"
-            "注意：若你此前设置为 `.lumen/memory.json`，"
-            "现在会解析为 `{base_dir}/.lumen/memory.json`；"
-            "请迁移已有数据，或使用绝对路径以保持旧位置。"
+            "Scoped memory storage root. If omitted, profiles are stored under "
+            "`{base_dir}/memories/{memory_scope}/`. A historical JSON filename "
+            "is treated only as a location hint and scoped data is written to a "
+            "distinct `<filename>.scoped/` directory. Legacy global files are "
+            "never loaded or automatically migrated. Relative paths are resolved "
+            "under `Paths.base_dir` and may not escape it."
         ),
     )
     debounce_seconds: int = Field(
@@ -64,12 +62,6 @@ _memory_config: MemoryConfig = MemoryConfig()
 def get_memory_config() -> MemoryConfig:
     """获取当前记忆配置。"""
     return _memory_config
-
-
-def set_memory_config(config: MemoryConfig) -> None:
-    """设置记忆配置。"""
-    global _memory_config
-    _memory_config = config
 
 
 def load_memory_config_from_dict(config_dict: dict) -> None:

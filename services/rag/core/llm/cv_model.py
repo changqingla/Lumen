@@ -15,16 +15,37 @@
 #
 import base64
 import json
+import logging
 import os
 from abc import ABC
-from copy import deepcopy
 from io import BytesIO
 from urllib.parse import urljoin
-import requests
 from openai import OpenAI
 from openai.lib.azure import AzureOpenAI
 from zhipuai import ZhipuAI
+from core.provider_http import provider_post
 from core.utils import num_tokens_from_string, total_token_count_from_response, is_english
+
+
+VISION_MODEL_ERROR = "**ERROR**: Vision model request failed"
+
+
+def _vision_error_text(error: Exception) -> str:
+    response = getattr(error, "response", None)
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        status_code = getattr(response, "status_code", None)
+    logging.error(
+        "Vision model provider operation failed: error_type=%s response_status=%s",
+        type(error).__name__,
+        status_code if isinstance(status_code, int) else "unknown",
+    )
+    return VISION_MODEL_ERROR
+
+
+def _append_vision_error(answer: str, error: Exception) -> str:
+    error_text = _vision_error_text(error)
+    return f"{answer}\n{error_text}" if answer else error_text
 
 
 class Base(ABC):
@@ -86,7 +107,7 @@ class Base(ABC):
             )
             return response.choices[0].message.content.strip(), response.usage.total_tokens
         except Exception as e:
-            return "**ERROR**: " + str(e), 0
+            return _vision_error_text(e), 0
 
     def chat_streamly(self, system, history, gen_conf, images=[], **kwargs):
         ans = ""
@@ -108,7 +129,7 @@ class Base(ABC):
                     tk_count += resp.usage.total_tokens
                 yield ans
         except Exception as e:
-            yield ans + "\n**ERROR**: " + str(e)
+            yield _append_vision_error(ans, e)
 
         yield tk_count
 
@@ -433,7 +454,7 @@ class GeminiCV(Base):
             ans = response.text
             return ans, total_token_count_from_response(ans)
         except Exception as e:
-            return "**ERROR**: " + str(e), 0
+            return _vision_error_text(e), 0
 
     def chat_streamly(self, system, history, gen_conf, images=[]):
         ans = ""
@@ -452,7 +473,7 @@ class GeminiCV(Base):
                 ans = resp.text
                 yield ans
         except Exception as e:
-            yield ans + "\n**ERROR**: " + str(e)
+            yield _append_vision_error(ans, e)
 
         yield total_token_count_from_response(response)
 
@@ -507,7 +528,7 @@ class NvidiaCV(Base):
         )
 
     def _request(self, msg, gen_conf={}):
-        response = requests.post(
+        response = provider_post(
             url=self.base_url,
             headers={
                 "accept": "application/json",
@@ -528,7 +549,7 @@ class NvidiaCV(Base):
                 total_token_count_from_response(response)
             )
         except Exception as e:
-            return "**ERROR**: " + str(e), 0
+            return _vision_error_text(e), 0
 
     def chat_streamly(self, system, history, gen_conf, images=[], **kwargs):
         total_tokens = 0
@@ -540,7 +561,7 @@ class NvidiaCV(Base):
             for resp in cnt:
                 yield resp
         except Exception as e:
-            yield "\n**ERROR**: " + str(e)
+            yield _vision_error_text(e)
 
         yield total_tokens
 
@@ -620,7 +641,7 @@ class AnthropicCV(Base):
                 response["usage"]["input_tokens"] + response["usage"]["output_tokens"],
             )
         except Exception as e:
-            return ans + "\n**ERROR**: " + str(e), 0
+            return _append_vision_error(ans, e), 0
 
     def chat_streamly(self, system, history, gen_conf, images=[]):
         gen_conf = self._clean_conf(gen_conf)
@@ -648,7 +669,7 @@ class AnthropicCV(Base):
                         yield res.delta.text
                         total_tokens += num_tokens_from_string(res.delta.text)
         except Exception as e:
-            yield "\n**ERROR**: " + str(e)
+            yield _vision_error_text(e)
 
         yield total_tokens
 

@@ -61,7 +61,7 @@ def _validate_agent_name(name: str) -> None:
     异常：
         HTTPException: 名称非法时抛出 422。
     """
-    if not AGENT_NAME_PATTERN.match(name):
+    if AGENT_NAME_PATTERN.fullmatch(name) is None:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid agent name '{name}'. Must match ^[A-Za-z0-9-]+$ (letters, digits, and hyphens only).",
@@ -99,9 +99,9 @@ async def list_agents() -> AgentsListResponse:
     try:
         agents = list_custom_agents()
         return AgentsListResponse(agents=[_agent_config_to_response(a) for a in agents])
-    except Exception as e:
-        logger.error(f"Failed to list agents: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to list agents: {str(e)}")
+    except Exception as exc:
+        logger.error("Failed to list agents (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to list agents") from exc
 
 
 @router.get(
@@ -153,9 +153,9 @@ async def get_agent(name: str) -> AgentResponse:
         return _agent_config_to_response(agent_cfg, include_soul=True)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
-    except Exception as e:
-        logger.error(f"Failed to get agent '{name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get agent: {str(e)}")
+    except Exception as exc:
+        logger.error("Failed to get agent (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to get agent") from exc
 
 
 @router.post(
@@ -186,8 +186,15 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
         raise HTTPException(status_code=409, detail=f"Agent '{normalized_name}' already exists")
 
     try:
-        agent_dir.mkdir(parents=True, exist_ok=True)
+        agent_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Agent '{normalized_name}' already exists",
+        ) from exc
 
+    created_agent_dir = True
+    try:
         # 写入 config.yaml
         config_data: dict = {"name": normalized_name}
         if request.description:
@@ -205,19 +212,19 @@ async def create_agent_endpoint(request: AgentCreateRequest) -> AgentResponse:
         soul_file = agent_dir / "SOUL.md"
         soul_file.write_text(request.soul, encoding="utf-8")
 
-        logger.info(f"Created agent '{normalized_name}' at {agent_dir}")
+        logger.info("Created agent definition")
 
         agent_cfg = load_agent_config(normalized_name)
         return _agent_config_to_response(agent_cfg, include_soul=True)
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         # 失败时清理已创建目录
-        if agent_dir.exists():
-            shutil.rmtree(agent_dir)
-        logger.error(f"Failed to create agent '{request.name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to create agent: {str(e)}")
+        if created_agent_dir and agent_dir.exists():
+            shutil.rmtree(agent_dir, ignore_errors=True)
+        logger.error("Failed to create agent (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to create agent") from exc
 
 
 @router.put(
@@ -282,19 +289,19 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to update agent '{name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to update agent: {str(e)}")
+    except Exception as exc:
+        logger.error("Failed to update agent (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to update agent") from exc
 
 
 class UserProfileResponse(BaseModel):
-    """全局用户画像（USER.md）响应模型。"""
+    """Legacy/operator USER.md response model."""
 
     content: str | None = Field(default=None, description="USER.md content, or null if not yet created")
 
 
 class UserProfileUpdateRequest(BaseModel):
-    """设置全局用户画像的请求体。"""
+    """Update request for the non-injected legacy/operator USER.md."""
 
     content: str = Field(default="", description="USER.md content — describes the user's background and preferences")
 
@@ -303,7 +310,7 @@ class UserProfileUpdateRequest(BaseModel):
     "/user-profile",
     response_model=UserProfileResponse,
     summary="Get User Profile",
-    description="Read the global USER.md file that is injected into all custom agents.",
+    description="Read legacy/operator USER.md state; it is not injected into prompts.",
 )
 async def get_user_profile() -> UserProfileResponse:
     """读取全局 USER.md。
@@ -317,16 +324,16 @@ async def get_user_profile() -> UserProfileResponse:
             return UserProfileResponse(content=None)
         raw = user_md_path.read_text(encoding="utf-8").strip()
         return UserProfileResponse(content=raw or None)
-    except Exception as e:
-        logger.error(f"Failed to read user profile: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to read user profile: {str(e)}")
+    except Exception as exc:
+        logger.error("Failed to read user profile (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to read user profile") from exc
 
 
 @router.put(
     "/user-profile",
     response_model=UserProfileResponse,
     summary="Update User Profile",
-    description="Write the global USER.md file that is injected into all custom agents.",
+    description="Write legacy/operator USER.md state; it is not injected into prompts.",
 )
 async def update_user_profile(request: UserProfileUpdateRequest) -> UserProfileResponse:
     """更新全局 USER.md。
@@ -341,18 +348,21 @@ async def update_user_profile(request: UserProfileUpdateRequest) -> UserProfileR
         paths = get_paths()
         paths.base_dir.mkdir(parents=True, exist_ok=True)
         paths.user_md_file.write_text(request.content, encoding="utf-8")
-        logger.info(f"Updated USER.md at {paths.user_md_file}")
+        logger.info("Updated legacy user profile")
         return UserProfileResponse(content=request.content or None)
-    except Exception as e:
-        logger.error(f"Failed to update user profile: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to update user profile: {str(e)}")
+    except Exception as exc:
+        logger.error("Failed to update user profile (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to update user profile") from exc
 
 
 @router.delete(
     "/agents/{name}",
     status_code=204,
     summary="Delete Custom Agent",
-    description="Delete a custom agent and all its files (config, SOUL.md, memory).",
+    description=(
+        "Delete the custom Agent definition directory. Tenant-scoped memory "
+        "partitions are retained and require a separate purge policy."
+    ),
 )
 async def delete_agent(name: str) -> None:
     """删除指定自定义 Agent（含其全部文件）。
@@ -373,7 +383,7 @@ async def delete_agent(name: str) -> None:
 
     try:
         shutil.rmtree(agent_dir)
-        logger.info(f"Deleted agent '{name}' from {agent_dir}")
-    except Exception as e:
-        logger.error(f"Failed to delete agent '{name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to delete agent: {str(e)}")
+        logger.info("Deleted agent definition")
+    except Exception as exc:
+        logger.error("Failed to delete agent (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to delete agent") from exc

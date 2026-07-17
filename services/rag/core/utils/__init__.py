@@ -20,21 +20,12 @@ from pathlib import Path
 from strenum import StrEnum
 import logging
 
+from core.cache_paths import get_rag_cache_directory
+
 
 def get_project_base_directory():
     """Get project base directory"""
     return Path(__file__).parent.parent.parent.absolute()
-
-def singleton(cls, *args, **kw):
-    instances = {}
-
-    def _singleton():
-        key = str(cls) + str(os.getpid())
-        if key not in instances:
-            instances[key] = cls(*args, **kw)
-        return instances[key]
-
-    return _singleton
 
 
 def rmSpace(txt):
@@ -42,43 +33,10 @@ def rmSpace(txt):
     return re.sub(r"([^ ]) +([^a-z0-9.,\(<])", r"\1\2", txt, flags=re.IGNORECASE)
 
 
-def findMaxDt(fnm):
-    m = "1970-01-01 00:00:00"
-    try:
-        with open(fnm, "r") as f:
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                line = line.strip("\n")
-                if line == 'nan':
-                    continue
-                if line > m:
-                    m = line
-    except Exception:
-        pass
-    return m
-
-  
-def findMaxTm(fnm):
-    m = 0
-    try:
-        with open(fnm, "r") as f:
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                line = line.strip("\n")
-                if line == 'nan':
-                    continue
-                if int(line) > m:
-                    m = int(line)
-    except Exception:
-        pass
-    return m
-
-
-tiktoken_cache_dir = get_project_base_directory()
+tiktoken_cache_dir = Path(
+    os.environ.get("TIKTOKEN_CACHE_DIR", get_rag_cache_directory() / "tiktoken")
+)
+tiktoken_cache_dir.mkdir(parents=True, exist_ok=True)
 os.environ["TIKTOKEN_CACHE_DIR"] = str(tiktoken_cache_dir)
 # encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
 encoder = tiktoken.get_encoding("cl100k_base")
@@ -96,28 +54,19 @@ def truncate(string: str, max_len: int) -> str:
     """Returns truncated text if the length of text exceed max_len."""
     return encoder.decode(encoder.encode(string)[:max_len])
 
-def get_home_cache_dir():
-    dir = os.path.join(os.path.expanduser('~'), ".deeprag")
-    try:
-        os.mkdir(dir)
-    except OSError:
-        pass
-    return dir
 
 def log_exception(e, *args):
-    logging.exception(e)
-    for a in args:
-        if hasattr(a, "text"):
-            logging.error(a.text)
-            raise Exception(a.text)
-        else:
-            logging.error(str(a))
-    raise e
-
-def conf_realpath(conf_name):
-    conf_path = f"conf/{conf_name}"
-    return os.path.join(file_utils.get_project_base_directory(), conf_path)
-
+    response_statuses = [
+        status
+        for value in args
+        if isinstance((status := getattr(value, "status_code", None)), int)
+    ]
+    logging.error(
+        "RAG model provider operation failed: error_type=%s response_statuses=%s",
+        type(e).__name__,
+        response_statuses or "unknown",
+    )
+    raise RuntimeError("RAG model provider operation failed") from None
 
 class ParserType(StrEnum):
     PRESENTATION = "presentation"
@@ -131,12 +80,6 @@ class ParserType(StrEnum):
     ONE = "one"
     EMAIL = "email"
 
-
-def traversal_files(base):
-    for root, ds, fs in os.walk(base):
-        for f in fs:
-            fullname = os.path.join(root, f)
-            yield fullname
 
 def is_english(texts):
     if not texts:
@@ -156,18 +99,6 @@ def is_english(texts):
 
     eng = sum(1 for t in texts if pattern.fullmatch(t.strip()))
     return (eng / len(texts)) > 0.8
-
-
-def is_chinese(text):
-    if not text:
-        return False
-    chinese = 0
-    for ch in text:
-        if '\u4e00' <= ch <= '\u9fff':
-            chinese += 1
-    if chinese / len(text) > 0.2:
-        return True
-    return False
 
 def total_token_count_from_response(resp):
     if hasattr(resp, "usage") and hasattr(resp.usage, "total_tokens"):

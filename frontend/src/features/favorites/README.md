@@ -1,3 +1,3 @@
 # Favorites Feature
 
-该目录承载收藏相关页面与后续收藏域组件、hooks、api 入口。
+该目录承载收藏页面；收藏请求合同由 `shared/api/` 统一提供。

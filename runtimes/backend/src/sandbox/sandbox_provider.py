@@ -79,14 +79,3 @@ def shutdown_sandbox_provider() -> None:
         if hasattr(_default_sandbox_provider, "shutdown"):
             _default_sandbox_provider.shutdown()
         _default_sandbox_provider = None
-
-
-def set_sandbox_provider(provider: SandboxProvider) -> None:
-    """
-    设置自定义提供者实例，可用于测试时注入 mock。
-
-    参数：
-        provider: 要使用的 SandboxProvider 实例。
-    """
-    global _default_sandbox_provider
-    _default_sandbox_provider = provider

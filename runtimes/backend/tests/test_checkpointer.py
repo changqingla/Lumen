@@ -7,11 +7,9 @@ import pytest
 from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 
 from src.agents.checkpointer import get_checkpointer, reset_checkpointer
-from src.agents.checkpointer.async_provider import (
+from src.agents.checkpointer.utils import (
     _normalize_string_values,
-    _select_checkpoint_keys_for_run_ids,
     _select_latest_checkpoints_per_namespace,
-    _select_prunable_checkpoint_keys,
 )
 from src.config.checkpointer_config import (
     CheckpointerConfig,
@@ -103,45 +101,6 @@ class TestAsyncMaintenanceHelpers:
             "run-1",
             "run-2",
         )
-
-    def test_select_checkpoint_keys_for_run_ids_matches_run_metadata(self):
-        rows = [
-            ("thread-a", "", "cp-1", b'{"run_id":"run-1"}'),
-            ("thread-a", "", "cp-2", b'{"run_id":"run-2"}'),
-            ("thread-b", "ns", "cp-3", b'{"run_id":"run-1"}'),
-            ("thread-c", "", "cp-4", b"not-json"),
-        ]
-
-        assert _select_checkpoint_keys_for_run_ids(rows, ["run-1"]) == [
-            ("thread-a", "", "cp-1"),
-            ("thread-b", "ns", "cp-3"),
-        ]
-
-    def test_select_prunable_checkpoint_keys_keeps_latest_per_namespace(self):
-        rows = [
-            ("thread-a", "", "cp-3"),
-            ("thread-a", "", "cp-2"),
-            ("thread-a", "", "cp-1"),
-            ("thread-a", "ns", "cp-5"),
-            ("thread-a", "ns", "cp-4"),
-            ("thread-b", "", "cp-2"),
-            ("thread-b", "", "cp-1"),
-        ]
-
-        assert _select_prunable_checkpoint_keys(rows, strategy="keep_latest") == [
-            ("thread-a", "", "cp-2"),
-            ("thread-a", "", "cp-1"),
-            ("thread-a", "ns", "cp-4"),
-            ("thread-b", "", "cp-1"),
-        ]
-
-    def test_select_prunable_checkpoint_keys_delete_strategy_removes_all(self):
-        rows = [
-            ("thread-a", "", "cp-2"),
-            ("thread-a", "", "cp-1"),
-        ]
-
-        assert _select_prunable_checkpoint_keys(rows, strategy="delete") == rows
 
     def test_select_latest_checkpoints_per_namespace_keeps_latest_only(self):
         checkpoints = [

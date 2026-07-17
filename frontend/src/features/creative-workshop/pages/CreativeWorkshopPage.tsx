@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -354,6 +354,15 @@ export default function CreativeWorkshopPage() {
     }
   };
 
+  const handleWorkshopModelChange = useCallback((modelName: string) => {
+    setSelectedWorkshopModelName(modelName);
+    safeLocalStorageSet(CREATIVE_WORKSHOP_MODEL_KEY, modelName);
+  }, []);
+
+  const handleRequestSidebarCollapse = useCallback(() => {
+    setIsMainSidebarCollapsed(true);
+  }, []);
+
   const renderContent = () => {
     if (currentView === 'image2') {
       return <ImageGenerationView />;
@@ -366,16 +375,11 @@ export default function CreativeWorkshopPage() {
           defaultModelName={defaultModelName}
           isModelSelectorDisabled={isGuestMode || isLoadingModels || chatModels.length === 0}
           onModelChange={handleWorkshopModelChange}
-          onRequestSidebarCollapse={() => setIsMainSidebarCollapsed(true)}
+          onRequestSidebarCollapse={handleRequestSidebarCollapse}
         />
       );
     }
     return <WorkshopHome onSelectTool={handleNavigate} />;
-  };
-
-  const handleWorkshopModelChange = (modelName: string) => {
-    setSelectedWorkshopModelName(modelName);
-    safeLocalStorageSet(CREATIVE_WORKSHOP_MODEL_KEY, modelName);
   };
 
   return (
@@ -521,7 +525,7 @@ function ImageGenerationView() {
       toast.error(snapshot.errorMessage);
     }
     previousPhaseRef.current = snapshot.phase;
-  }), []);
+  }), [toast]);
 
   const handleGenerate = async () => {
     const normalizedPrompt = prompt.trim();
@@ -726,6 +730,7 @@ function PaperTranslationView({
   const { isGuestMode, promptLogin } = useGuestMode();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pollTimerRef = useRef<number | null>(null);
+  const schedulePollRef = useRef<(taskId: string, generation: number) => void>(() => {});
   const activeTaskIdRef = useRef('');
   const pollAbortRef = useRef<AbortController | null>(null);
   const createAbortRef = useRef<AbortController | null>(null);
@@ -765,14 +770,17 @@ function PaperTranslationView({
     };
   }, [pdfPreviewUrl]);
 
-  useEffect(() => () => {
-    isMountedRef.current = false;
-    if (pollTimerRef.current) {
-      window.clearTimeout(pollTimerRef.current);
-    }
-    pollAbortRef.current?.abort();
-    createAbortRef.current?.abort();
-    restoreAbortRef.current?.abort();
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (pollTimerRef.current) {
+        window.clearTimeout(pollTimerRef.current);
+      }
+      pollAbortRef.current?.abort();
+      createAbortRef.current?.abort();
+      restoreAbortRef.current?.abort();
+    };
   }, []);
 
   const cancelActivePolling = () => {
@@ -794,25 +802,25 @@ function PaperTranslationView({
     restoreAbortRef.current = null;
   };
 
-  const updatePdfPreviewUrl = (nextUrl: string) => {
+  const updatePdfPreviewUrl = useCallback((nextUrl: string) => {
     setPdfPreviewUrl((currentUrl) => {
       if (currentUrl) {
         URL.revokeObjectURL(currentUrl);
       }
       return nextUrl;
     });
-  };
+  }, []);
 
-  const restoreSourcePdfPreview = async (taskId: string, signal: AbortSignal) => {
+  const restoreSourcePdfPreview = useCallback(async (taskId: string, signal: AbortSignal) => {
     const { blob, fileName } = await api.getPaperTranslationSourcePdf(taskId, { signal });
     if (signal.aborted || !isMountedRef.current) return;
     updatePdfPreviewUrl(URL.createObjectURL(blob));
     setRestoredFilename(fileName || 'paper.pdf');
     setSelectedFile(null);
     onRequestSidebarCollapse();
-  };
+  }, [onRequestSidebarCollapse, updatePdfPreviewUrl]);
 
-  const syncTranslationFavoriteStatus = async (
+  const syncTranslationFavoriteStatus = useCallback(async (
     taskId: string,
     generation: number,
     signal: AbortSignal,
@@ -833,9 +841,9 @@ function PaperTranslationView({
         console.warn('Failed to sync translation favorite status:', error);
       }
     }
-  };
+  }, [isGuestMode]);
 
-  const applyTaskState = async (
+  const applyTaskState = useCallback(async (
     task: Awaited<ReturnType<typeof api.getPaperTranslationTask>>,
     generation: number,
     signal: AbortSignal,
@@ -886,11 +894,11 @@ function PaperTranslationView({
       setTranslatedMarkdown('');
       setTranslationError('');
       setIsTranslationFavorited(false);
-      schedulePoll(task.task_id, generation);
+      schedulePollRef.current(task.task_id, generation);
     }
-  };
+  }, [syncTranslationFavoriteStatus]);
 
-  const schedulePoll = (taskId: string, generation: number) => {
+  const schedulePoll = useCallback((taskId: string, generation: number) => {
     if (pollTimerRef.current) {
       window.clearTimeout(pollTimerRef.current);
     }
@@ -938,7 +946,11 @@ function PaperTranslationView({
         }
       }
     }, 2200);
-  };
+  }, [applyTaskState, toast]);
+
+  useEffect(() => {
+    schedulePollRef.current = schedulePoll;
+  }, [schedulePoll]);
 
   useEffect(() => {
     if (isGuestMode) return;
@@ -956,6 +968,13 @@ function PaperTranslationView({
     const restoreTask = async () => {
       try {
         const task = await api.getPaperTranslationTask(cachedTask.taskId, { signal: controller.signal });
+        if (
+          controller.signal.aborted
+          || !isMountedRef.current
+          || requestGenerationRef.current !== generation
+        ) {
+          return;
+        }
         activeTaskIdRef.current = task.task_id;
         setTranslationTaskId(task.task_id);
         setRestoredFilename(task.filename);
@@ -1001,7 +1020,13 @@ function PaperTranslationView({
     };
 
     void restoreTask();
-  }, [isGuestMode]);
+    return () => {
+      controller.abort();
+      if (restoreAbortRef.current === controller) {
+        restoreAbortRef.current = null;
+      }
+    };
+  }, [applyTaskState, isGuestMode, onModelChange, restoreSourcePdfPreview, updatePdfPreviewUrl]);
 
   const handleFiles = (files: FileList | null) => {
     const file = files?.[0];

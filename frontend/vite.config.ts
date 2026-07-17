@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
   return {
     root: webRoot,
     envDir: webRoot,
-    cacheDir: resolve(webRoot, '../../node_modules/.vite/apps-web'),
+    cacheDir: resolve(webRoot, '../node_modules/.vite/apps-web'),
     css: {
       postcss: {
         plugins: [

@@ -1,8 +1,11 @@
+import logging
 import os
 from pathlib import Path
 
 from .parser import parse_skill_file
 from .types import Skill
+
+logger = logging.getLogger(__name__)
 
 
 def get_skills_root_path() -> Path:
@@ -51,6 +54,7 @@ def load_skills(skills_path: Path | None = None, use_config: bool = True, enable
         return []
 
     skills = []
+    skill_names: set[str] = set()
 
     # 扫描 public/custom 两个目录
     for category in ["public", "custom"]:
@@ -69,6 +73,9 @@ def load_skills(skills_path: Path | None = None, use_config: bool = True, enable
 
             skill = parse_skill_file(skill_file, category=category, relative_path=relative_path)
             if skill:
+                if skill.name in skill_names:
+                    raise ValueError(f"Duplicate skill name: {skill.name}")
+                skill_names.add(skill.name)
                 skills.append(skill)
 
     # 加载技能状态配置并更新 enabled 字段
@@ -81,9 +88,12 @@ def load_skills(skills_path: Path | None = None, use_config: bool = True, enable
         extensions_config = ExtensionsConfig.from_file()
         for skill in skills:
             skill.enabled = extensions_config.is_skill_enabled(skill.name, skill.category)
-    except Exception as e:
+    except Exception as exc:
         # 配置加载失败时默认全部启用
-        print(f"Warning: Failed to load extensions config: {e}")
+        logger.warning(
+            "Failed to load skill enablement state; using defaults (error_type=%s)",
+            type(exc).__name__,
+        )
 
     # 按需过滤启用状态
     if enabled_only:

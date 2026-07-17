@@ -95,6 +95,29 @@ async def test_auth_rate_limiter_blocks_after_ip_limit_across_subjects(monkeypat
     assert exc_info.value.status_code == 429
 
 
+@pytest.mark.asyncio
+async def test_auth_rate_limiter_fails_closed_without_redis(monkeypatch, caplog):
+    marker = "private-redis-connection-detail"
+    monkeypatch.setattr(
+        rate_limiter,
+        "get_redis_client",
+        AsyncMock(side_effect=RuntimeError(marker)),
+    )
+    policy = AuthRateLimit(scope="login-test", max_attempts=2, window_seconds=60)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await rate_limiter.enforce_auth_rate_limit(
+            _request(),
+            policy,
+            "user@example.com",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"]["code"] == "RATE_LIMIT_UNAVAILABLE"
+    assert marker not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
 def test_client_ip_ignores_forwarded_for_from_public_direct_clients():
     assert rate_limiter._client_ip(_direct_request()) == "8.8.8.8"
 

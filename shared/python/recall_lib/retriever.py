@@ -10,27 +10,35 @@
 
 """
 
-import sys
 import logging
 import asyncio
 from typing import List, Dict, Any
-from pathlib import Path
 from dataclasses import dataclass
 
+from ._paths import ensure_rag_root_on_path
+
 # 添加DeepRag根目录到路径
-current_dir = Path(__file__).parent.absolute()
-DeepRag_root = current_dir.parent / "rag"
-sys.path.insert(0, str(DeepRag_root))
+DeepRag_root = ensure_rag_root_on_path()
 
 # 导入DeepRag核心组件
-from core.nlp import query
-from core.utils import rmSpace
-from core.utils.doc_store_conn import MatchDenseExpr, FusionExpr, OrderByExpr
-import numpy as np
+from core.nlp import query  # noqa: E402
+from core.utils.doc_store_conn import (  # noqa: E402
+    FusionExpr,
+    MatchDenseExpr,
+    OrderByExpr,
+)
+import numpy as np  # noqa: E402
 
 # 导入recall_lib内部的ES连接和适配器
-from .es_connection import SimpleESConnection
-from .es_adapter import ESAdapter
+from ._logging import log_operation_failure  # noqa: E402
+from .es_connection import create_es_connection  # noqa: E402
+from .es_adapter import ESAdapter  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+class RetrievalError(RuntimeError):
+    """Stable retrieval failure that is safe to pass across service boundaries."""
 
 
 @dataclass
@@ -65,13 +73,8 @@ class DeepRagPureRetriever:
         self.config = config
         
         # 设置默认ES配置
-        es_config = config.es_config or {
-            "hosts": "http://10.0.100.36:9201",
-            "timeout": 600
-        }
-        
         # 创建简单的ES连接
-        simple_es = SimpleESConnection(es_config.get("hosts", "http://localhost:9200"))
+        simple_es = create_es_connection(config.es_config)
 
         # 创建ES适配器
         self.es_conn = ESAdapter(simple_es)
@@ -79,13 +82,20 @@ class DeepRagPureRetriever:
         # 创建DeepRag的查询器
         self.qryr = query.FulltextQueryer()
         
-        logging.info(f"DeepRag召回器已初始化，索引: {config.index_names}")
+        logging.info(
+            "DeepRag召回器已初始化，索引数量: %s",
+            len(config.index_names),
+        )
     
     async def ensure_connected(self):
         """确保ES连接已建立"""
-        if self.es_conn and hasattr(self.es_conn, 'es_conn'):
-            await self.es_conn.es_conn.ensure_connected()
-            logging.info("DeepRagPureRetriever ES连接已建立")
+        try:
+            if self.es_conn and hasattr(self.es_conn, "es_conn"):
+                await self.es_conn.es_conn.ensure_connected()
+                logging.info("DeepRagPureRetriever ES连接已建立")
+        except Exception as error:
+            log_operation_failure(logger, "DeepRAG connection", error)
+            raise RetrievalError("Elasticsearch connection failed") from error
     
     async def get_vector(self, txt: str, emb_mdl, topk: int = 10, similarity: float = 0.1):
         """
@@ -275,10 +285,9 @@ class DeepRagPureRetriever:
             logging.info(f"⏱️ [search] ========== search总耗时: {(time.time()-search_start)*1000:.0f}ms ==========")
             return result
             
-        except Exception as e:
-            logging.error(f"搜索失败: {e}")
-            # 返回空结果
-            return self._create_empty_result()
+        except Exception as error:
+            log_operation_failure(logger, "DeepRAG search", error)
+            raise RetrievalError("Elasticsearch search failed") from error
 
     def rerank(self, chunk_ids: List[str], fields_data: Dict[str, Dict],
                question: str, keywords: List[str], query_vector: List[float],
@@ -318,7 +327,7 @@ class DeepRagPureRetriever:
                 try:
                     import json
                     chunk_vector = json.loads(chunk_vector)
-                except:
+                except (TypeError, ValueError):
                     chunk_vector = []
 
             if not chunk_vector or len(chunk_vector) != len(query_vector):
@@ -383,7 +392,7 @@ class DeepRagPureRetriever:
         if not question:
             return {"total": 0, "chunks": [], "doc_aggs": {}}
 
-        logging.info(f"开始DeepRag召回，问题: {question}")
+        logging.info("开始DeepRag召回")
 
         try:
             # 更新配置
@@ -436,7 +445,7 @@ class DeepRagPureRetriever:
             if page <= self.config.rerank_page_limit:
                 if rerank_mdl:
                     # 使用重排序模型（复用已获取的查询向量）
-                    logging.info(f"⏱️ [retrieval] 复用查询向量，跳过重复embedding调用")
+                    logging.info("⏱️ [retrieval] 复用查询向量，跳过重复embedding调用")
 
                     t4_2 = time.time()
                     sim, tsim, vsim = await self.rerank_by_model(
@@ -446,7 +455,7 @@ class DeepRagPureRetriever:
                     logging.info(f"⏱️ [retrieval] 重排序模型计算耗时: {(time.time()-t4_2)*1000:.0f}ms")
                 else:
                     # 使用默认重排序（复用已获取的查询向量）
-                    logging.info(f"⏱️ [retrieval] 复用查询向量，跳过重复embedding调用")
+                    logging.info("⏱️ [retrieval] 复用查询向量，跳过重复embedding调用")
 
                     t4_2 = time.time()
                     sim, tsim, vsim = self.rerank(
@@ -530,7 +539,7 @@ class DeepRagPureRetriever:
             logging.info(f"⏱️ [retrieval] 构建结果耗时: {(time.time()-t6)*1000:.0f}ms, 返回 {len(chunks)} 个chunks")
 
             # 复用已获取的查询向量（无需再次调用embedding）
-            logging.info(f"⏱️ [retrieval] 复用查询向量（已在search阶段获取），节省embedding调用")
+            logging.info("⏱️ [retrieval] 复用查询向量（已在search阶段获取），节省embedding调用")
 
             result = {
                 "total": sres.total,
@@ -543,11 +552,9 @@ class DeepRagPureRetriever:
             logging.info(f"DeepRag召回完成，总数: {sres.total}, 返回: {len(chunks)} 个分块")
             return result
 
-        except Exception as e:
-            import traceback
-            logging.error(f"DeepRag召回失败: {e}")
-            logging.error(f"错误详情: {traceback.format_exc()}")
-            return {"total": 0, "chunks": [], "doc_aggs": {}, "error": str(e)}
+        except Exception as error:
+            log_operation_failure(logger, "DeepRAG retrieval", error)
+            raise RetrievalError("Document retrieval failed") from error
 
     async def rerank_by_model(self, rerank_mdl, chunk_ids: List[str], fields_data: Dict[str, Dict],
                        question: str, query_vector: List[float], text_weight: float, vector_weight: float):
@@ -620,30 +627,31 @@ class DeepRagPureRetriever:
             logging.debug(f"重排序模型计算完成，相似度范围: {np.min(sim):.4f} - {np.max(sim):.4f}")
             return sim, np.array(tksim), np.array(vtsim)
 
-        except Exception as e:
-            logging.error(f"重排序模型计算失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "DeepRAG model reranking", error)
             # 如果重排序模型失败，降级为默认重排序
             logging.warning("重排序模型失败，降级为默认重排序算法")
             return self.rerank(chunk_ids, fields_data, question, [], query_vector, text_weight, vector_weight)
 
-    def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> Dict[str, Any]:
         """健康检查"""
         try:
-            # 通过适配器获取ES健康状态
             try:
-                es_health = self.es_conn.es.cluster.health()
-                es_status = es_health.get("status") == "green" or es_health.get("status") == "yellow"
-            except Exception as e:
-                es_health = {"status": "red", "error": str(e)}
+                es_health = await self.es_conn.health()
+                es_cluster_status = es_health.get("status")
+                es_status = es_cluster_status in {"green", "yellow"}
+            except Exception as error:
+                log_operation_failure(logger, "DeepRAG health check", error)
+                es_cluster_status = "red"
                 es_status = False
 
-            index_status = {}
+            index_status = []
             for index_name in self.config.index_names:
                 try:
-                    exists = self.es_conn.indexExist(index_name)
-                    index_status[index_name] = exists
-                except Exception as e:
-                    index_status[index_name] = f"error: {e}"
+                    index_status.append(await self.es_conn.indexExist(index_name))
+                except Exception as error:
+                    log_operation_failure(logger, "DeepRAG index health check", error)
+                    index_status.append(False)
 
             return {
                 "status": "healthy" if es_status else "unhealthy",
@@ -652,10 +660,12 @@ class DeepRagPureRetriever:
                     "query_processor": self.qryr is not None,
                     "es_adapter": self.es_conn is not None
                 },
-                "elasticsearch": es_health,
-                "indices": index_status,
+                "elasticsearch": {"status": es_cluster_status},
+                "indices": {
+                    "configured": len(index_status),
+                    "available": sum(bool(value) for value in index_status),
+                },
                 "config": {
-                    "index_names": self.config.index_names,
                     "page_size": self.config.page_size,
                     "similarity_threshold": self.config.similarity_threshold,
                     "vector_similarity_weight": self.config.vector_similarity_weight,
@@ -663,10 +673,11 @@ class DeepRagPureRetriever:
                 }
             }
 
-        except Exception as e:
+        except Exception as error:
+            log_operation_failure(logger, "DeepRAG health check", error)
             return {
                 "status": "unhealthy",
-                "error": str(e)
+                "error": "DeepRAG health check failed",
             }
     
     async def close(self):
@@ -677,5 +688,5 @@ class DeepRagPureRetriever:
             try:
                 await self.es_conn.es_conn.close()
                 logging.info("DeepRagPureRetriever ES连接已关闭")
-            except Exception as e:
-                logging.error(f"关闭DeepRagPureRetriever ES连接失败: {e}")
+            except Exception as error:
+                log_operation_failure(logger, "DeepRAG connection close", error)

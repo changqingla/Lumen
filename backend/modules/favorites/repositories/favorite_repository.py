@@ -6,6 +6,7 @@ from typing import Optional, List, Tuple
 from modules.favorites.entities.favorite import Favorite
 from modules.knowledge.entities.knowledge_base import KnowledgeBase
 from modules.knowledge.entities.document import Document
+from modules.knowledge.repositories.kb_repository import knowledge_base_access_condition
 import logging
 import uuid
 
@@ -106,24 +107,14 @@ class FavoriteRepository:
         self,
         user_id: str,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        user_org_ids: Optional[List[uuid.UUID]] = None,
+        is_admin: bool = False,
     ) -> Tuple[List[KnowledgeBase], int]:
-        """List favorite knowledge bases with details."""
+        """List favorite knowledge bases that remain accessible to the user."""
         # Convert string ID to UUID
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         
-        # Count total
-        count_stmt = select(func.count()).select_from(
-            select(Favorite.id)
-            .where(
-                Favorite.user_id == user_uuid,
-                Favorite.item_type == Favorite.ITEM_TYPE_KB
-            )
-            .subquery()
-        )
-        total = (await self.db.execute(count_stmt)).scalar()
-        
-        # Get favorites with KB details
         stmt = (
             select(KnowledgeBase)
             .join(
@@ -131,7 +122,21 @@ class FavoriteRepository:
                 (Favorite.item_id == KnowledgeBase.id) &
                 (Favorite.item_type == Favorite.ITEM_TYPE_KB)
             )
-            .where(Favorite.user_id == user_uuid)
+            .where(
+                Favorite.user_id == user_uuid,
+                knowledge_base_access_condition(
+                    user_uuid,
+                    user_org_ids,
+                    is_admin=is_admin,
+                ),
+            )
+        )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.db.execute(count_stmt)).scalar()
+
+        stmt = (
+            stmt
             .order_by(desc(Favorite.created_at))
             .limit(page_size)
             .offset((page - 1) * page_size)
@@ -146,24 +151,14 @@ class FavoriteRepository:
         self,
         user_id: str,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        user_org_ids: Optional[List[uuid.UUID]] = None,
+        is_admin: bool = False,
     ) -> Tuple[List[Document], int]:
-        """List favorite documents with details."""
+        """List favorite documents whose knowledge bases remain accessible."""
         # Convert string ID to UUID
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         
-        # Count total
-        count_stmt = select(func.count()).select_from(
-            select(Favorite.id)
-            .where(
-                Favorite.user_id == user_uuid,
-                Favorite.item_type == Favorite.ITEM_TYPE_DOC
-            )
-            .subquery()
-        )
-        total = (await self.db.execute(count_stmt)).scalar()
-        
-        # Get favorites with document details
         stmt = (
             select(Document)
             .join(
@@ -171,7 +166,22 @@ class FavoriteRepository:
                 (Favorite.item_id == Document.id) &
                 (Favorite.item_type == Favorite.ITEM_TYPE_DOC)
             )
-            .where(Favorite.user_id == user_uuid)
+            .join(KnowledgeBase, Document.kb_id == KnowledgeBase.id)
+            .where(
+                Favorite.user_id == user_uuid,
+                knowledge_base_access_condition(
+                    user_uuid,
+                    user_org_ids,
+                    is_admin=is_admin,
+                ),
+            )
+        )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.db.execute(count_stmt)).scalar()
+
+        stmt = (
+            stmt
             .order_by(desc(Favorite.created_at))
             .limit(page_size)
             .offset((page - 1) * page_size)

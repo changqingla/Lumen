@@ -12,13 +12,15 @@ from config.settings import settings
 
 
 _SAFE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
-
-
-def _normalize_public_base_url(value: str) -> str:
-    normalized = str(value or "").strip()
-    if not normalized or normalized == "/":
-        return ""
-    return normalized.rstrip("/")
+_UUID_FILENAME_COMPONENT = (
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_MANAGED_KB_FILENAME_RE = re.compile(
+    rf"^kb__{_UUID_FILENAME_COMPONENT}__{_UUID_FILENAME_COMPONENT}__"
+    r"(?:[0-9a-f]{16}__)?[A-Za-z0-9._-]+\.md$"
+)
+_GATEWAY_INTERNAL_TOKEN_HEADER = "X-Gateway-Internal-Token"
 
 
 class InsightRuntimeService:
@@ -27,16 +29,32 @@ class InsightRuntimeService:
     def __init__(self) -> None:
         self.gateway_url = settings.INSIGHT_GATEWAY_URL.rstrip("/")
         self.langgraph_url = settings.INSIGHT_LANGGRAPH_URL.rstrip("/")
-        self.gateway_public_base_url = _normalize_public_base_url(
-            settings.INSIGHT_GATEWAY_PUBLIC_BASE_URL
-        )
-        self.langgraph_public_base_url = _normalize_public_base_url(
-            settings.INSIGHT_LANGGRAPH_PUBLIC_BASE_URL
+        self._gateway_internal_api_token = (
+            settings.GATEWAY_INTERNAL_API_TOKEN.get_secret_value().strip()
         )
         self.assistant_id = settings.INSIGHT_ASSISTANT_ID
         self.on_disconnect = settings.INSIGHT_ON_DISCONNECT
         self.request_timeout_seconds = settings.INSIGHT_REQUEST_TIMEOUT_SECONDS
         self.recursion_limit = settings.INSIGHT_RECURSION_LIMIT
+
+    def gateway_request_headers(self) -> dict[str, str]:
+        """Return headers for Gateway-only calls, failing before network I/O."""
+        token = self._gateway_internal_api_token
+        if (
+            len(token) < 32
+            or not token.isascii()
+            or token.lower().startswith(("change-me", "replace-with-"))
+        ):
+            raise RuntimeError("GATEWAY_INTERNAL_API_TOKEN is not configured correctly")
+        return {_GATEWAY_INTERNAL_TOKEN_HEADER: token}
+
+    def _create_gateway_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self.request_timeout_seconds,
+            headers=self.gateway_request_headers(),
+            follow_redirects=False,
+            trust_env=False,
+        )
 
     @staticmethod
     def build_thread_id(session_id: str) -> str:
@@ -61,23 +79,13 @@ class InsightRuntimeService:
         normalized = self.build_thread_id(thread_id)
         return f"/api/threads/{normalized}/uploads/list"
 
+    def build_thread_upload_metadata_path(self, thread_id: str) -> str:
+        normalized = self.build_thread_id(thread_id)
+        return f"/api/threads/{normalized}/uploads/metadata"
+
     def build_thread_artifacts_base_path(self, thread_id: str) -> str:
         normalized = self.build_thread_id(thread_id)
         return f"/api/threads/{normalized}/artifacts"
-
-    def build_thread_suggestions_path(self, thread_id: str) -> str:
-        normalized = self.build_thread_id(thread_id)
-        return f"/api/threads/{normalized}/suggestions"
-
-    def build_cancel_run_path(self, thread_id: str, run_id: str) -> str:
-        normalized_thread_id = self.build_thread_id(thread_id)
-        normalized_run_id = str(run_id or "").strip()
-        if not normalized_run_id:
-            raise ValueError("run_id 不能为空")
-        return (
-            f"/threads/{normalized_thread_id}/runs/"
-            f"{normalized_run_id}/cancel?action=interrupt&wait=0"
-        )
 
     def build_run_request_template(
         self,
@@ -89,8 +97,14 @@ class InsightRuntimeService:
         is_plan_mode: bool,
         subagent_enabled: bool = False,
         disable_model_streaming: bool = False,
+        recursion_limit: Optional[int] = None,
     ) -> dict[str, Any]:
         normalized_thread_id = self.build_thread_id(thread_id)
+        resolved_recursion_limit = int(
+            self.recursion_limit if recursion_limit is None else recursion_limit
+        )
+        if resolved_recursion_limit < 1:
+            raise ValueError("recursion_limit 必须大于 0")
         return {
             "assistant_id": str(assistant_id or self.assistant_id).strip(),
             "on_disconnect": self.on_disconnect,
@@ -107,7 +121,7 @@ class InsightRuntimeService:
                 "disable_model_streaming": bool(disable_model_streaming),
             },
             "config": {
-                "recursion_limit": self.recursion_limit,
+                "recursion_limit": resolved_recursion_limit,
             },
             "input": {
                 "messages": [],
@@ -121,7 +135,11 @@ class InsightRuntimeService:
             "thread_id": normalized_thread_id,
             "if_exists": "do_nothing",
         }
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=self.request_timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -137,7 +155,11 @@ class InsightRuntimeService:
             "graph_id": configured_assistant,
             "limit": 10,
         }
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=self.request_timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             response = await client.post(search_url, json=search_payload)
             response.raise_for_status()
             data = response.json()
@@ -177,7 +199,7 @@ class InsightRuntimeService:
 
     async def list_runtime_models(self) -> list[dict[str, Any]]:
         url = f"{self.gateway_url}/api/models"
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with self._create_gateway_client() as client:
             response = await client.get(url)
             response.raise_for_status()
             payload = response.json()
@@ -187,32 +209,10 @@ class InsightRuntimeService:
             return []
         return [item for item in models_payload if isinstance(item, dict)]
 
-    async def resolve_runtime_model_name(self, requested_model_name: Optional[str]) -> str:
-        normalized_requested = str(requested_model_name or "").strip()
-        models_payload = await self.list_runtime_models()
-        available_names = [
-            str(item.get("name") or "").strip()
-            for item in models_payload
-            if isinstance(item, dict) and str(item.get("name") or "").strip()
-        ]
-        if not available_names:
-            if normalized_requested:
-                return normalized_requested
-            raise ValueError("Insight runtime 未配置任何可用模型")
-
-        if normalized_requested and normalized_requested in available_names:
-            return normalized_requested
-        if normalized_requested:
-            raise ValueError(
-                f"Insight runtime 未配置模型: {normalized_requested}。"
-                f" 当前仅支持: {', '.join(available_names)}"
-            )
-        return available_names[0]
-
     async def list_thread_uploads(self, thread_id: str) -> list[dict[str, Any]]:
         normalized_thread_id = self.build_thread_id(thread_id)
         url = f"{self.gateway_url}{self.build_thread_uploads_list_path(normalized_thread_id)}"
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with self._create_gateway_client() as client:
             response = await client.get(url)
             if response.status_code == 404:
                 return []
@@ -225,6 +225,72 @@ class InsightRuntimeService:
                 return []
             return [item for item in files if isinstance(item, dict)]
 
+    async def has_active_thread_run(self, thread_id: str) -> bool:
+        """Return whether LangGraph has a running or pending run for the thread."""
+        normalized_thread_id = self.build_thread_id(thread_id)
+        url = f"{self.langgraph_url}/threads/{normalized_thread_id}/runs"
+        async with httpx.AsyncClient(
+            timeout=self.request_timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            for run_status in ("running", "pending"):
+                response = await client.get(
+                    url,
+                    params={"limit": 1, "status": run_status},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, list) and payload:
+                    return True
+                if (
+                    isinstance(payload, dict)
+                    and isinstance(payload.get("runs"), list)
+                    and payload["runs"]
+                ):
+                    return True
+        return False
+
+    async def get_thread_upload_integrity(
+        self,
+        thread_id: str,
+        filename: str,
+    ) -> dict[str, Any]:
+        """Fetch a managed Runtime upload's streamed content metadata."""
+        normalized_thread_id = self.build_thread_id(thread_id)
+        normalized_filename = str(filename or "").strip()
+        if (
+            normalized_filename != filename
+            or _MANAGED_KB_FILENAME_RE.fullmatch(normalized_filename) is None
+        ):
+            raise ValueError("filename 不是合法的受管知识文件名")
+
+        url = (
+            f"{self.gateway_url}"
+            f"{self.build_thread_upload_metadata_path(normalized_thread_id)}"
+        )
+        async with self._create_gateway_client() as client:
+            response = await client.get(url, params={"filename": normalized_filename})
+            response.raise_for_status()
+            payload = response.json()
+
+        if not isinstance(payload, dict):
+            raise ValueError("Insight upload metadata API 返回格式非法")
+        returned_filename = payload.get("filename")
+        size = payload.get("size")
+        sha256 = payload.get("sha256")
+        if returned_filename != normalized_filename:
+            raise ValueError("Insight upload metadata API 返回了错误的文件名")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValueError("Insight upload metadata API 返回了非法的文件大小")
+        if not isinstance(sha256, str) or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+            raise ValueError("Insight upload metadata API 返回了非法的 SHA-256")
+        return {
+            "filename": returned_filename,
+            "size": size,
+            "sha256": sha256,
+        }
+
     async def download_thread_artifact_bytes(self, thread_id: str, virtual_path: str) -> bytes:
         normalized_thread_id = self.build_thread_id(thread_id)
         normalized_path = str(virtual_path or "").strip().lstrip("/")
@@ -235,7 +301,7 @@ class InsightRuntimeService:
 
         encoded_path = quote(normalized_path, safe="/")
         url = f"{self.gateway_url}{self.build_thread_artifacts_base_path(normalized_thread_id)}/{encoded_path}?download=true"
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with self._create_gateway_client() as client:
             response = await client.get(url)
             response.raise_for_status()
             return response.content
@@ -261,7 +327,7 @@ class InsightRuntimeService:
         files = {
             "files": (safe_filename, data, content_type or "application/octet-stream"),
         }
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with self._create_gateway_client() as client:
             response = await client.post(url, files=files)
             response.raise_for_status()
             payload = response.json()
@@ -292,7 +358,7 @@ class InsightRuntimeService:
         files = {
             "files": (safe_filename, file_object, content_type or "application/octet-stream"),
         }
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+        async with self._create_gateway_client() as client:
             response = await client.post(url, files=files)
             response.raise_for_status()
             payload = response.json()
@@ -306,7 +372,12 @@ class InsightRuntimeService:
                 raise ValueError("Insight uploads API 文件信息格式非法")
             return first_file
 
-    async def delete_thread_upload(self, thread_id: str, filename: str) -> dict[str, Any]:
+    async def delete_thread_upload(
+        self,
+        thread_id: str,
+        filename: str,
+        companion_filename: str | None = None,
+    ) -> dict[str, Any]:
         normalized_thread_id = self.build_thread_id(thread_id)
         normalized_filename = str(filename or "").strip()
         if not normalized_filename:
@@ -314,8 +385,14 @@ class InsightRuntimeService:
 
         encoded_filename = quote(normalized_filename, safe="")
         url = f"{self.gateway_url}{self.build_thread_uploads_path(normalized_thread_id)}/{encoded_filename}"
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
-            response = await client.delete(url)
+        params = None
+        if companion_filename:
+            normalized_companion = str(companion_filename).strip()
+            if not normalized_companion:
+                raise ValueError("companion_filename 不能为空")
+            params = {"companion_filename": normalized_companion}
+        async with self._create_gateway_client() as client:
+            response = await client.delete(url, params=params)
             response.raise_for_status()
             payload = response.json()
             return payload if isinstance(payload, dict) else {}

@@ -17,25 +17,35 @@ export default function AdminRoute({ children }: AdminRouteProps) {
   const { isGuestMode } = useGuestMode();
 
   useEffect(() => {
+    let active = true;
     if (isGuestMode) {
       setLoading(false);
-      setIsAdmin(true);
-      return;
-    }
-    checkAdminStatus();
-  }, [isGuestMode]);
-
-  const checkAdminStatus = async () => {
-    try {
-      const profile = await authAPI.getMe();
-      setIsAdmin(profile.is_admin);
-    } catch (error) {
-      console.error('Failed to check admin status:', error);
       setIsAdmin(false);
-    } finally {
-      setLoading(false);
+      return () => {
+        active = false;
+      };
     }
-  };
+
+    setLoading(true);
+    void authAPI.getMe().then((profile) => {
+      if (active) {
+        setIsAdmin(Boolean(profile.is_admin));
+      }
+    }).catch((error) => {
+      console.error('Failed to check admin status:', error);
+      if (active) {
+        setIsAdmin(false);
+      }
+    }).finally(() => {
+      if (active) {
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isGuestMode]);
 
   if (loading) {
     return (

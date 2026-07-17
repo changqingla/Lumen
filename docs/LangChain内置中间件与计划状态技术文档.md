@@ -36,12 +36,12 @@
 - LangChain Agent 工厂与 middleware 编排
   - `backend/.venv/lib/python3.12/site-packages/langchain/agents/factory.py`
 - lumen 对摘要中间件的配置适配
-  - `backend/src/config/summarization_config.py`
-  - `backend/src/config/app_config.py`
-  - `backend/src/agents/lead_agent/agent.py`
+  - `runtimes/backend/src/config/summarization_config.py`
+  - `runtimes/backend/src/config/app_config.py`
+  - `runtimes/backend/src/agents/lead_agent/agent.py`
 - lumen 对 Todo 中间件的扩展
-  - `backend/src/agents/middlewares/todo_middleware.py`
-  - `backend/src/agents/thread_state.py`
+  - `runtimes/backend/src/agents/middlewares/todo_middleware.py`
+  - `runtimes/backend/src/agents/thread_state.py`
 
 ## 3. 先说结论
 
@@ -786,7 +786,7 @@ LangChain 直接选择了最保守也最稳定的策略：
 
 ### 8.2 项目自定义 TodoMiddleware 做了什么
 
-lumen 的 `backend/src/agents/middlewares/todo_middleware.py` 继承自 LangChain 的 `TodoListMiddleware`，额外重写了 `before_model()` / `abefore_model()`。
+lumen 的 `runtimes/backend/src/agents/middlewares/todo_middleware.py` 继承自 LangChain 的 `TodoListMiddleware`，额外重写了 `before_model()` / `abefore_model()`。
 
 它的补偿算法是：
 

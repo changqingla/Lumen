@@ -33,11 +33,11 @@ from urllib.parse import urljoin
 import dashscope                          # 阿里云通义千问 API
 import google.generativeai as genai       # Google Gemini API
 import numpy as np                        # 数值计算
-import requests                           # HTTP 请求
 from openai import OpenAI                 # OpenAI API 客户端
 from zhipuai import ZhipuAI              # 智谱AI API 客户端
 
 # 项目内部导入
+from core.provider_http import provider_post
 from core.utils import log_exception  # 工具函数
 from core.utils import num_tokens_from_string, truncate  # 文本处理工具
 
@@ -529,7 +529,7 @@ class JinaEmbed(Base):
         token_count = 0
         for i in range(0, len(texts), batch_size):
             data = {"model": self.model_name, "input": texts[i : i + batch_size], "encoding_type": "float"}
-            response = requests.post(self.base_url, headers=self.headers, json=data)
+            response = provider_post(self.base_url, headers=self.headers, json=data)
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
@@ -692,7 +692,7 @@ class NvidiaEmbed(Base):
                 "encoding_format": "float",
                 "truncate": "END",
             }
-            response = requests.post(self.base_url, headers=self.headers, json=payload)
+            response = provider_post(self.base_url, headers=self.headers, json=payload)
             try:
                 res = response.json()
             except Exception as _e:
@@ -855,7 +855,7 @@ class SILICONFLOWEmbed(Base):
                 "input": texts_batch,
                 "encoding_format": "float",
             }
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
+            response = provider_post(self.base_url, json=payload, headers=self.headers)
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
@@ -871,7 +871,7 @@ class SILICONFLOWEmbed(Base):
             "input": text,
             "encoding_format": "float",
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers)
+        response = provider_post(self.base_url, json=payload, headers=self.headers)
         try:
             res = response.json()
             return np.array(res["data"][0]["embedding"]), self.total_token_count(res)
@@ -978,21 +978,23 @@ class HuggingFaceEmbed(Base):
     def encode(self, texts: list):
         embeddings = []
         for text in texts:
-            response = requests.post(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"})
-            if response.status_code == 200:
-                embedding = response.json()
-                embeddings.append(embedding[0])
-            else:
-                raise Exception(f"Error: {response.status_code} - {response.text}")
+            response = provider_post(
+                f"{self.base_url}/embed",
+                json={"inputs": text},
+                headers={"Content-Type": "application/json"},
+            )
+            embedding = response.json()
+            embeddings.append(embedding[0])
         return np.array(embeddings), sum([num_tokens_from_string(text) for text in texts])
 
     def encode_queries(self, text):
-        response = requests.post(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"})
-        if response.status_code == 200:
-            embedding = response.json()
-            return np.array(embedding[0]), num_tokens_from_string(text)
-        else:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
+        response = provider_post(
+            f"{self.base_url}/embed",
+            json={"inputs": text},
+            headers={"Content-Type": "application/json"},
+        )
+        embedding = response.json()
+        return np.array(embedding[0]), num_tokens_from_string(text)
 
 
 class VolcEngineEmbed(OpenAIEmbed):
@@ -1051,7 +1053,7 @@ class NovitaEmbed(Base):
                 "input": texts_batch,
                 "encoding_format": "float",
             }
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
+            response = provider_post(self.base_url, json=payload, headers=self.headers)
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
@@ -1067,7 +1069,7 @@ class NovitaEmbed(Base):
             "input": text,
             "encoding_format": "float",
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers)
+        response = provider_post(self.base_url, json=payload, headers=self.headers)
         try:
             res = response.json()
             return np.array(res["data"][0]["embedding"]), self.total_token_count(res)
@@ -1108,7 +1110,7 @@ class GiteeEmbed(Base):
                 "input": texts_batch,
                 "encoding_format": "float",
             }
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
+            response = provider_post(self.base_url, json=payload, headers=self.headers)
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
@@ -1124,7 +1126,7 @@ class GiteeEmbed(Base):
             "input": text,
             "encoding_format": "float",
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers)
+        response = provider_post(self.base_url, json=payload, headers=self.headers)
         try:
             res = response.json()
             return np.array(res["data"][0]["embedding"]), self.total_token_count(res)

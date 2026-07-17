@@ -1,12 +1,33 @@
-"""用于读取与管理全局记忆数据的 API 路由。"""
+"""Read and manage explicitly tenant-scoped memory profiles."""
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from src.agents.memory.scope import MEMORY_SCOPE_PATTERN
 from src.agents.memory.updater import get_memory_data, reload_memory_data
 from src.config.memory_config import get_memory_config
 
 router = APIRouter(prefix="/api", tags=["memory"])
+
+MemoryScopeQuery = Annotated[
+    str,
+    Query(
+        min_length=64,
+        max_length=64,
+        pattern=MEMORY_SCOPE_PATTERN,
+        description="Opaque Backend-issued memory partition",
+    ),
+]
+AgentNameQuery = Annotated[
+    str | None,
+    Query(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$",
+    ),
+]
 
 
 class ContextSection(BaseModel):
@@ -76,11 +97,14 @@ class MemoryStatusResponse(BaseModel):
     "/memory",
     response_model=MemoryResponse,
     summary="Get Memory Data",
-    description="Retrieve the current global memory data including user context, history, and facts.",
+    description="Retrieve memory for one explicit tenant and optional agent partition.",
 )
-async def get_memory() -> MemoryResponse:
-    """获取当前记忆数据（含 user、history 与 facts）。"""
-    memory_data = get_memory_data()
+async def get_memory(
+    memory_scope: MemoryScopeQuery,
+    agent_name: AgentNameQuery = None,
+) -> MemoryResponse:
+    """Get one scoped profile; there is no global fallback."""
+    memory_data = get_memory_data(memory_scope, agent_name)
     return MemoryResponse(**memory_data)
 
 
@@ -90,12 +114,15 @@ async def get_memory() -> MemoryResponse:
     summary="Reload Memory Data",
     description="Reload memory data from the storage file, refreshing the in-memory cache.",
 )
-async def reload_memory() -> MemoryResponse:
+async def reload_memory(
+    memory_scope: MemoryScopeQuery,
+    agent_name: AgentNameQuery = None,
+) -> MemoryResponse:
     """强制从存储文件重载记忆数据并刷新缓存。
 
     适用于记忆文件被外部修改后的刷新场景。
     """
-    memory_data = reload_memory_data()
+    memory_data = reload_memory_data(memory_scope, agent_name)
     return MemoryResponse(**memory_data)
 
 
@@ -125,10 +152,13 @@ async def get_memory_config_endpoint() -> MemoryConfigResponse:
     summary="Get Memory Status",
     description="Retrieve both memory configuration and current data in a single request.",
 )
-async def get_memory_status() -> MemoryStatusResponse:
+async def get_memory_status(
+    memory_scope: MemoryScopeQuery,
+    agent_name: AgentNameQuery = None,
+) -> MemoryStatusResponse:
     """获取记忆状态（配置 + 当前数据）。"""
     config = get_memory_config()
-    memory_data = get_memory_data()
+    memory_data = get_memory_data(memory_scope, agent_name)
 
     return MemoryStatusResponse(
         config=MemoryConfigResponse(

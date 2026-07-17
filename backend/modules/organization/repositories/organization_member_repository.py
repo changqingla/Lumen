@@ -62,30 +62,6 @@ class OrganizationMemberRepository:
         await self.db.commit()
         return result.rowcount > 0
     
-    async def get_member(self, org_id: uuid.UUID, user_id: uuid.UUID) -> Optional[OrganizationMember]:
-        """
-        Get a specific member record.
-        
-        Args:
-            org_id: Organization ID
-            user_id: User ID
-            
-        Returns:
-            Organization member or None
-        """
-        result = await self.db.execute(
-            select(OrganizationMember)
-            .where(and_(
-                OrganizationMember.org_id == org_id,
-                OrganizationMember.user_id == user_id
-            ))
-            .options(
-                joinedload(OrganizationMember.organization),
-                joinedload(OrganizationMember.user)
-            )
-        )
-        return result.unique().scalar_one_or_none()
-    
     async def get_members(self, org_id: uuid.UUID) -> List[OrganizationMember]:
         """
         Get all members of an organization.
@@ -121,7 +97,7 @@ class OrganizationMemberRepository:
             .where(and_(
                 OrganizationMember.org_id == org_id,
                 OrganizationMember.user_id == user_id,
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             ))
         )
         count = result.scalar() or 0
@@ -143,7 +119,7 @@ class OrganizationMemberRepository:
             .join(Organization, OrganizationMember.org_id == Organization.id)
             .where(
                 OrganizationMember.user_id == user_id,
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             )
         )
         
@@ -169,7 +145,7 @@ class OrganizationMemberRepository:
             .join(Organization, OrganizationMember.org_id == Organization.id)
             .where(
                 OrganizationMember.user_id == user_id,
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             )
             .options(joinedload(OrganizationMember.organization))
             .order_by(OrganizationMember.joined_at.desc())
@@ -191,7 +167,7 @@ class OrganizationMemberRepository:
             .join(Organization, OrganizationMember.org_id == Organization.id)
             .where(
                 OrganizationMember.user_id == user_id,
-                Organization.is_deleted == False
+                Organization.is_deleted.is_(False)
             )
         )
         return [row[0] for row in result.all()]

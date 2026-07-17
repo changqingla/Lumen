@@ -39,6 +39,12 @@ def _uploads_dir(tmp_path: Path, thread_id: str = THREAD_ID) -> Path:
     return d
 
 
+def _knowledge_dir(tmp_path: Path, thread_id: str = THREAD_ID) -> Path:
+    d = Paths(str(tmp_path)).sandbox_knowledge_dir(thread_id)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _human(content, files=None, **extra_kwargs):
     additional_kwargs = dict(extra_kwargs)
     if files is not None:
@@ -307,6 +313,54 @@ class TestBeforeAgent:
         assert "new.txt" in content
         assert "previous messages" in content
         assert "old.txt" in content
+
+    def test_historical_managed_knowledge_uses_read_only_virtual_path(self, tmp_path):
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        knowledge_dir = _knowledge_dir(tmp_path)
+        (uploads_dir / "new.txt").write_bytes(b"new")
+        (knowledge_dir / "reference.md").write_bytes(b"knowledge")
+
+        msg = _human(
+            "go",
+            files=[
+                {
+                    "filename": "new.txt",
+                    "size": 3,
+                    "path": "/mnt/user-data/uploads/new.txt",
+                }
+            ],
+        )
+        result = mw.before_agent(self._state(msg), _runtime())
+
+        assert result is not None
+        content = result["messages"][-1].content
+        assert "reference.md" in content
+        assert "/mnt/user-data/knowledge/reference.md" in content
+
+    def test_historical_scans_skip_symlinks(self, tmp_path):
+        mw = _middleware(tmp_path)
+        uploads_dir = _uploads_dir(tmp_path)
+        knowledge_dir = _knowledge_dir(tmp_path)
+        (uploads_dir / "new.txt").write_bytes(b"new")
+        outside = tmp_path / "outside.md"
+        outside.write_text("secret", encoding="utf-8")
+        (knowledge_dir / "linked.md").symlink_to(outside)
+
+        msg = _human(
+            "go",
+            files=[
+                {
+                    "filename": "new.txt",
+                    "size": 3,
+                    "path": "/mnt/user-data/uploads/new.txt",
+                }
+            ],
+        )
+        result = mw.before_agent(self._state(msg), _runtime())
+
+        assert result is not None
+        assert "linked.md" not in result["messages"][-1].content
 
     def test_no_historical_section_when_upload_dir_is_empty(self, tmp_path):
         mw = _middleware(tmp_path)

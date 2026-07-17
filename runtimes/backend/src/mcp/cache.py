@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 _mcp_tools_cache: list[BaseTool] | None = None
 _cache_initialized = False
 _initialization_lock = asyncio.Lock()
-_config_mtime: float | None = None  # 记录配置文件修改时间
+_config_mtime: int | None = None  # 记录配置文件修改时间
 
 
-def _get_config_mtime() -> float | None:
+def _get_config_mtime() -> int | None:
     """获取配置文件修改时间。
 
     返回：
@@ -23,8 +23,11 @@ def _get_config_mtime() -> float | None:
     from src.config.extensions_config import ExtensionsConfig
 
     config_path = ExtensionsConfig.resolve_config_path()
-    if config_path and config_path.exists():
-        return os.path.getmtime(config_path)
+    if config_path:
+        try:
+            return os.stat(config_path).st_mtime_ns
+        except OSError:
+            return None
     return None
 
 
@@ -41,12 +44,9 @@ def _is_cache_stale() -> bool:
 
     current_mtime = _get_config_mtime()
 
-    # 若当前或历史 mtime 不可用，则保守视为不过期
-    if _config_mtime is None or current_mtime is None:
-        return False
-
-    # 若配置文件在缓存之后被修改，则判定为过期
-    if current_mtime > _config_mtime:
+    # Creation and deletion are changes too. This matters on first boot, when
+    # Gateway creates an initially absent deployment-state file.
+    if current_mtime != _config_mtime:
         logger.info(f"MCP config file has been modified (mtime: {_config_mtime} -> {current_mtime}), cache is stale")
         return True
 
@@ -117,8 +117,11 @@ def get_cached_mcp_tools() -> list[BaseTool]:
         except RuntimeError:
             # 当前无事件循环，创建一个新循环运行
             asyncio.run(initialize_mcp_tools())
-        except Exception as e:
-            logger.error(f"Failed to lazy-initialize MCP tools: {e}")
+        except Exception as exc:
+            logger.error(
+                "Failed to lazy-initialize MCP tools (%s)",
+                type(exc).__name__,
+            )
             return []
 
     return _mcp_tools_cache or []

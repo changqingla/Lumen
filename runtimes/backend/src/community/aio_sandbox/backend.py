@@ -16,21 +16,27 @@ logger = logging.getLogger(__name__)
 def wait_for_sandbox_ready(sandbox_url: str, timeout: int = 30) -> bool:
     """
     参数：
-        sandbox_url: 沙箱 URL（例如 http://k3s:30001）。
+        sandbox_url: 沙箱 URL（例如 http://host.docker.internal:18080）。
         timeout: 最大等待秒数。
 
     返回：
         沙箱就绪返回 True，否则返回 False。
     """
     start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            response = requests.get(f"{sandbox_url}/v1/sandbox", timeout=5)
-            if response.status_code == 200:
-                return True
-        except requests.exceptions.RequestException:
-            pass
-        time.sleep(1)
+    with requests.Session() as session:
+        session.trust_env = False
+        while time.time() - start_time < timeout:
+            try:
+                response = session.get(
+                    f"{sandbox_url}/v1/sandbox",
+                    timeout=5,
+                    allow_redirects=False,
+                )
+                if response.status_code == 200:
+                    return True
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(1)
     return False
 
 
@@ -38,7 +44,7 @@ class SandboxBackend(ABC):
     """
     两种实现：
     - LocalContainerBackend：本地启动 Docker/Apple Container，并管理端口
-    - RemoteSandboxBackend：连接预先存在的远端地址（K8s 服务或外部服务）
+    - RemoteSandboxBackend：通过受认证的远程 provisioner 管理实例
 
     """
 

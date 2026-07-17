@@ -1,6 +1,7 @@
 import os
+import logging
 
-os.environ.setdefault("DEBUG", "false")
+os.environ["DEBUG"] = "false"
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,14 +17,20 @@ from modules.model_config.security.model_config_security import (
     create_runtime_model_binding_token,
     decode_runtime_model_binding_token,
 )
+from utils.outbound_endpoint_policy import OutboundEndpointPolicy
 
 
-def make_service():
+async def resolve_public_endpoint(_host: str, _port: int) -> tuple[str, ...]:
+    return ("93.184.216.34",)
+
+
+def make_service(*, endpoint_policy: OutboundEndpointPolicy | None = None):
     db = SimpleNamespace(
         commit=AsyncMock(),
         rollback=AsyncMock(),
     )
-    return ModelConfigService(db=db), db
+    policy = endpoint_policy or OutboundEndpointPolicy(resolver=resolve_public_endpoint)
+    return ModelConfigService(db=db, endpoint_policy=policy), db
 
 
 @pytest.mark.asyncio
@@ -166,7 +173,7 @@ async def test_list_remote_provider_models_uses_provider_endpoint_and_merges_sta
             }
 
     class FakeClient:
-        async def get(self, url, headers=None, params=None):
+        async def get(self, url, headers=None, params=None, follow_redirects=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["params"] = params
@@ -185,6 +192,66 @@ async def test_list_remote_provider_models_uses_provider_endpoint_and_merges_sta
     assert result["models"][0]["supports_vision"] is True
     assert result["models"][1]["name"] == "custom-model"
     assert result["models"][1]["display_name"] == "custom-model"
+
+
+@pytest.mark.asyncio
+async def test_gemini_model_list_failure_keeps_api_key_out_of_url_logs_and_error(
+    monkeypatch,
+    caplog,
+):
+    private_key_marker = "private-gemini-query-key-marker"
+    service, _db = make_service()
+    service.provider_repo = SimpleNamespace(
+        get_by_user_and_provider=AsyncMock(
+            return_value=SimpleNamespace(
+                api_key_encrypted="encrypted-key",
+                is_active=True,
+            )
+        )
+    )
+    monkeypatch.setattr(
+        model_config_service_module,
+        "decrypt_api_key",
+        lambda _: private_key_marker,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        async def get(
+            self,
+            url,
+            headers=None,
+            params=None,
+            follow_redirects=None,
+        ):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["params"] = params
+            request = httpx.Request("GET", url, headers=headers, params=params)
+            raise httpx.ConnectError(
+                f"provider failure: {private_key_marker}",
+                request=request,
+            )
+
+    monkeypatch.setattr(
+        model_config_service_module,
+        "get_http_client",
+        lambda: FakeClient(),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=model_config_service_module.__name__):
+        with pytest.raises(HTTPException) as raised:
+            await service.list_remote_provider_models(uuid4(), "gemini")
+
+    assert raised.value.status_code == 502
+    assert raised.value.detail == "连接模型供应商失败，请稍后重试"
+    assert captured["params"] is None
+    assert captured["headers"] == {"x-goog-api-key": private_key_marker}
+    assert private_key_marker not in str(captured["url"])
+    assert private_key_marker not in caplog.text
+    assert private_key_marker not in str(raised.value)
+    assert "provider=gemini" in caplog.text
+    assert "error_type=ConnectError" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -270,7 +337,7 @@ async def test_list_remote_provider_models_returns_static_minimax_models_without
             return None
 
     class FakeClient:
-        async def post(self, url, headers=None, json=None):
+        async def post(self, url, headers=None, json=None, follow_redirects=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
@@ -311,7 +378,7 @@ async def test_list_remote_provider_models_probes_dashscope_coding_before_return
             return None
 
     class FakeClient:
-        async def post(self, url, headers=None, json=None):
+        async def post(self, url, headers=None, json=None, follow_redirects=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
@@ -346,7 +413,7 @@ async def test_list_remote_provider_models_tries_later_probe_candidate_after_non
     calls: list[dict[str, object]] = []
 
     class FakeClient:
-        async def post(self, url, headers=None, json=None):
+        async def post(self, url, headers=None, json=None, follow_redirects=None):
             calls.append(
                 {
                     "url": url,
@@ -390,7 +457,7 @@ async def test_list_remote_provider_models_rejects_minimax_when_probe_fails(monk
     response = httpx.Response(400, request=request)
 
     class FakeClient:
-        async def post(self, url, headers=None, json=None):
+        async def post(self, url, headers=None, json=None, follow_redirects=None):
             return response
 
     monkeypatch.setattr(model_config_service_module, "get_http_client", lambda: FakeClient())
@@ -417,7 +484,7 @@ async def test_list_remote_provider_models_stops_probe_immediately_on_auth_failu
     calls: list[dict[str, object]] = []
 
     class FakeClient:
-        async def post(self, url, headers=None, json=None):
+        async def post(self, url, headers=None, json=None, follow_redirects=None):
             calls.append(
                 {
                     "url": url,
@@ -463,7 +530,7 @@ async def test_list_remote_provider_models_uses_saved_custom_base_url(monkeypatc
             return {"data": [{"id": "custom-model"}]}
 
     class FakeClient:
-        async def get(self, url, headers=None, params=None):
+        async def get(self, url, headers=None, params=None, follow_redirects=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["params"] = params

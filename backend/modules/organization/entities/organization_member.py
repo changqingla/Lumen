@@ -58,13 +58,3 @@ class OrganizationMember(Base):
             "joined_at": self.joined_at.isoformat() if self.joined_at else None,
         }
     
-    # === 辅助方法 ===
-    
-    def is_owner(self) -> bool:
-        """检查是否为组织所有者"""
-        return self.role == 'owner'
-    
-    def is_member(self) -> bool:
-        """检查是否为普通成员"""
-        return self.role == 'member'
-

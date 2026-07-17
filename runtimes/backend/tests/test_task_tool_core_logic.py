@@ -20,11 +20,17 @@ class FakeSubagentStatus(Enum):
     TIMED_OUT = "timed_out"
 
 
-def _make_runtime(metadata_overrides: dict | None = None) -> SimpleNamespace:
+def _make_runtime(
+    metadata_overrides: dict | None = None,
+    configurable_overrides: dict | None = None,
+) -> SimpleNamespace:
     # Minimal ToolRuntime-like object; task_tool only reads these three attributes.
     metadata = {"model_name": "ark-model", "trace_id": "trace-1"}
     if metadata_overrides:
         metadata.update(metadata_overrides)
+    configurable = {}
+    if configurable_overrides:
+        configurable.update(configurable_overrides)
     return SimpleNamespace(
         state={
             "sandbox": {"sandbox_id": "local"},
@@ -35,7 +41,7 @@ def _make_runtime(metadata_overrides: dict | None = None) -> SimpleNamespace:
             },
         },
         context={"thread_id": "thread-1"},
-        config={"metadata": metadata},
+        config={"metadata": metadata, "configurable": configurable},
     )
 
 
@@ -80,12 +86,13 @@ def test_task_tool_returns_error_for_unknown_subagent(monkeypatch):
 
 def test_task_tool_emits_running_and_completed_events(monkeypatch):
     config = _make_subagent_config()
-    resolved_model_spec = {
-        "name": "ark-model",
-        "use": "langchain_openai:ChatOpenAI",
-        "supports_vision": True,
-    }
-    runtime = _make_runtime({"resolved_model_spec": resolved_model_spec})
+    runtime = _make_runtime(
+        metadata_overrides={
+            "dynamic_model_token": "legacy-metadata-token",
+            "resolved_model_spec": {"config": {"api_key": "legacy-api-key"}},
+        },
+        configurable_overrides={"dynamic_model_token": "dynamic-token"},
+    )
     events = []
     captured = {}
     get_available_tools = MagicMock(return_value=["tool-a", "tool-b"])
@@ -135,15 +142,16 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     assert captured["task_id"] == "tc-123"
     assert captured["executor_kwargs"]["thread_id"] == "thread-1"
     assert captured["executor_kwargs"]["parent_model"] == "ark-model"
-    assert captured["executor_kwargs"]["parent_model_spec"] == resolved_model_spec
+    assert captured["executor_kwargs"]["parent_dynamic_model_token"] == "dynamic-token"
+    assert "parent_model_spec" not in captured["executor_kwargs"]
     assert captured["executor_kwargs"]["config"].max_turns == 7
     assert "Skills Appendix" in captured["executor_kwargs"]["config"].system_prompt
 
     get_available_tools.assert_called_once_with(
         model_name="ark-model",
-        dynamic_model_token=None,
+        dynamic_model_token="dynamic-token",
         thread_id="thread-1",
-        supports_vision_override=True,
+        supports_vision_override=None,
         subagent_enabled=False,
     )
 
@@ -411,8 +419,17 @@ def test_cleanup_not_called_on_polling_safety_timeout(monkeypatch):
         lambda task_id: cleanup_calls.append(task_id),
     )
 
+    runtime = _make_runtime()
+    runtime.context["usage_context"] = "signed-run-context"
+    retain_calls = []
+    monkeypatch.setattr(
+        task_tool_module,
+        "retain_run_reservation",
+        lambda context: retain_calls.append(context) or True,
+    )
+
     output = task_tool_module.task_tool.func(
-        runtime=_make_runtime(),
+        runtime=runtime,
         description="执行任务",
         prompt="never finish",
         subagent_type="general-purpose",
@@ -422,3 +439,4 @@ def test_cleanup_not_called_on_polling_safety_timeout(monkeypatch):
     assert output.startswith("Task polling timed out after 0 minutes")
     # cleanup should NOT be called because the task is still RUNNING
     assert cleanup_calls == []
+    assert retain_calls == [runtime.context]

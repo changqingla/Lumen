@@ -47,22 +47,22 @@ lumen 中的 MCP 模块，不是一个 MCP server 实现，而是一个 MCP clie
 
 从代码结构上看，MCP 模块被拆成几层，每层职责都比较清晰。
 
-- `backend/src/config/extensions_config.py`
+- `runtimes/backend/src/config/extensions_config.py`
   负责扩展配置模型，MCP server 与技能状态都放在这里统一管理。
 
-- `backend/src/mcp/client.py`
+- `runtimes/backend/src/mcp/client.py`
   负责把配置模型转换成 `langchain-mcp-adapters` 需要的服务连接参数。
 
-- `backend/src/mcp/oauth.py`
+- `runtimes/backend/src/mcp/oauth.py`
   负责 OAuth token 获取、缓存、刷新和请求头注入。
 
-- `backend/src/mcp/tools.py`
+- `runtimes/backend/src/mcp/tools.py`
   负责真正创建多服务 MCP 客户端并拉取工具对象。
 
-- `backend/src/mcp/cache.py`
+- `runtimes/backend/src/mcp/cache.py`
   负责 MCP 工具缓存、懒初始化和基于配置文件修改时间的失效控制。
 
-- `backend/src/gateway/routers/mcp.py`
+- `runtimes/backend/src/gateway/routers/mcp.py`
   负责对外暴露 MCP 配置读写接口，让前端或外部系统能修改配置。
 
 如果只看 `get_mcp_tools()`，会觉得 MCP 很简单；但实际上真正让它可用的是这几层协同，而不是单点实现。
@@ -133,13 +133,14 @@ OAuth 不是在全局层配置，而是挂在单个 MCP server 下。这说明�
 - 环境变量 `LUMEN_EXTENSIONS_CONFIG_PATH`
 - 当前目录下的 `extensions_config.json`
 - 父目录下的 `extensions_config.json`
-- 为兼容旧版本而保留的 `mcp_config.json`
+- 默认运行态路径 `runtimes/config/extensions/extensions_config.json`（仓库只跟踪同目录的 `extensions_config.example.json`）
+- 为兼容旧版本而保留的历史位置与文件名
 
 这个顺序的意义在于：
 
 - 嵌入式调用场景可以直接指定路径
 - 容器部署场景可以通过环境变量控制
-- 本地开发场景可以依赖项目默认路径
+- 本地开发场景可以使用默认运行态路径；文件不存在时以空配置启动
 - 老版本用户可以继续沿用旧文件名，不会直接失效
 
 ### 6.2 环境变量替换的一个小技巧
@@ -152,7 +153,7 @@ OAuth 不是在全局层配置，而是挂在单个 MCP server 下。这说明�
 
 ## 7. 传输参数是如何标准化的
 
-`backend/src/mcp/client.py` 的职责很集中，就是把项目内部的配置模型转换成 `langchain-mcp-adapters` 需要的 server 参数字典。
+`runtimes/backend/src/mcp/client.py` 的职责很集中，就是把项目内部的配置模型转换成 `langchain-mcp-adapters` 需要的 server 参数字典。
 
 ### 7.1 三类传输统一归一
 
@@ -210,7 +211,7 @@ MCP 工具并不是独立挂到 Agent 上的，而是在 `get_available_tools()`
 
 ## 9. MCP 客户端创建逻辑
 
-`backend/src/mcp/tools.py` 是真正把配置变成可用工具的核心层。
+`runtimes/backend/src/mcp/tools.py` 是真正把配置变成可用工具的核心层。
 
 它的主要流程可以概括为：
 
@@ -307,7 +308,7 @@ Token manager 并没有写死响应格式，而是允许配置：
 - 工具发现本身可能是一个网络过程
 - OAuth 初始化也有额外请求成本
 
-因此项目用了 `backend/src/mcp/cache.py` 做一层专门缓存。
+因此项目用了 `runtimes/backend/src/mcp/cache.py` 做一层专门缓存。
 
 ### 12.1 缓存的三种状态
 
@@ -375,7 +376,7 @@ MCP 工具初始化是异步行为，但 `get_cached_mcp_tools()` 对外提供�
 
 ### 14.1 读接口很简单，但作用很重要
 
-Gateway 暴露了 `/api/mcp/config` 的读取接口，返回当前所有 MCP server 配置。这个接口本身不复杂，但它的意义在于让前端或管理端可以查询“系统当前认为自己有哪些 MCP server”。
+Gateway 暴露了 Runtime 内部 `/api/mcp/config` 读取接口，返回当前所有 MCP server 配置。这个接口本身不复杂，但它的意义在于让受限管理流程可以查询“系统当前认为自己有哪些 MCP server”。环境变量、请求头、OAuth secret、refresh token 和额外 token 参数只返回统一掩码，不会把运行时解析后的值暴露给管理面。
 
 ### 14.2 写接口的关键点不在于写文件，而在于保留其他扩展状态
 
@@ -388,13 +389,25 @@ Gateway 暴露了 `/api/mcp/config` 的读取接口，返回当前所有 MCP ser
 - 将结果写回 JSON 文件
 - 重载当前进程内的扩展配置缓存
 
+更新时必须读取未解析环境变量的 JSON 原文。GET 响应中的掩码表示保留原值，
+写入使用同目录临时文件和原子替换。这样切换 MCP 或 Skill 状态时不会把
+`$ENV_VAR` 对应的明文秘密写回磁盘，也不会让另一个进程读到半个 JSON 文件。
+整个读改写还由进程锁和文件锁串行化，MCP 更新与 Skill 启停并发发生时不会
+用各自的旧快照覆盖另一方；替换后会 `fsync` 文件与目录再返回成功。
+
 这里最重要的点是“保留 skills 部分”。因为 `extensions_config.json` 不是只服务 MCP，如果更新 MCP 时把技能状态一起覆盖掉，就会造成无关模块的配置损坏。
 
-### 14.3 为什么路径不存在时要在父目录创建
+### 14.3 为什么扩展配置使用独立目录
 
-若系统还没有现成的扩展配置文件，Gateway 会默认在项目根目录创建 `extensions_config.json`。这说明项目希望 Gateway 能承担“首次初始化扩展配置”的职责，而不是强制用户手工预建文件。
+仓库只提供 `runtimes/config/extensions/extensions_config.example.json` 作为格式参考，真实
+部署文件位于同目录的 `extensions_config.json` 并由 Git 忽略。Docker 部署只把
+`runtimes/config/extensions/` 对应的容器目录作为可写目录挂给 Gateway，主配置目录仍保持只读；
+LangGraph 以只读方式挂载同一目录。目录级挂载也允许 Gateway 通过临时文件
+加原子替换更新配置，避免单文件 bind mount 无法被 `replace()` 的问题，也避免将 MCP
+header、OAuth token 或 stdio 环境变量误提交到源码仓库。
 
-这对管理界面或 API 驱动配置的场景很友好。
+显式部署路径尚不存在时，Gateway 与 LangGraph 先以空配置启动；首次管理更新会以
+`0600` 权限在该路径原子创建配置，LangGraph 的 mtime 缓存会检测文件创建并重载。
 
 ## 15. 子 Agent 为什么也能使用 MCP 工具
 

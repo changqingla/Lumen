@@ -1,218 +1,177 @@
-"""在 LLM 调用前向会话注入图片细节的中间件。"""
+"""Inject bounded image data into one model request without checkpointing it."""
 
-from typing import Annotated, NotRequired, override
+from __future__ import annotations
+
+import base64
+from collections.abc import Awaitable, Callable
+from typing import Any, override
 
 from langchain.agents import AgentState
-from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.runtime import Runtime
 
-from src.agents.thread_state import ViewedImageData, merge_viewed_images
+from src.config.paths import get_paths
+from src.utils.image_files import (
+    MAX_VIEW_IMAGE_BYTES,
+    MAX_VIEW_IMAGES_PER_REQUEST,
+    MAX_VIEW_IMAGES_TOTAL_BYTES,
+    VIEW_IMAGE_SUCCESS_MESSAGE,
+    ImageFileError,
+    load_image_file,
+    resolve_image_path,
+)
 
 
 class ViewImageMiddlewareState(AgentState):
-    """与 `ThreadState` 模式兼容。"""
-
-    viewed_images: Annotated[NotRequired[dict[str, ViewedImageData] | None], merge_viewed_images]
+    """State schema intentionally contains no image bytes or image cache."""
 
 
 class ViewImageMiddleware(AgentMiddleware[ViewImageMiddlewareState]):
-    """负责在模型调用前补充图片上下文。
+    """Add successful ``view_image`` results only to the outgoing model call.
 
-    该中间件会：
-    1. 在每次 LLM 调用前执行
-    2. 检查最近一条 assistant 消息是否包含 `view_image` 工具调用
-    3. 验证该消息中的工具调用是否都已完成（存在对应 ToolMessage）
-    4. 条件满足时构造包含已查看图片细节（含 base64 数据）的 human 消息
-    5. 将消息写入状态，使 LLM 能直接“看到”并分析图片
-
-    这样模型可自动接收并分析通过 `view_image` 读取的图片，
-    无需用户再次显式要求“描述这张图”。
+    The modified message list exists only for the duration of ``handler``. It is
+    never returned as a graph update, so neither raw bytes nor data URLs enter
+    ``ThreadState`` or the checkpointer.
     """
 
     state_schema = ViewImageMiddlewareState
 
-    def _get_last_assistant_message(self, messages: list) -> AIMessage | None:
-        """获取最后一条 AIMessage。
+    def __init__(self, *, enable_image_injection: bool = True) -> None:
+        self.enable_image_injection = bool(enable_image_injection)
 
-        参数：
-            messages: 消息列表。
+    @staticmethod
+    def _is_legacy_checkpointed_image_message(message: Any) -> bool:
+        """Identify image messages persisted by the pre-ephemeral middleware."""
 
-        返回：
-            最后一条 AIMessage；若不存在则返回 None。
-        """
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage):
-                return msg
+        if not isinstance(message, HumanMessage) or not message.id or not isinstance(message.content, list):
+            return False
+        has_marker = any(
+            isinstance(block, dict) and block.get("type") == "text" and str(block.get("text") or "").startswith(("Here are the images you've viewed:", "Here are the details of the images you've viewed:")) for block in message.content
+        )
+        has_data_image = any(isinstance(block, dict) and block.get("type") == "image_url" and isinstance(block.get("image_url"), dict) and str(block["image_url"].get("url") or "").startswith("data:image/") for block in message.content)
+        return has_marker and has_data_image
+
+    def _legacy_message_removals(self, state: ViewImageMiddlewareState) -> dict | None:
+        removals = [RemoveMessage(id=message.id) for message in state.get("messages", []) if self._is_legacy_checkpointed_image_message(message)]
+        return {"messages": removals} if removals else None
+
+    @override
+    def before_agent(self, state: ViewImageMiddlewareState, runtime: Runtime) -> dict | None:
+        return self._legacy_message_removals(state)
+
+    @override
+    async def abefore_agent(self, state: ViewImageMiddlewareState, runtime: Runtime) -> dict | None:
+        return self._legacy_message_removals(state)
+
+    @staticmethod
+    def _last_assistant_message(messages: list[Any]) -> AIMessage | None:
+        for message in reversed(messages):
+            if isinstance(message, AIMessage):
+                return message
         return None
 
-    def _has_view_image_tool(self, message: AIMessage) -> bool:
-        """判断 assistant 消息是否包含 `view_image` 工具调用。
-
-        参数：
-            message: 待检查的 assistant 消息。
-
-        返回：
-            若包含 `view_image` 工具调用则为 True。
-        """
-        if not hasattr(message, "tool_calls") or not message.tool_calls:
-            return False
-
-        return any(tool_call.get("name") == "view_image" for tool_call in message.tool_calls)
-
-    def _all_tools_completed(self, messages: list, assistant_msg: AIMessage) -> bool:
-        """检查目标消息中的工具调用是否全部完成。
-
-        参数：
-            messages: 全量消息列表。
-            assistant_msg: 包含工具调用的 assistant 消息。
-
-        返回：
-            若所有工具调用均有对应 ToolMessage，则返回 True。
-        """
-        if not hasattr(assistant_msg, "tool_calls") or not assistant_msg.tool_calls:
-            return False
-
-        # 收集 assistant 消息中的全部 tool_call_id
-        tool_call_ids = {tool_call.get("id") for tool_call in assistant_msg.tool_calls if tool_call.get("id")}
-
-        # 定位该 assistant 消息在列表中的位置
+    @staticmethod
+    def _completed_tools_after(messages: list[Any], assistant: AIMessage) -> dict[str, ToolMessage]:
         try:
-            assistant_idx = messages.index(assistant_msg)
+            assistant_index = messages.index(assistant)
         except ValueError:
-            return False
+            return {}
+        return {message.tool_call_id: message for message in messages[assistant_index + 1 :] if isinstance(message, ToolMessage) and message.tool_call_id}
 
-        # 收集其后的全部 ToolMessage 对应 ID
-        completed_tool_ids = set()
-        for msg in messages[assistant_idx + 1 :]:
-            if isinstance(msg, ToolMessage) and msg.tool_call_id:
-                completed_tool_ids.add(msg.tool_call_id)
-
-        # 判断是否所有调用都已完成
-        return tool_call_ids.issubset(completed_tool_ids)
-
-    def _create_image_details_message(self, state: ViewImageMiddlewareState) -> list[str | dict]:
-        """构建图片细节消息内容块。
-
-        参数：
-            state: 当前状态，需包含 `viewed_images`。
-
-        返回：
-            可用于 HumanMessage 的内容块列表（文本 + 图片）。
-        """
-        viewed_images = state.get("viewed_images", {})
-        if not viewed_images:
-            return ["No images have been viewed."]
-
-        # 组合“图片信息”消息体
-        content_blocks: list[str | dict] = [{"type": "text", "text": "Here are the images you've viewed:"}]
-
-        for image_path, image_data in viewed_images.items():
-            mime_type = image_data.get("mime_type", "unknown")
-            base64_data = image_data.get("base64", "")
-
-            # 添加文本描述
-            content_blocks.append({"type": "text", "text": f"\n- **{image_path}** ({mime_type})"})
-
-            # 添加实际图片数据，供 LLM 视觉解析
-            if base64_data:
-                content_blocks.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{base64_data}"},
-                    }
-                )
-
-        return content_blocks
-
-    def _should_inject_image_message(self, state: ViewImageMiddlewareState) -> bool:
-        """判断当前回合是否需要注入图片细节消息。
-
-        参数：
-            state: 当前状态。
-
-        返回：
-            需要注入时返回 True。
-        """
-        messages = state.get("messages", [])
-        if not messages:
-            return False
-
-        # 获取最后一条 assistant 消息
-        last_assistant_msg = self._get_last_assistant_message(messages)
-        if not last_assistant_msg:
-            return False
-
-        # 检查是否包含 view_image 工具调用
-        if not self._has_view_image_tool(last_assistant_msg):
-            return False
-
-        # 检查相关工具调用是否均已完成
-        if not self._all_tools_completed(messages, last_assistant_msg):
-            return False
-
-        # 检查是否已注入过图片细节消息
-        # 在最后一条 assistant 消息后查找携带图片说明的 human 消息
-        assistant_idx = messages.index(last_assistant_msg)
-        for msg in messages[assistant_idx + 1 :]:
-            if isinstance(msg, HumanMessage):
-                content_str = str(msg.content)
-                if "Here are the images you've viewed" in content_str or "Here are the details of the images you've viewed" in content_str:
-                    # 已注入过则不重复添加
-                    return False
-
-        return True
-
-    def _inject_image_message(self, state: ViewImageMiddlewareState) -> dict | None:
-        """执行图片细节消息注入。
-
-        参数：
-            state: 当前状态。
-
-        返回：
-            需要注入时返回包含新增 human 消息的状态更新，否则返回 None。
-        """
-        if not self._should_inject_image_message(state):
+    def _temporary_image_message(self, request: ModelRequest) -> HumanMessage | None:
+        assistant = self._last_assistant_message(request.messages)
+        if assistant is None or not assistant.tool_calls:
             return None
 
-        # 构建包含文本与图片内容的细节消息
-        image_content = self._create_image_details_message(state)
+        image_calls = [call for call in assistant.tool_calls if call.get("name") == "view_image"]
+        if not image_calls:
+            return None
+        completed = self._completed_tools_after(request.messages, assistant)
+        if not all(call.get("id") in completed for call in assistant.tool_calls if call.get("id")):
+            return None
 
-        # 创建混合内容（文本 + 图片）的 human 消息
-        human_msg = HumanMessage(content=image_content)
+        context = getattr(request.runtime, "context", None) or {}
+        thread_id = str(context.get("thread_id") or "").strip()
+        if not thread_id:
+            return None
 
-        print("[ViewImageMiddleware] Injecting image details message with images before LLM call")
+        content: list[str | dict] = [{"type": "text", "text": "Here are the images you've viewed:"}]
+        total_bytes = 0
+        included = 0
+        omitted = 0
+        seen_paths: set[str] = set()
 
-        # 返回包含新增消息的状态更新
-        return {"messages": [human_msg]}
+        for call in image_calls:
+            tool_call_id = str(call.get("id") or "")
+            tool_message = completed.get(tool_call_id)
+            if tool_message is None or tool_message.status == "error" or str(tool_message.content) != VIEW_IMAGE_SUCCESS_MESSAGE:
+                continue
+            if included >= MAX_VIEW_IMAGES_PER_REQUEST:
+                omitted += 1
+                continue
+
+            args = call.get("args")
+            image_path = str(args.get("image_path") or "").strip() if isinstance(args, dict) else ""
+            if image_path in seen_paths:
+                continue
+            seen_paths.add(image_path)
+            try:
+                path = resolve_image_path(get_paths(), thread_id, image_path)
+                loaded = load_image_file(path, max_bytes=MAX_VIEW_IMAGE_BYTES)
+            except ImageFileError:
+                omitted += 1
+                continue
+            if total_bytes + len(loaded.data) > MAX_VIEW_IMAGES_TOTAL_BYTES:
+                omitted += 1
+                continue
+
+            total_bytes += len(loaded.data)
+            included += 1
+            encoded = base64.b64encode(loaded.data).decode("ascii")
+            content.extend(
+                [
+                    {"type": "text", "text": f"\n- **{image_path}** ({loaded.mime_type})"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{loaded.mime_type};base64,{encoded}"},
+                    },
+                ]
+            )
+
+        if included == 0 and omitted == 0:
+            return None
+        if included == 0:
+            return HumanMessage(content="The requested image data was unavailable or exceeded request limits.")
+        if omitted:
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"\n{omitted} additional image(s) were omitted because they were unavailable or exceeded request limits.",
+                }
+            )
+        return HumanMessage(content=content)
+
+    def _request_with_images(self, request: ModelRequest) -> ModelRequest:
+        if not self.enable_image_injection:
+            return request
+        image_message = self._temporary_image_message(request)
+        if image_message is None:
+            return request
+        return request.override(messages=[*request.messages, image_message])
 
     @override
-    def before_model(self, state: ViewImageMiddlewareState, runtime: Runtime) -> dict | None:
-        """同步钩子：在模型调用前按需注入图片细节消息。
-
-        会检查上一轮 `view_image` 工具调用是否全部完成；
-        若完成则注入一条含图片细节的 human 消息，供模型分析。
-
-        参数：
-            state: 当前状态。
-            runtime: 运行时上下文（接口要求，当前未使用）。
-
-        返回：
-            需要注入时返回状态更新，否则返回 None。
-        """
-        return self._inject_image_message(state)
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return handler(self._request_with_images(request))
 
     @override
-    async def abefore_model(self, state: ViewImageMiddlewareState, runtime: Runtime) -> dict | None:
-        """异步钩子：在模型调用前按需注入图片细节消息。
-
-        逻辑与 `before_model` 一致，仅用于异步调用链。
-
-        参数：
-            state: 当前状态。
-            runtime: 运行时上下文（接口要求，当前未使用）。
-
-        返回：
-            需要注入时返回状态更新，否则返回 None。
-        """
-        return self._inject_image_message(state)
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        return await handler(self._request_with_images(request))

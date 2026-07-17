@@ -132,9 +132,9 @@ class FeishuChannel(Channel):
                 log_level=lark.LogLevel.INFO,
             )
             ws_client.start()
-        except Exception:
+        except Exception as exc:
             if self._running:
-                logger.exception("Feishu WebSocket error")
+                logger.error("Feishu WebSocket error (%s)", type(exc).__name__)
 
     async def stop(self) -> None:
         self._running = False
@@ -150,9 +150,8 @@ class FeishuChannel(Channel):
             return
 
         logger.info(
-            "[Feishu] sending reply: chat_id=%s, thread_ts=%s, text_len=%d",
-            msg.chat_id,
-            msg.thread_ts,
+            "[Feishu] sending reply: threaded=%s, text_len=%d",
+            bool(msg.thread_ts),
             len(msg.text),
         )
         content = self._build_card_content(msg.text)
@@ -179,15 +178,19 @@ class FeishuChannel(Channel):
                 if attempt < _max_retries - 1:
                     delay = 2**attempt  # 1 秒、2 秒
                     logger.warning(
-                        "[Feishu] send failed (attempt %d/%d), retrying in %ds: %s",
+                        "[Feishu] send failed (attempt %d/%d), retrying in %ds (%s)",
                         attempt + 1,
                         _max_retries,
                         delay,
-                        exc,
+                        type(exc).__name__,
                     )
                     await asyncio.sleep(delay)
 
-        logger.error("[Feishu] send failed after %d attempts: %s", _max_retries, last_exc)
+        logger.error(
+            "[Feishu] send failed after %d attempts (%s)",
+            _max_retries,
+            type(last_exc).__name__,
+        )
         raise last_exc  # type: ignore[misc]
 
     async def send_file(self, msg: OutboundMessage, attachment: ResolvedAttachment) -> bool:
@@ -196,10 +199,10 @@ class FeishuChannel(Channel):
 
         # 检查大小限制（图片 10MB，文件 30MB）
         if attachment.is_image and attachment.size > 10 * 1024 * 1024:
-            logger.warning("[Feishu] image too large (%d bytes), skipping: %s", attachment.size, attachment.filename)
+            logger.warning("[Feishu] image too large (%d bytes), skipping", attachment.size)
             return False
         if not attachment.is_image and attachment.size > 30 * 1024 * 1024:
-            logger.warning("[Feishu] file too large (%d bytes), skipping: %s", attachment.size, attachment.filename)
+            logger.warning("[Feishu] file too large (%d bytes), skipping", attachment.size)
             return False
 
         try:
@@ -219,10 +222,13 @@ class FeishuChannel(Channel):
                 request = self._CreateMessageRequest.builder().receive_id_type("chat_id").request_body(self._CreateMessageRequestBody.builder().receive_id(msg.chat_id).msg_type(msg_type).content(content).build()).build()
                 await asyncio.to_thread(self._api_client.im.v1.message.create, request)
 
-            logger.info("[Feishu] file sent: %s (type=%s)", attachment.filename, msg_type)
+            logger.info("[Feishu] file sent (type=%s)", msg_type)
             return True
-        except Exception:
-            logger.exception("[Feishu] failed to upload/send file: %s", attachment.filename)
+        except Exception as exc:
+            logger.error(
+                "[Feishu] failed to upload/send file (%s)",
+                type(exc).__name__,
+            )
             return False
 
     async def _upload_image(self, path) -> str:
@@ -231,7 +237,7 @@ class FeishuChannel(Channel):
             request = self._CreateImageRequest.builder().request_body(self._CreateImageRequestBody.builder().image_type("message").image(f).build()).build()
             response = await asyncio.to_thread(self._api_client.im.v1.image.create, request)
         if not response.success():
-            raise RuntimeError(f"Feishu image upload failed: code={response.code}, msg={response.msg}")
+            raise RuntimeError("Feishu image upload failed")
         return response.data.image_key
 
     async def _upload_file(self, path, filename: str) -> str:
@@ -252,7 +258,7 @@ class FeishuChannel(Channel):
             request = self._CreateFileRequest.builder().request_body(self._CreateFileRequestBody.builder().file_type(file_type).file_name(filename).file(f).build()).build()
             response = await asyncio.to_thread(self._api_client.im.v1.file.create, request)
         if not response.success():
-            raise RuntimeError(f"Feishu file upload failed: code={response.code}, msg={response.msg}")
+            raise RuntimeError("Feishu file upload failed")
         return response.data.file_key
 
     # -- 消息格式化 ----------------------------------------------------------
@@ -279,9 +285,12 @@ class FeishuChannel(Channel):
         try:
             request = self._CreateMessageReactionRequest.builder().message_id(message_id).request_body(self._CreateMessageReactionRequestBody.builder().reaction_type(self._Emoji.builder().emoji_type(emoji_type).build()).build()).build()
             await asyncio.to_thread(self._api_client.im.v1.message_reaction.create, request)
-            logger.info("[Feishu] reaction '%s' added to message %s", emoji_type, message_id)
-        except Exception:
-            logger.exception("[Feishu] failed to add reaction '%s' to message %s", emoji_type, message_id)
+            logger.info("[Feishu] reaction added")
+        except Exception as exc:
+            logger.error(
+                "[Feishu] failed to add reaction (%s)",
+                type(exc).__name__,
+            )
 
     async def _send_running_reply(self, message_id: str) -> None:
         """在线程中回复一条“处理中...”提示。"""
@@ -291,9 +300,12 @@ class FeishuChannel(Channel):
             content = self._build_card_content("Working on it...")
             request = self._ReplyMessageRequest.builder().message_id(message_id).request_body(self._ReplyMessageRequestBody.builder().msg_type("interactive").content(content).reply_in_thread(True).build()).build()
             await asyncio.to_thread(self._api_client.im.v1.message.reply, request)
-            logger.info("[Feishu] 'Working on it......' reply sent for message %s", message_id)
-        except Exception:
-            logger.exception("[Feishu] failed to send running reply for message %s", message_id)
+            logger.info("[Feishu] running reply sent")
+        except Exception as exc:
+            logger.error(
+                "[Feishu] failed to send running reply (%s)",
+                type(exc).__name__,
+            )
 
     # -- 内部 ---------------------------------------------------------------
 
@@ -303,7 +315,11 @@ class FeishuChannel(Channel):
         try:
             exc = fut.exception()
             if exc:
-                logger.error("[Feishu] %s failed for msg_id=%s: %s", name, msg_id, exc)
+                logger.error(
+                    "[Feishu] %s failed (%s)",
+                    name,
+                    type(exc).__name__,
+                )
         except Exception:
             pass
 
@@ -324,12 +340,9 @@ class FeishuChannel(Channel):
             content = json.loads(message.content)
             text = content.get("text", "").strip()
             logger.info(
-                "[Feishu] parsed message: chat_id=%s, msg_id=%s, root_id=%s, sender=%s, text=%r",
-                chat_id,
-                msg_id,
-                root_id,
-                sender_id,
-                text[:100] if text else "",
+                "[Feishu] parsed message: threaded=%s, text_len=%d",
+                bool(root_id),
+                len(text),
             )
 
             if not text:
@@ -357,7 +370,10 @@ class FeishuChannel(Channel):
 
             # 在异步事件循环上调度
             if self._main_loop and self._main_loop.is_running():
-                logger.info("[Feishu] publishing inbound message to bus (type=%s, msg_id=%s)", msg_type.value, msg_id)
+                logger.info(
+                    "[Feishu] publishing inbound message to bus (type=%s)",
+                    msg_type.value,
+                )
                 # 调度所有协程，并给 Future 绑定错误日志回调
                 for name, coro in [
                     ("add_reaction", self._add_reaction(msg_id, "OK")),
@@ -368,5 +384,8 @@ class FeishuChannel(Channel):
                     fut.add_done_callback(lambda f, n=name, mid=msg_id: self._log_future_error(f, n, mid))
             else:
                 logger.warning("[Feishu] main loop not running, cannot publish inbound message")
-        except Exception:
-            logger.exception("[Feishu] error processing message")
+        except Exception as exc:
+            logger.error(
+                "[Feishu] error processing message (%s)",
+                type(exc).__name__,
+            )

@@ -7,7 +7,7 @@
 把知识库、长上下文对话、文档解析、笔记沉淀与运行时编排放进同一个可部署系统里。  
 它不是一个只会“聊天”的 Demo，而是一个为真实产品形态、真实团队协作和真实运行环境设计的 AI Workspace。
 
-[English](./README.en.md) · [在线体验](https://ireader.online/) · [后端说明](./backend/README.md) · [仓库结构](./docs/%E4%BB%93%E5%BA%93%E7%9B%AE%E5%BD%95%E7%BB%93%E6%9E%84%E8%AF%B4%E6%98%8E.md)
+[English](./README.en.md) · [在线体验](https://ireader.online/) · [后端说明](./backend/README.md) · [仓库结构](./docs/repository-structure.md)
 
 <p>
   <img alt="license" src="https://img.shields.io/badge/License-Apache_2.0-111827?style=for-the-badge">
@@ -100,12 +100,11 @@ backend/                 FastAPI 业务后端
 services/rag/            文档解析、切块、检索、索引服务
 runtimes/                Runtime 运行目录与辅助能力
 docker/                  本地部署入口（Compose / Nginx / init-db）
-infra/                   非 Compose 基础设施资源
 shared/                  跨部署共享配置与基础库
 docs/                    架构说明、迁移文档与设计资料
 ```
 
-详细说明见 [docs/仓库目录结构说明.md](./docs/%E4%BB%93%E5%BA%93%E7%9B%AE%E5%BD%95%E7%BB%93%E6%9E%84%E8%AF%B4%E6%98%8E.md)。
+详细说明见 [仓库结构与职责边界](./docs/repository-structure.md)。
 
 ## 快速开始
 
@@ -126,9 +125,16 @@ cd Lumen
 
 ```bash
 cp backend/.env.template backend/.env
+./docker/init-env.sh
+cp runtimes/config/.env.example runtimes/config/.env
+cp runtimes/config/config.example.yaml runtimes/config/config.yaml
 ```
 
-补全 `backend/.env` 中的密钥和服务配置。运行时相关配置位于 `runtimes/config/`。
+补全 `backend/.env`、`docker/.env`、`runtimes/config/.env` 和
+`runtimes/config/config.yaml` 中的模型与部署参数。`init-env.sh` 使用 Compose 自己的
+dotenv 语义创建或升级 `docker/.env`，补齐内部服务 token 与不符合当前部署约束的
+Redis 凭据；已有 PostgreSQL/MinIO 凭据不会被自动轮换，生成值也不会在终端回显。
+不要提交这些本地配置文件。
 
 ### 3. 构建前端
 
@@ -140,17 +146,22 @@ npm run build
 ### 4. 启动服务
 
 ```bash
-cd docker
-docker compose up -d
+docker build -f docker/backend-paper-translation.Dockerfile -t lumen-backend:paper-translation .
+docker compose --env-file docker/.env -f docker/docker-compose.yml up -d
 ```
 
 ### 5. 访问地址
 
-- Web: `http://localhost`
+- Web（默认）: `https://<docker/.env 中的 LUMEN_SERVER_NAME>`
+- Web（配置证书且显式设置 `LUMEN_HTTP_MODE=serve` 时也提供）: `http://localhost`
 - Backend API: `http://localhost:13000`
 - API Docs: `http://localhost:13000/api/docs`
-- Gateway Docs: `http://localhost:8001/docs`
-- LangGraph Docs: `http://localhost:2024`
+
+Nginx 默认在 80 端口仅提供 ACME challenge，并将其他请求用 `308` 重定向到 HTTPS。
+`serve` 模式仍会加载 443 证书；完全无证书的本地前端开发请使用 `npm run web:dev`。
+Gateway、LangGraph 和 Backend 排障端口默认只绑定 `127.0.0.1`，浏览器运行请求统一
+经过业务后端的会话级授权代理。完整的 TLS 与本地 HTTP 模式说明见
+[Docker 启动说明](./docker/README.md)。
 
 ## 开发命令
 
@@ -160,6 +171,7 @@ docker compose up -d
 npm install
 npm run web:dev
 npm run web:check
+npm run web:test
 npm run web:build
 ```
 

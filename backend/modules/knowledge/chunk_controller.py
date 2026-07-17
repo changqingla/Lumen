@@ -17,6 +17,18 @@ router = APIRouter(prefix="/chunks", tags=["Chunk Management"])
 ChunkService = None
 
 
+def _chunk_internal_error(operation: str, error: BaseException) -> HTTPException:
+    logger.error(
+        "chunk_api operation=%s error_type=%s",
+        operation,
+        type(error).__name__,
+    )
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Chunk operation failed",
+    )
+
+
 def _get_chunk_service():
     global ChunkService
     if ChunkService is None:
@@ -39,12 +51,8 @@ async def list_chunks(
         return {"success": True, "data": result}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Failed to list chunks")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        )
+    except Exception as exc:
+        raise _chunk_internal_error("list", exc) from exc
 
 
 @router.post("/search")
@@ -59,12 +67,8 @@ async def search_chunks(
         return {"success": True, "data": result}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Failed to search chunks")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        )
+    except Exception as exc:
+        raise _chunk_internal_error("search", exc) from exc
 
 
 @router.post("/edit")
@@ -79,12 +83,8 @@ async def edit_chunk(
         return {"success": True, "data": result}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Failed to edit chunk")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        )
+    except Exception as exc:
+        raise _chunk_internal_error("edit", exc) from exc
 
 
 @router.post("/batch-edit")
@@ -99,9 +99,5 @@ async def batch_edit_chunks(
         return {"success": True, "data": result}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception("Failed to batch edit chunks")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        )
+    except Exception as exc:
+        raise _chunk_internal_error("batch_edit", exc) from exc

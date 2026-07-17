@@ -1,48 +1,36 @@
-import json
 import logging
-from pathlib import Path
-from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from src.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
+from src.config.extensions_config import (
+    ExtensionsConfig,
+    McpOAuthConfig,
+    McpServerConfig,
+    get_extensions_config,
+    reload_extensions_config,
+    update_raw_extensions_config,
+)
+from src.config.extensions_secrets import (
+    redact_mcp_configuration,
+    restore_mcp_server_secrets,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["mcp"])
 
 
-class McpOAuthConfigResponse(BaseModel):
+class McpOAuthConfigResponse(McpOAuthConfig):
     """模型上下文协议（MCP）服务的 OAuth 配置模型。"""
 
-    enabled: bool = Field(default=True, description="是否启用 OAuth 令牌注入")
-    token_url: str = Field(default="", description="OAuth token 端点 URL")
-    grant_type: Literal["client_credentials", "refresh_token"] = Field(default="client_credentials", description="OAuth 授权类型")
-    client_id: str | None = Field(default=None, description="OAuth 客户端 ID")
-    client_secret: str | None = Field(default=None, description="OAuth 客户端密钥")
-    refresh_token: str | None = Field(default=None, description="OAuth 刷新令牌")
-    scope: str | None = Field(default=None, description="OAuth 作用域（scope）")
-    audience: str | None = Field(default=None, description="OAuth audience 值")
-    token_field: str = Field(default="access_token", description="响应中 access token 所在字段")
-    token_type_field: str = Field(default="token_type", description="响应中 token 类型所在字段")
-    expires_in_field: str = Field(default="expires_in", description="响应中有效期秒数字段")
-    default_token_type: str = Field(default="Bearer", description="响应缺失 token_type 时使用的默认值")
-    refresh_skew_seconds: int = Field(default=60, description="在到期前多少秒触发刷新")
-    extra_token_params: dict[str, str] = Field(default_factory=dict, description="发送给 token 端点的额外表单参数")
+    model_config = ConfigDict(extra="allow")
 
 
-class McpServerConfigResponse(BaseModel):
+class McpServerConfigResponse(McpServerConfig):
     """模型上下文协议（MCP）服务配置响应模型。"""
 
-    enabled: bool = Field(default=True, description="是否启用该 MCP 服务")
-    type: str = Field(default="stdio", description="传输类型：`stdio`、`sse` 或 `http`")
-    command: str | None = Field(default=None, description="启动 MCP 服务的命令（stdio 类型）")
-    args: list[str] = Field(default_factory=list, description="传给启动命令的参数（stdio 类型）")
-    env: dict[str, str] = Field(default_factory=dict, description="MCP 服务环境变量")
-    url: str | None = Field(default=None, description="MCP 服务地址（sse 或 http 类型）")
-    headers: dict[str, str] = Field(default_factory=dict, description="请求头（sse 或 http 类型）")
     oauth: McpOAuthConfigResponse | None = Field(default=None, description="MCP HTTP/SSE 服务的 OAuth 配置")
-    description: str = Field(default="", description="该 MCP 服务能力的人类可读说明")
+    model_config = ConfigDict(extra="allow")
 
 
 class McpConfigResponse(BaseModel):
@@ -63,6 +51,12 @@ class McpConfigUpdateRequest(BaseModel):
     )
 
 
+def _config_to_response(config: ExtensionsConfig) -> McpConfigResponse:
+    return McpConfigResponse.model_validate(
+        {"mcp_servers": redact_mcp_configuration(config)}
+    )
+
+
 @router.get(
     "/mcp/config",
     response_model=McpConfigResponse,
@@ -77,7 +71,7 @@ async def get_mcp_configuration() -> McpConfigResponse:
     """
     config = get_extensions_config()
 
-    return McpConfigResponse(mcp_servers={name: McpServerConfigResponse(**server.model_dump()) for name, server in config.mcp_servers.items()})
+    return _config_to_response(config)
 
 
 @router.put(
@@ -104,36 +98,33 @@ async def update_mcp_configuration(request: McpConfigUpdateRequest) -> McpConfig
         HTTPException: 配置写入失败时返回 500。
     """
     try:
-        # 获取当前配置路径（若不存在则确定新写入位置）
-        config_path = ExtensionsConfig.resolve_config_path()
+        def apply_update(config_data: dict) -> None:
+            existing_servers = config_data.get("mcpServers", {})
+            if not isinstance(existing_servers, dict):
+                existing_servers = {}
+            config_data["mcpServers"] = {
+                name: restore_mcp_server_secrets(
+                    server.model_dump(),
+                    existing_servers.get(name, {}) if isinstance(existing_servers.get(name), dict) else {},
+                )
+                for name, server in request.mcp_servers.items()
+            }
 
-        # 若无现有配置文件，则在父目录（项目根）创建
-        if config_path is None:
-            config_path = Path.cwd().parent / "extensions_config.json"
-            logger.info(f"未找到现有 extensions 配置，将在此创建新文件：{config_path}")
+        update_raw_extensions_config(apply_update)
 
-        # 读取当前配置，保留 skills 部分不被覆盖
-        current_config = get_extensions_config()
-
-        # 转为可 JSON 序列化的数据结构
-        config_data = {
-            "mcpServers": {name: server.model_dump() for name, server in request.mcp_servers.items()},
-            "skills": {name: {"enabled": skill.enabled} for name, skill in current_config.skills.items()},
-        }
-
-        # 写回配置文件
-        with open(config_path, "w") as f:
-            json.dump(config_data, f, indent=2)
-
-        logger.info(f"MCP 配置已更新并写入：{config_path}")
+        logger.info("MCP 配置已更新")
 
         # 注意：无需在此处手动重置 MCP 工具缓存。
         # 图编排服务进程（LangGraph Server，独立进程）会通过 mtime 变更自动触发重新初始化。
 
         # 重载配置并更新全局缓存
         reloaded_config = reload_extensions_config()
-        return McpConfigResponse(mcp_servers={name: McpServerConfigResponse(**server.model_dump()) for name, server in reloaded_config.mcp_servers.items()})
+        return _config_to_response(reloaded_config)
 
-    except Exception as e:
-        logger.error(f"更新 MCP 配置失败：{e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"更新 MCP 配置失败：{str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("更新 MCP 配置失败（%s）", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="更新 MCP 配置失败") from exc

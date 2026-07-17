@@ -1,9 +1,12 @@
 import base64
 import json
+import os
+
+os.environ["DEBUG"] = "false"
 
 import pytest
 
-from schemas.workspace import WorkspaceAttachmentInput, WorkspaceAttachmentRecord
+from schemas.workspace import WorkspaceAttachmentInput
 from modules.chat.services import workspace_service as workspace_module
 from modules.chat.services.workspace_service import WorkspaceService
 
@@ -30,7 +33,7 @@ async def test_workspace_service_registers_inline_image_and_manifest(monkeypatch
         session_id="11111111-1111-1111-1111-111111111111",
         user_id="22222222-2222-2222-2222-222222222222",
     )
-    assets = await service.resolve_request_attachments(
+    assets = await service.resolve_request_assets(
         attachments=[],
         image_data_urls=[_build_data_url(b"fake-image-bytes")],
     )
@@ -48,9 +51,6 @@ async def test_workspace_service_registers_inline_image_and_manifest(monkeypatch
     assert uploads[0][0] == asset.object_path
     assert uploads[0][2] == "image/png"
     assert uploads[1][0] == service.manifest_object_path
-    brief = service.build_agent_workspace_brief(assets)
-    assert asset.workspace_path in brief
-    assert "格式转换" in brief
 
 
 @pytest.mark.asyncio
@@ -93,10 +93,10 @@ async def test_workspace_service_restores_existing_manifest(monkeypatch):
     monkeypatch.setattr(workspace_module, "object_exists", fake_object_exists)
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
 
-    assets = await service.resolve_request_attachments(attachments=[], image_data_urls=[])
+    manifest = await service.load_manifest()
 
-    assert len(assets) == 1
-    assert assets[0].workspace_path == "input/report.docx"
+    assert len(manifest.assets) == 1
+    assert manifest.assets[0].workspace_path == "input/report.docx"
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ async def test_workspace_service_avoids_overwriting_same_named_attachment(monkey
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
     monkeypatch.setattr(workspace_module, "upload_file", fake_upload_file)
 
-    assets = await service.resolve_request_attachments(
+    assets = await service.resolve_request_assets(
         attachments=[
             WorkspaceAttachmentInput(
                 name="report.docx",
@@ -158,9 +158,11 @@ async def test_workspace_service_avoids_overwriting_same_named_attachment(monkey
         image_data_urls=[],
     )
 
-    workspace_paths = sorted(asset.workspace_path for asset in assets)
-    assert workspace_paths == ["input/report-2.docx", "input/report.docx"]
+    assert [asset.workspace_path for asset in assets] == ["input/report-2.docx"]
     assert saved_manifests
+    saved_manifest = json.loads(saved_manifests[-1][1].decode("utf-8"))
+    workspace_paths = sorted(item["workspace_path"] for item in saved_manifest["assets"])
+    assert workspace_paths == ["input/report-2.docx", "input/report.docx"]
 
 
 @pytest.mark.asyncio
@@ -212,7 +214,7 @@ async def test_workspace_service_preserves_asset_identity_for_same_object(monkey
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
     monkeypatch.setattr(workspace_module, "upload_file", fake_upload_file)
 
-    assets = await service.resolve_request_attachments(
+    assets = await service.resolve_request_assets(
         attachments=[
             WorkspaceAttachmentInput(
                 name="report.docx",
@@ -283,7 +285,7 @@ async def test_workspace_service_refreshes_inferred_capabilities_when_mime_becom
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
     monkeypatch.setattr(workspace_module, "upload_file", fake_upload_file)
 
-    assets = await service.resolve_request_attachments(
+    assets = await service.resolve_request_assets(
         attachments=[
             WorkspaceAttachmentInput(
                 name="notes",
@@ -378,7 +380,7 @@ async def test_workspace_service_merges_latest_manifest_before_save(monkeypatch)
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
     monkeypatch.setattr(workspace_module, "upload_file", fake_upload_file)
 
-    assets = await service.resolve_request_attachments(
+    assets = await service.resolve_request_assets(
         attachments=[
             WorkspaceAttachmentInput(
                 name="new.txt",
@@ -389,7 +391,7 @@ async def test_workspace_service_merges_latest_manifest_before_save(monkeypatch)
         image_data_urls=[],
     )
 
-    assert len(assets) == 2
+    assert [asset.workspace_path for asset in assets] == ["input/new.txt"]
     assert saved_payloads
     saved_paths = {item["workspace_path"] for item in saved_payloads[-1]["assets"]}
     assert "derived/remote.txt" in saved_paths
@@ -435,8 +437,10 @@ async def test_workspace_service_rejects_manifest_asset_outside_session_workspac
     monkeypatch.setattr(workspace_module, "object_exists", fake_object_exists)
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
 
-    with pytest.raises(ValueError, match="workspace_manifest_invalid_asset"):
+    with pytest.raises(ValueError) as exc_info:
         await service.load_manifest()
+    assert str(exc_info.value) == "workspace_manifest_invalid_asset"
+    assert "other-user" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -464,7 +468,7 @@ async def test_workspace_service_rejects_non_files_namespace_attachment(monkeypa
     monkeypatch.setattr(workspace_module, "download_file", fake_download_file)
 
     with pytest.raises(ValueError, match="不属于当前会话工作区"):
-        await service.resolve_request_attachments(
+        await service.resolve_request_assets(
             attachments=[
                 WorkspaceAttachmentInput(
                     name="task-state.json",
@@ -473,36 +477,3 @@ async def test_workspace_service_rejects_non_files_namespace_attachment(monkeypa
             ],
             image_data_urls=[],
         )
-
-
-def test_workspace_service_builds_compact_workspace_brief():
-    service = WorkspaceService(
-        session_id="90909090-9090-9090-9090-909090909090",
-        user_id="10101010-1010-1010-1010-101010101010",
-    )
-    assets = [
-        WorkspaceAttachmentRecord(
-            attachment_id=f"att_{index}",
-            session_id=service.session_id,
-            user_id=service.user_id,
-            name=f"file-{index}.txt",
-            object_path=f"{service.files_prefix}/input/file-{index}.txt",
-            workspace_path=f"input/file-{index}.txt",
-            mime_type="text/plain",
-            source_kind="user_upload",
-            role="source",
-            input_mode="workspace_file",
-            size_bytes=100 + index,
-            sha256=f"sha-{index}",
-            created_at="2026-03-15T00:00:00+00:00",
-            metadata={},
-        )
-        for index in range(7)
-    ]
-
-    brief = service.build_agent_workspace_brief(assets)
-
-    assert "当前会话工作区共有 7 个真实文件" in brief
-    assert "其余 2 个文件未在此展开" in brief
-    assert "input/file-0.txt" in brief
-    assert "input/file-6.txt" not in brief

@@ -39,10 +39,11 @@ import math
 import os
 import re
 import string
-import sys
+
 from hanziconv import HanziConv  # 繁简体转换
 from nltk import word_tokenize  # 英文分词
 from nltk.stem import PorterStemmer, WordNetLemmatizer  # 英文词干提取和词形还原
+from core.cache_paths import atomic_save_trie_cache, get_rag_cache_directory
 from core.utils import get_project_base_directory
 
 
@@ -103,7 +104,7 @@ class RagTokenizer:
             fnm (str): 词典文件路径
             save_cache (bool): 是否保存字典树缓存文件
         """
-        logging.info(f"[HUQIE]:Build trie from {fnm}")
+        logging.info("[HUQIE]:Building trie")
         try:
             of = open(fnm, "r", encoding='utf-8')
             while True:
@@ -119,7 +120,7 @@ class RagTokenizer:
                 line = re.split(r"[ \t]+", line)
                 # 检查格式是否正确（至少需要3个字段）
                 if len(line) < 3:
-                    logging.warning(f"[HUQIE]:Skip invalid line: {line}")
+                    logging.warning("[HUQIE]:Skipping invalid dictionary line")
                     continue
                 k = self.key_(line[0])  # 生成正向查找键
                 # 将频率转换为对数值存储（节省空间）
@@ -133,11 +134,14 @@ class RagTokenizer:
             # 保存字典树缓存文件以提高下次加载速度
             if save_cache:
                 dict_file_cache = fnm + ".trie"
-                logging.info(f"[HUQIE]:Build trie cache to {dict_file_cache}")
-                self.trie_.save(dict_file_cache)
+                logging.info("[HUQIE]:Saving trie cache")
+                atomic_save_trie_cache(self.trie_, dict_file_cache)
             of.close()
-        except Exception:
-            logging.exception(f"[HUQIE]:Build trie {fnm} failed")
+        except Exception as error:
+            logging.error(
+                "[HUQIE]:Trie build failed: error_type=%s",
+                type(error).__name__,
+            )
 
     def __init__(self, debug=False):
         """
@@ -159,7 +163,7 @@ class RagTokenizer:
         self.SPLIT_CHAR = r"""([ ,\.<>/?;:'\[\]\\`!@#$%^&*\(\)\{\}\|_+=《》，。？、；''：""【】~！￥%……（）——-]+|[a-zA-Z0-9,\.-]+)"""
 
         # 设置词典文件路径
-        trie_file_name = self.DIR_ + ".txt.trie"  # 字典树缓存文件
+        trie_file_name = str(get_rag_cache_directory() / "huqie.txt.trie")
         base_dict_path = self.DIR_ + ".txt"  # 基础词典文件
         custom_dict_path = os.path.join(get_project_base_directory(), "core/res", "custom_dict.txt")  # 自定义词典
 
@@ -168,7 +172,7 @@ class RagTokenizer:
         
         if need_rebuild:
             # 需要重建字典树缓存
-            logging.info(f"[HUQIE]:Building trie cache (base dict updated or custom dict changed)")
+            logging.info("[HUQIE]:Building trie cache")
             self.trie_ = datrie.Trie(string.printable)  # 创建新的字典树
 
             # 加载基础词典，但不单独保存缓存
@@ -176,31 +180,34 @@ class RagTokenizer:
 
             # 加载自定义词典（如果存在）
             if os.path.exists(custom_dict_path):
-                logging.info(f"[HUQIE]:Loading custom dictionary from {custom_dict_path}")
+                logging.info("[HUQIE]:Loading custom dictionary")
                 self.addUserDict(custom_dict_path)
-                logging.info(f"[HUQIE]:Custom dictionary loaded successfully")
+                logging.info("[HUQIE]:Custom dictionary loaded successfully")
 
             # 保存包含基础词典和自定义词典的完整字典树缓存
-            logging.info(f"[HUQIE]:Saving complete trie cache to {trie_file_name}")
-            self.trie_.save(trie_file_name)
+            logging.info("[HUQIE]:Saving complete trie cache")
+            atomic_save_trie_cache(self.trie_, trie_file_name)
         else:
             try:
                 # 从缓存文件加载字典树（更快）
-                logging.info(f"[HUQIE]:Loading trie from cache {trie_file_name}")
+                logging.info("[HUQIE]:Loading trie from cache")
                 self.trie_ = datrie.Trie.load(trie_file_name)
-                logging.info(f"[HUQIE]:Trie cache loaded successfully")
-            except Exception:
+                logging.info("[HUQIE]:Trie cache loaded successfully")
+            except Exception as error:
                 # 缓存加载失败，重新构建字典树
-                logging.exception(f"[HUQIE]:Fail to load trie file {trie_file_name}, rebuilding trie")
+                logging.warning(
+                    "[HUQIE]:Trie cache load failed; rebuilding: error_type=%s",
+                    type(error).__name__,
+                )
                 self.trie_ = datrie.Trie(string.printable)
                 self.loadDict_(base_dict_path, save_cache=False)
                 if os.path.exists(custom_dict_path):
-                    logging.info(f"[HUQIE]:Loading custom dictionary from {custom_dict_path}")
+                    logging.info("[HUQIE]:Loading custom dictionary")
                     self.addUserDict(custom_dict_path)
-                    logging.info(f"[HUQIE]:Custom dictionary loaded successfully")
+                    logging.info("[HUQIE]:Custom dictionary loaded successfully")
                 # 保存重建的完整字典树缓存
-                logging.info(f"[HUQIE]:Saving complete trie cache to {trie_file_name}")
-                self.trie_.save(trie_file_name)
+                logging.info("[HUQIE]:Saving complete trie cache")
+                atomic_save_trie_cache(self.trie_, trie_file_name)
 
     def _need_rebuild_trie(self, trie_file_name, base_dict_path, custom_dict_path):
         """
@@ -220,7 +227,7 @@ class RagTokenizer:
         """
         # 如果字典树缓存文件不存在，需要重建
         if not os.path.exists(trie_file_name):
-            logging.info(f"[HUQIE]:Trie file {trie_file_name} not found, need to build")
+            logging.info("[HUQIE]:Trie cache missing; rebuilding")
             return True
 
         try:
@@ -230,22 +237,25 @@ class RagTokenizer:
             if os.path.exists(base_dict_path):
                 base_dict_mtime = os.path.getmtime(base_dict_path)
                 if base_dict_mtime > trie_mtime:
-                    logging.info(f"[HUQIE]:Base dictionary {base_dict_path} updated, need to rebuild trie")
+                    logging.info("[HUQIE]:Base dictionary updated; rebuilding trie")
                     return True
 
             # 检查自定义词典是否比缓存文件更新
             if os.path.exists(custom_dict_path):
                 custom_dict_mtime = os.path.getmtime(custom_dict_path)
                 if custom_dict_mtime > trie_mtime:
-                    logging.info(f"[HUQIE]:Custom dictionary {custom_dict_path} updated, need to rebuild trie")
+                    logging.info("[HUQIE]:Custom dictionary updated; rebuilding trie")
                     return True
 
             # 所有词典文件都没有更新，可以使用现有缓存
             return False
 
-        except OSError as e:
+        except OSError as error:
             # 文件时间检查失败，为安全起见重建缓存
-            logging.warning(f"[HUQIE]:Failed to check file modification time: {e}, rebuilding trie")
+            logging.warning(
+                "[HUQIE]:Cache timestamp check failed; rebuilding: error_type=%s",
+                type(error).__name__,
+            )
             return True
 
     def loadUserDict(self, fnm):
@@ -465,7 +475,13 @@ class RagTokenizer:
             tks.append(tk)
         # F /= len(tks)  # 可选：平均词频
         L /= len(tks)  # 长词比例
-        logging.debug("[SC] {} {} {} {} {}".format(tks, len(tks), L, F, B / len(tks) + L + F))
+        logging.debug(
+            "[SC] token_count=%s long_token_ratio=%s frequency=%s score=%s",
+            len(tks),
+            L,
+            F,
+            B / len(tks) + L + F,
+        )
         return tks, B / len(tks) + L + F
 
     def sortTks_(self, tkslist):
@@ -712,8 +728,8 @@ class RagTokenizer:
             # 2. 后向最大匹配
             tks1, s1 = self.maxBackward_(L)
             if self.DEBUG:
-                logging.debug("[FW] {} {}".format(tks, s))
-                logging.debug("[BW] {} {}".format(tks1, s1))
+                logging.debug("[FW] token_count=%s score=%s", len(tks), s)
+                logging.debug("[BW] token_count=%s score=%s", len(tks1), s1)
 
             # 3. 合并前向和后向匹配的结果
             i, j, _i, _j = 0, 0, 0, 0
@@ -769,7 +785,7 @@ class RagTokenizer:
                 res.append(" ".join(self.sortTks_(tkslist)[0][0]))
 
         res = " ".join(res)
-        logging.debug("[TKS] {}".format(self.merge_(res)))
+        logging.debug("[TKS] token_count=%s", len(res.split()))
         return self.merge_(res)
 
 #tokenize 是主分词函数，整合了所有分词策略
@@ -899,60 +915,6 @@ def is_chinese(s):
         return False
 
 
-def is_number(s):
-    """
-    判断字符是否为数字字符
-
-    Args:
-        s (str): 单个字符
-
-    Returns:
-        bool: True 表示是数字字符，False 表示不是
-    """
-    if s >= u'\u0030' and s <= u'\u0039':  # 数字字符的Unicode范围 (0-9)
-        return True
-    else:
-        return False
-
-
-def is_alphabet(s):
-    """
-    判断字符是否为英文字母
-
-    Args:
-        s (str): 单个字符
-
-    Returns:
-        bool: True 表示是英文字母，False 表示不是
-    """
-    if (s >= u'\u0041' and s <= u'\u005a') or (s >= u'\u0061' and s <= u'\u007a'):
-        # 大写字母 A-Z 或小写字母 a-z 的Unicode范围
-        return True
-    else:
-        return False
-
-
-def naiveQie(txt):
-    """
-    简单的文本分割函数
-
-    在英文词汇之间添加空格分隔符，用于处理连续的英文文本。
-
-    Args:
-        txt (str): 输入文本
-
-    Returns:
-        list: 分割后的词汇列表
-    """
-    tks = []
-    for t in txt.split():
-        # 如果前一个词和当前词都以英文字母结尾，在它们之间添加空格
-        if tks and re.match(r".*[a-zA-Z]$", tks[-1]) and re.match(r".*[a-zA-Z]$", t):
-            tks.append(" ")
-        tks.append(t)
-    return tks
-
-
 # 创建全局分词器实例
 tokenizer = RagTokenizer()
 
@@ -965,76 +927,3 @@ loadUserDict = tokenizer.loadUserDict  # 加载用户词典函数
 addUserDict = tokenizer.addUserDict  # 添加用户词典函数
 tradi2simp = tokenizer._tradi2simp  # 繁简转换函数
 strQ2B = tokenizer._strQ2B  # 全角半角转换函数
-
-if __name__ == '__main__':
-    """
-    分词器测试和演示代码
-
-    这部分代码展示了分词器的各种使用场景和测试用例，
-    包括重复字符、金融文本、教育文本、中英混合文本等。
-    """
-    # 创建调试模式的分词器实例
-    tknzr = RagTokenizer(debug=True)
-
-    # 测试用例1：重复字符处理
-    tks = tknzr.tokenize(
-        "哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈哈")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例2：金融领域文本
-    tks = tknzr.tokenize(
-        "公开征求意见稿提出，境外投资者可使用自有人民币或外汇投资。使用外汇投资的，可通过债券持有人在香港人民币业务清算行及香港地区经批准可进入境内银行间外汇市场进行交易的境外人民币业务参加行（以下统称香港结算行）办理外汇资金兑换。香港结算行由此所产生的头寸可到境内银行间外汇市场平盘。使用外汇投资的，在其投资的债券到期或卖出后，原则上应兑换回外汇。")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例3：教育领域文本
-    tks = tknzr.tokenize(
-        "多校划片就是一个小区对应多个小学初中，让买了学区房的家庭也不确定到底能上哪个学校。目的是通过这种方式为学区房降温，把就近入学落到实处。南京市长江大桥")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例4：中英混合文本
-    tks = tknzr.tokenize(
-        "实际上当时他们已经将业务中心偏移到安全部门和针对政府企业的部门 Scripts are compiled and cached aaaaaaaaa")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例5：简短口语化文本
-    tks = tknzr.tokenize("虽然我不怎么玩")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例6：商业文本
-    tks = tknzr.tokenize("蓝月亮如何在外资夹击中生存,那是全宇宙最有意思的")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例7：技术和生活混合文本
-    tks = tknzr.tokenize(
-        "涡轮增压发动机num最大功率,不像别的共享买车锁电子化的手段,我们接过来是否有意义,黄黄爱美食,不过，今天阿奇要讲到的这家农贸市场，说实话，还真蛮有特色的！不仅环境好，还打出了")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例8：日常对话
-    tks = tknzr.tokenize("这周日你去吗？这周日你有空吗？")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例9：技术招聘文本
-    tks = tknzr.tokenize("Unity3D开发经验 测试开发工程师 c++双11双11 985 211 ")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 测试用例10：数据分析相关文本
-    tks = tknzr.tokenize(
-        "数据分析项目经理|数据分析挖掘|数据分析方向|商品数据分析|搜索数据分析 sql python hive tableau Cocos2d-")
-    logging.info(tknzr.fine_grained_tokenize(tks))
-
-    # 命令行参数处理：支持自定义词典和文件分词
-    if len(sys.argv) < 2:
-        sys.exit()
-
-    # 关闭调试模式，加载用户自定义词典
-    tknzr.DEBUG = False
-    tknzr.loadUserDict(sys.argv[1])  # 第一个参数：用户词典文件
-
-    # 对指定文件进行分词处理
-    of = open(sys.argv[2], "r")  # 第二个参数：待分词的文本文件
-    while True:
-        line = of.readline()
-        if not line:
-            break
-        logging.info(tknzr.tokenize(line))
-    of.close()

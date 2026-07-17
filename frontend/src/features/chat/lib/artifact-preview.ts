@@ -10,6 +10,31 @@ export interface ChatArtifactPreviewTarget {
   previewType: ArtifactPreviewType;
 }
 
+export const HTML_ARTIFACT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+
+const HTML_ARTIFACT_CSP = [
+  "default-src 'none'",
+  "base-uri 'none'",
+  "connect-src 'none'",
+  "font-src data:",
+  "form-action 'none'",
+  "frame-src 'none'",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  "navigate-to 'none'",
+  "object-src 'none'",
+  "script-src 'none'",
+  "style-src 'unsafe-inline'",
+].join('; ');
+
+const META_REFRESH_PATTERN = /<meta\b(?=[^>]*\bhttp-equiv\s*=\s*(?:["']?refresh["']?))[^>]*>/gi;
+
+export const hardenHtmlArtifactPreview = (html: string): string => {
+  const withoutRefresh = html.replace(META_REFRESH_PATTERN, '');
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${HTML_ARTIFACT_CSP}">`;
+  return `${policy}${withoutRefresh}`;
+};
+
 export const resolveArtifactName = (artifact: ChatArtifact): string => {
   if (artifact.name && artifact.name.trim()) {
     return artifact.name.trim();

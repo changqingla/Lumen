@@ -19,16 +19,21 @@ current_dir = Path(__file__).parent.absolute()
 DeepRAG_root = current_dir.parent
 sys.path.insert(0, str(DeepRAG_root))
 
-from core.app import (
+from core.app import (  # noqa: E402
     naive, book, presentation, manual, laws, qa, table,
      one, email, presentation_vision, ppt_md_parser
 )
 
 # 导入智能表格解析器（使用标准 import 方式，兼容 Cython 编译）
-from core.app import ir_table
+from core.app import ir_table  # noqa: E402
 
-from core.utils import  ParserType  # 工具函数和解析器类型
+from core.utils import ParserType  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
+
+def _log_failure(operation: str, error: BaseException) -> None:
+    logger.error("%s failed: error_type=%s", operation, type(error).__name__)
 
 
 class DocumentChunker:
@@ -146,9 +151,6 @@ class DocumentChunker:
             self.chunker = parser_value
             self.is_vision_parser = False
 
-        # 设置日志配置
-        self._setup_logging()
-
         # 解析器配置参数（仅用于传统解析器）
         if not self.is_vision_parser:
             self.parser_config = {
@@ -239,23 +241,12 @@ class DocumentChunker:
             logging.info(f"创建 CV 模型: {factory}/{model_name}")
             return model_class(**model_kwargs)
             
-        except ImportError as e:
-            logging.error(f"导入 CV 模型模块失败: {e}")
-            raise ValueError(f"无法导入 CV 模型模块，请确保已安装相关依赖: {e}")
-        except Exception as e:
-            logging.error(f"创建 CV 模型失败: {e}")
+        except ImportError as error:
+            _log_failure("CV model module import", error)
+            raise ValueError("无法导入 CV 模型模块，请确保已安装相关依赖") from error
+        except Exception as error:
+            _log_failure("CV model creation", error)
             raise
-    
-    def _setup_logging(self):
-        """
-        设置日志配置
-
-        配置日志格式和级别，用于跟踪分块处理过程
-        """
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
 
     def _progress_callback(self, progress: float = None, msg: str = ""):
         """
@@ -268,9 +259,9 @@ class DocumentChunker:
             msg (str): 状态消息
         """
         if progress is not None:
-            logging.info(f"处理进度: {progress:.1%} - {msg}")
+            logging.info("处理进度: %.1f%%", progress * 100)
         else:
-            logging.info(f"状态: {msg}")
+            logging.info("处理状态已更新")
     
     def chunk_document(self,
                       file_path: Union[str, Path],
@@ -293,7 +284,7 @@ class DocumentChunker:
         file_path = Path(file_path) if isinstance(file_path, str) else file_path
         filename = file_path.name
 
-        logging.info(f"开始对文档进行分块处理: {filename}")
+        logging.info("开始对文档进行分块处理")
         logging.info(f"使用解析器: {self.parser_type}")
 
         start_time = timer()
@@ -384,8 +375,8 @@ class DocumentChunker:
                 return chunks, full_content
             return chunks
 
-        except Exception as e:
-            logging.error(f"文档分块处理出错 {filename}: {str(e)}")
+        except Exception as error:
+            _log_failure("Document chunking", error)
             raise
     
     def chunk_batch(self,
@@ -411,11 +402,11 @@ class DocumentChunker:
 
         for i, file_path in enumerate(file_paths):
             try:
-                logging.info(f"正在处理文件 {i+1}/{total_files}: {file_path}")
+                logging.info("正在处理批量文件 %s/%s", i + 1, total_files)
                 chunks = self.chunk_document(file_path, **kwargs)
                 results[str(file_path)] = chunks
-            except Exception as e:
-                logging.error(f"处理文件失败 {file_path}: {str(e)}")
+            except Exception as error:
+                _log_failure("Batch document chunking", error)
                 results[str(file_path)] = []  # 失败时返回空列表
 
         logging.info(f"批量分块处理完成，已处理 {len(results)} 个文件")

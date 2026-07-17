@@ -11,7 +11,9 @@ import pytest
 from fastapi import HTTPException
 
 from modules.admin import controller as admin_controller
-from repositories import organization_repository as organization_repository_module
+from modules.organization.repositories import (
+    organization_repository as organization_repository_module,
+)
 from schemas.schemas import GenerateActivationCodeRequest
 
 
@@ -124,7 +126,7 @@ async def test_get_statistics_calculates_average_members_from_database(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_list_users_includes_last_active_and_weekly_token_total():
+async def test_list_users_includes_last_active_and_billing_cycle_quota():
     user_id = uuid4()
     current_user = SimpleNamespace(id=uuid4(), is_admin=True)
     fake_user = SimpleNamespace(
@@ -165,6 +167,8 @@ async def test_list_users_includes_last_active_and_weekly_token_total():
             "is_admin": False,
             "created_at": None,
             "last_active_at": "2026-03-15T08:30:00",
-            "weekly_token_total": 12345,
+            "billing_cycle_token_total": 12345,
+            "model_quota_limit": 5_000_000,
+            "quota_reset_date": response["items"][0]["quota_reset_date"],
         }
     ]

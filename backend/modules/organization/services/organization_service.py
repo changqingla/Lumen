@@ -7,7 +7,7 @@ from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
 from repositories.user_repository import UserRepository
 from modules.organization.entities.organization import Organization
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import uuid
 import logging
 

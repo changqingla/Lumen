@@ -14,7 +14,6 @@
 #  limitations under the License.
 #
 
-import logging
 from tika import parser
 import re
 from io import BytesIO
@@ -30,28 +29,6 @@ from deepdoc.parser import DocxParser, HtmlParser
 class Docx(DocxParser):
     def __init__(self):
         pass
-
-    def __clean(self, line):
-        line = re.sub(r"\u3000", " ", line).strip()
-        return line
-
-    def old_call(self, filename, binary=None, from_page=0, to_page=100000):
-        self.doc = Document(
-            filename) if not binary else Document(BytesIO(binary))
-        pn = 0
-        lines = []
-        for p in self.doc.paragraphs:
-            if pn > to_page:
-                break
-            if from_page <= pn < to_page and p.text.strip():
-                lines.append(self.__clean(p.text))
-            for run in p.runs:
-                if 'lastRenderedPageBreak' in run._element.xml:
-                    pn += 1
-                    continue
-                if 'w:br' in run._element.xml and 'type="page"' in run._element.xml:
-                    pn += 1
-        return [line for line in lines if line]
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000):
         self.doc = Document(
@@ -164,11 +141,3 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
     return tokenize_chunks(["\n".join(ck)
                            for ck in chunks], doc, eng)
-
-
-if __name__ == "__main__":
-    import sys
-
-    def dummy(prog=None, msg=""):
-        pass
-    chunk(sys.argv[1], callback=dummy)

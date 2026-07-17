@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
+import json
 import logging
 import mimetypes
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import os
 from typing import Literal
 from urllib.parse import quote
 from uuid import uuid4
@@ -14,7 +18,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 import httpx
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,13 +29,18 @@ from config.settings import settings
 from middlewares.auth import get_current_user, get_current_user_optional
 from models.user import User
 from utils.audit_logger import record_user_prompt_event
-from .paper_translation_service import PaperTranslationQueueItem, PaperTranslationStatus, paper_translation_service
+from .paper_translation_service import (
+    PaperTranslationQueueItem,
+    PaperTranslationStatus,
+    paper_translation_service,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/creative-workshop", tags=["Creative Workshop"])
 PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE = "paper_translation_asset"
 PAPER_TRANSLATION_ASSET_TOKEN_EXPIRE_MINUTES = 60
+_PAPER_TRANSLATION_ASSET_KEY_CONTEXT = b"lumen:paper-translation-asset:v1"
 
 ImageSize = Literal[
     "1024x1024",
@@ -118,81 +128,131 @@ def _get_image_api_key() -> str:
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": {"code": "IMAGE_API_NOT_CONFIGURED", "message": "创意工坊图片服务尚未配置"}},
+            detail={
+                "error": {
+                    "code": "IMAGE_API_NOT_CONFIGURED",
+                    "message": "创意工坊图片服务尚未配置",
+                }
+            },
         )
     return api_key
 
 
 def _extract_provider_message(response: httpx.Response) -> str:
-    provider_message = "图片生成失败"
-    response_text = response.text[:300]
-    content_type = str(response.headers.get("content-type") or "").lower()
-    if "text/html" in content_type or response_text.lstrip().lower().startswith("<!doctype html"):
-        if response.status_code == 502:
-            return "图片服务网关错误：上游图片接口暂时不可用"
-        return f"图片服务返回了 HTML 错误页（HTTP {response.status_code}）"
+    """Map an upstream status to a stable message without reading its body."""
+    if response.status_code == 429:
+        return "图片服务当前繁忙，请稍后重试"
+    if response.status_code in {401, 403}:
+        return "图片服务认证失败，请联系管理员检查配置"
+    if response.status_code in {502, 503, 504}:
+        return "图片服务暂时不可用，请稍后重试"
+    return "图片生成失败，请稍后重试"
+
+
+def _image_provider_bad_response(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail={
+            "error": {
+                "code": "IMAGE_PROVIDER_BAD_RESPONSE",
+                "message": message,
+            }
+        },
+    )
+
+
+async def _read_image_provider_json(response: httpx.Response) -> dict:
+    max_bytes = int(settings.CREATIVE_WORKSHOP_IMAGE_MAX_RESPONSE_BYTES)
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            declared_bytes = int(content_length)
+        except ValueError as exc:
+            raise _image_provider_bad_response(
+                "图片服务返回了无效的响应元数据"
+            ) from exc
+        if declared_bytes < 0 or declared_bytes > max_bytes:
+            raise _image_provider_bad_response("图片服务返回的数据过大")
+
+    payload = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(payload) + len(chunk) > max_bytes:
+            raise _image_provider_bad_response("图片服务返回的数据过大")
+        payload.extend(chunk)
 
     try:
-        error_payload = response.json()
-        error = error_payload.get("error") if isinstance(error_payload, dict) else None
-        if isinstance(error, dict):
-            provider_message = str(error.get("message") or provider_message)
-        elif isinstance(error_payload, dict) and error_payload.get("message"):
-            provider_message = str(error_payload.get("message"))
-    except Exception:
-        provider_message = response_text or provider_message
-    return provider_message
+        data = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _image_provider_bad_response(
+            "图片服务返回了无法识别的结果"
+        ) from exc
+    if not isinstance(data, dict):
+        raise _image_provider_bad_response("图片服务返回了无法识别的结果")
+    return data
 
 
 async def _post_image_provider_json(
     *,
     path: str,
     payload: dict[str, object],
-    user_id: object,
 ) -> dict:
     api_key = _get_image_api_key()
 
     try:
-        async with httpx.AsyncClient(timeout=settings.CREATIVE_WORKSHOP_IMAGE_TIMEOUT) as client:
-            response = await client.post(
+        async with httpx.AsyncClient(
+            timeout=settings.CREATIVE_WORKSHOP_IMAGE_TIMEOUT,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            async with client.stream(
+                "POST",
                 _image_api_url(path),
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "Accept-Encoding": "identity",
                 },
                 json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+            ) as response:
+                response.raise_for_status()
+                data = await _read_image_provider_json(response)
     except httpx.HTTPStatusError as exc:
         provider_message = _extract_provider_message(exc.response)
         logger.warning(
-            "Image provider rejected JSON request for user=%s status=%s path=%s",
-            user_id,
+            "Image provider rejected JSON request: status=%s",
             exc.response.status_code,
-            path,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": {"code": "IMAGE_PROVIDER_ERROR", "message": provider_message}},
+            detail={
+                "error": {"code": "IMAGE_PROVIDER_ERROR", "message": provider_message}
+            },
         ) from exc
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail={"error": {"code": "IMAGE_PROVIDER_TIMEOUT", "message": "图片生成超时，请稍后重试"}},
+            detail={
+                "error": {
+                    "code": "IMAGE_PROVIDER_TIMEOUT",
+                    "message": "图片生成超时，请稍后重试",
+                }
+            },
         ) from exc
     except httpx.HTTPError as exc:
-        logger.warning("Image provider JSON request failed for user=%s path=%s: %s", user_id, path, exc)
+        logger.warning(
+            "Image provider JSON request failed (error_type=%s)",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": {"code": "IMAGE_PROVIDER_UNAVAILABLE", "message": "图片服务暂时不可用"}},
+            detail={
+                "error": {
+                    "code": "IMAGE_PROVIDER_UNAVAILABLE",
+                    "message": "图片服务暂时不可用",
+                }
+            },
         ) from exc
 
-    if not isinstance(data, dict):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": {"code": "IMAGE_PROVIDER_BAD_RESPONSE", "message": "图片服务返回了无法识别的结果"}},
-        )
     return data
 
 
@@ -204,19 +264,29 @@ def _build_provider_payload(request: ImageGenerationRequest) -> dict[str, object
         "quality": request.quality,
         "output_format": request.output_format,
     }
-    if request.output_format in {"jpeg", "webp"} and request.output_compression is not None:
+    if (
+        request.output_format in {"jpeg", "webp"}
+        and request.output_compression is not None
+    ):
         payload["output_compression"] = request.output_compression
     return payload
 
 
-def _extract_image_response(data: dict, request: ImageGenerationRequest) -> ImageGenerationResponse:
+def _extract_image_response(
+    data: dict, request: ImageGenerationRequest
+) -> ImageGenerationResponse:
     images = data.get("data")
     first_image = images[0] if isinstance(images, list) and images else None
     b64_json = first_image.get("b64_json") if isinstance(first_image, dict) else None
     if not isinstance(b64_json, str) or not b64_json.strip():
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": {"code": "IMAGE_PROVIDER_BAD_RESPONSE", "message": "图片服务返回了无法识别的结果"}},
+            detail={
+                "error": {
+                    "code": "IMAGE_PROVIDER_BAD_RESPONSE",
+                    "message": "图片服务返回了无法识别的结果",
+                }
+            },
         )
 
     return ImageGenerationResponse(
@@ -250,7 +320,6 @@ async def generate_image(
     data = await _post_image_provider_json(
         path="/images/generations",
         payload=_build_provider_payload(request),
-        user_id=current_user.id,
     )
     return _extract_image_response(data, request)
 
@@ -262,7 +331,12 @@ async def _save_pdf_upload(file: UploadFile, destination: Path) -> int:
     if not is_pdf:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "UNSUPPORTED_FORMAT", "message": "仅支持上传 PDF 文件"}},
+            detail={
+                "error": {
+                    "code": "UNSUPPORTED_FORMAT",
+                    "message": "仅支持上传 PDF 文件",
+                }
+            },
         )
 
     total_size = 0
@@ -289,6 +363,8 @@ async def _save_pdf_upload(file: UploadFile, destination: Path) -> int:
             if len(header) < 1024:
                 header += chunk[: 1024 - len(header)]
             target.write(chunk)
+        target.flush()
+        os.fsync(target.fileno())
 
     if total_size == 0:
         destination.unlink(missing_ok=True)
@@ -312,26 +388,50 @@ def _download_headers(filename: str) -> dict[str, str]:
     }
 
 
-def _create_paper_translation_asset_token(*, owner_id: str, task_id: str, asset_path: str) -> str:
-    from utils.security import create_access_token
-
-    return create_access_token(
-        data={
+def _create_paper_translation_asset_token(
+    *, owner_id: str, task_id: str, asset_path: str
+) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
             "purpose": PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE,
+            "token_type": PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE,
             "sub": owner_id,
             "task_id": task_id,
             "asset_path": asset_path,
+            "iat": now,
+            "exp": now
+            + timedelta(minutes=PAPER_TRANSLATION_ASSET_TOKEN_EXPIRE_MINUTES),
+            "jti": uuid4().hex,
         },
-        expires_delta=timedelta(minutes=PAPER_TRANSLATION_ASSET_TOKEN_EXPIRE_MINUTES),
+        _paper_translation_asset_signing_key(),
+        algorithm=settings.ALGORITHM,
     )
 
 
-def _verify_paper_translation_asset_token(*, token: str, task_id: str, asset_path: str) -> str | None:
+def _paper_translation_asset_signing_key() -> str:
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        _PAPER_TRANSLATION_ASSET_KEY_CONTEXT,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_paper_translation_asset_token(
+    *, token: str, task_id: str, asset_path: str
+) -> str | None:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    except JWTError:
+        payload = jwt.decode(
+            token,
+            _paper_translation_asset_signing_key(),
+            algorithms=[settings.ALGORITHM],
+        )
+    except InvalidTokenError:
         return None
-    if payload.get("purpose") != PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE:
+    if (
+        payload.get("purpose") != PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE
+        or payload.get("token_type") != PAPER_TRANSLATION_ASSET_TOKEN_PURPOSE
+    ):
         return None
     if payload.get("task_id") != task_id or payload.get("asset_path") != asset_path:
         return None
@@ -342,15 +442,29 @@ def _verify_paper_translation_asset_token(*, token: str, task_id: str, asset_pat
 
 
 def _paper_translation_temp_pdf_path(service: object) -> Path:
-    storage_root = Path(getattr(service, "storage_root", settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR))
+    storage_root = Path(
+        getattr(
+            service,
+            "storage_root",
+            settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_STORAGE_DIR,
+        )
+    )
     temp_dir = storage_root / "_incoming"
     try:
         temp_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        logger.exception("Paper translation storage is not writable: %s", temp_dir)
+        logger.error(
+            "Paper translation storage is not writable (error_type=%s)",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": {"code": "STORAGE_UNAVAILABLE", "message": "论文翻译存储目录不可写，请检查服务配置"}},
+            detail={
+                "error": {
+                    "code": "STORAGE_UNAVAILABLE",
+                    "message": "论文翻译存储目录不可写，请检查服务配置",
+                }
+            },
         ) from exc
     return temp_dir / f"{uuid4().hex}.pdf"
 
@@ -377,10 +491,21 @@ async def create_paper_translation_task(
             filename=filename,
             model_name=normalized_model_name,
         )
-        source_pdf_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
+        source_pdf_path = service.source_pdf_path(
+            owner_id=owner_id, task_id=task.task_id
+        )
         source_pdf_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_pdf_path.replace(source_pdf_path)
-        await service.attach_source_pdf(owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path)
+        os.replace(temp_pdf_path, source_pdf_path)
+        directory_fd = os.open(
+            source_pdf_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        await service.attach_source_pdf(
+            owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path
+        )
     except HTTPException:
         temp_pdf_path.unlink(missing_ok=True)
         raise
@@ -388,11 +513,23 @@ async def create_paper_translation_task(
         temp_pdf_path.unlink(missing_ok=True)
         if task is not None:
             with contextlib.suppress(Exception):
-                await service.mark_task_failed(owner_id=owner_id, task_id=task.task_id, error="上传文件保存失败，请重新上传")
-        logger.exception("Failed to create paper translation task for user=%s", owner_id)
+                await service.mark_task_failed(
+                    owner_id=owner_id,
+                    task_id=task.task_id,
+                    error="上传文件保存失败，请重新上传",
+                )
+        logger.error(
+            "Failed to create paper translation task (error_type=%s)",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": {"code": "UPLOAD_SAVE_FAILED", "message": "上传文件保存失败，请重新上传"}},
+            detail={
+                "error": {
+                    "code": "UPLOAD_SAVE_FAILED",
+                    "message": "上传文件保存失败，请重新上传",
+                }
+            },
         ) from exc
 
     await record_user_prompt_event(
@@ -420,18 +557,34 @@ async def create_paper_translation_task(
             ),
         )
     except Exception as exc:
-        logger.exception("Failed to enqueue paper translation task: task_id=%s owner=%s", task.task_id, owner_id)
-        await service.mark_task_failed(owner_id=owner_id, task_id=task.task_id, error="翻译任务入队失败，请稍后重试")
+        logger.error(
+            "Failed to enqueue paper translation task: task_id=%s error_type=%s",
+            task.task_id,
+            type(exc).__name__,
+        )
+        with contextlib.suppress(Exception):
+            await service.mark_task_failed(
+                owner_id=owner_id,
+                task_id=task.task_id,
+                error="翻译任务入队失败，请稍后重试",
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": {"code": "QUEUE_UNAVAILABLE", "message": "翻译任务暂时无法启动，请稍后重试"}},
+            detail={
+                "error": {
+                    "code": "QUEUE_UNAVAILABLE",
+                    "message": "翻译任务暂时无法启动，请稍后重试",
+                }
+            },
         ) from exc
 
     task = await service.get_task(owner_id=owner_id, task_id=task.task_id) or task
     return PaperTranslationTaskResponse(**service.build_response_payload(task))
 
 
-@router.get("/paper-translation/tasks/{task_id}", response_model=PaperTranslationTaskResponse)
+@router.get(
+    "/paper-translation/tasks/{task_id}", response_model=PaperTranslationTaskResponse
+)
 async def get_paper_translation_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
@@ -458,7 +611,9 @@ async def get_paper_translation_result(
 
     def sign_asset_url(asset_url: str, asset_path: str) -> str:
         separator = "&" if "?" in asset_url else "?"
-        token = _create_paper_translation_asset_token(owner_id=owner_id, task_id=task_id, asset_path=asset_path)
+        token = _create_paper_translation_asset_token(
+            owner_id=owner_id, task_id=task_id, asset_path=asset_path
+        )
         return f"{asset_url}{separator}asset_token={quote(token, safe='')}"
 
     try:
@@ -500,16 +655,22 @@ async def get_paper_translation_asset(
     if not owner_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "UNAUTHORIZED", "message": "图片资源访问凭证无效"}},
+            detail={
+                "error": {"code": "UNAUTHORIZED", "message": "图片资源访问凭证无效"}
+            },
         )
 
     task = await service.get_task(owner_id=owner_id, task_id=task_id)
     if task is None or task.status != "completed":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "NOT_FOUND", "message": "翻译任务不存在或尚未完成"}},
+            detail={
+                "error": {"code": "NOT_FOUND", "message": "翻译任务不存在或尚未完成"}
+            },
         )
-    asset_file = service.resolve_asset_file(owner_id=owner_id, task_id=task_id, asset_path=asset_path)
+    asset_file = service.resolve_asset_file(
+        owner_id=owner_id, task_id=task_id, asset_path=asset_path
+    )
     if asset_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -518,7 +679,8 @@ async def get_paper_translation_asset(
 
     return Response(
         content=asset_file.read_bytes(),
-        media_type=mimetypes.guess_type(asset_file.name)[0] or "application/octet-stream",
+        media_type=mimetypes.guess_type(asset_file.name)[0]
+        or "application/octet-stream",
         headers={"Cache-Control": "private, max-age=3600"},
     )
 
@@ -531,7 +693,9 @@ async def get_paper_translation_source_pdf(
     """Return the uploaded source PDF for preview restore."""
     service = _get_paper_translation_service()
     try:
-        filename, content = await service.get_source_pdf(owner_id=str(current_user.id), task_id=task_id)
+        filename, content = await service.get_source_pdf(
+            owner_id=str(current_user.id), task_id=task_id
+        )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -608,7 +772,9 @@ async def download_paper_translation_pdf(
     """Export and download translated PDF."""
     service = _get_paper_translation_service()
     try:
-        filename, content = await service.get_translated_pdf(owner_id=str(current_user.id), task_id=task_id)
+        filename, content = await service.get_translated_pdf(
+            owner_id=str(current_user.id), task_id=task_id
+        )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -622,7 +788,10 @@ async def download_paper_translation_pdf(
     )
 
 
-@router.post("/paper-translation/tasks/{task_id}/favorite", response_model=PaperTranslationFavoriteResponse)
+@router.post(
+    "/paper-translation/tasks/{task_id}/favorite",
+    response_model=PaperTranslationFavoriteResponse,
+)
 async def favorite_paper_translation_result(
     task_id: str,
     current_user: User = Depends(get_current_user),
@@ -650,7 +819,9 @@ async def favorite_paper_translation_result(
     kb_repo = KnowledgeBaseRepository(db)
     kb = await kb_repo.get_by_owner_and_name(owner_id, settings.DEFAULT_KB_NAME)
     if kb is None:
-        kb = await kb_repo.create(owner_id, settings.DEFAULT_KB_NAME, "", settings.DEFAULT_KB_CATEGORY)
+        kb = await kb_repo.create(
+            owner_id, settings.DEFAULT_KB_NAME, "", settings.DEFAULT_KB_CATEGORY
+        )
 
     document_service = DocumentService(db)
     document = await document_service.create_markdown_document_from_content(
@@ -672,7 +843,10 @@ async def favorite_paper_translation_result(
     )
 
 
-@router.get("/paper-translation/tasks/{task_id}/favorite", response_model=PaperTranslationFavoriteStatusResponse)
+@router.get(
+    "/paper-translation/tasks/{task_id}/favorite",
+    response_model=PaperTranslationFavoriteStatusResponse,
+)
 async def get_paper_translation_favorite_status(
     task_id: str,
     current_user: User = Depends(get_current_user),

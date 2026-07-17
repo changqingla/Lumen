@@ -1,4 +1,5 @@
 """Chunk management service using recall_lib's SimpleESConnection for ES operations."""
+
 import sys
 import logging
 from pathlib import Path
@@ -12,7 +13,7 @@ from schemas.chunk_schemas import (
     ChunkEditRequest,
     ChunkBatchEditRequest,
 )
-from utils.http_client import get_http_client, get_rag_internal_headers
+from utils.http_client import get_internal_http_client, get_rag_internal_headers
 from utils.es_utils import get_user_es_index
 
 logger = logging.getLogger(__name__)
@@ -46,11 +47,19 @@ def _get_simple_es_connection_class():
     _SimpleESConnection = SimpleESConnection
     return _SimpleESConnection
 
+
 # Source fields to retrieve from ES for chunk queries
 _CHUNK_SOURCE_FIELDS = [
-    "chunk_id", "doc_id", "docnm_kwd", "content_with_weight",
-    "title_tks", "page_num_int", "position_int", "available_int",
-    "create_time", "chunk_index",
+    "chunk_id",
+    "doc_id",
+    "docnm_kwd",
+    "content_with_weight",
+    "title_tks",
+    "page_num_int",
+    "position_int",
+    "available_int",
+    "create_time",
+    "chunk_index",
 ]
 
 
@@ -108,7 +117,9 @@ class ChunkService:
             )
 
     @classmethod
-    async def list_chunks(cls, request: ChunkListRequest, user_id: str) -> Dict[str, Any]:
+    async def list_chunks(
+        cls, request: ChunkListRequest, user_id: str
+    ) -> Dict[str, Any]:
         """List chunks for a document with pagination.
 
         Queries ES directly via SimpleESConnection.
@@ -152,7 +163,9 @@ class ChunkService:
         }
 
     @classmethod
-    async def search_chunks(cls, request: ChunkSearchRequest, user_id: str) -> Dict[str, Any]:
+    async def search_chunks(
+        cls, request: ChunkSearchRequest, user_id: str
+    ) -> Dict[str, Any]:
         """Search chunks by keyword with pagination and highlight.
 
         Queries ES directly via SimpleESConnection.
@@ -235,7 +248,9 @@ class ChunkService:
         }
 
     @classmethod
-    async def edit_chunk(cls, request: ChunkEditRequest, user_id: str) -> Dict[str, Any]:
+    async def edit_chunk(
+        cls, request: ChunkEditRequest, user_id: str
+    ) -> Dict[str, Any]:
         """Edit a single chunk by proxying to the rag service.
 
         The rag service handles re-embedding which requires ChunkEmbedder.
@@ -246,14 +261,16 @@ class ChunkService:
             "es_host": settings.ES_HOST,
             "index_name": request.index_name,
             "content": request.content,
-            "available_int": request.available_int if request.available_int is not None else 1,
+            "available_int": request.available_int
+            if request.available_int is not None
+            else 1,
             "model_factory": settings.EMBEDDING_MODEL_FACTORY,
             "model_name": settings.EMBEDDING_MODEL_NAME,
             "base_url": settings.EMBEDDING_BASE_URL,
             "api_key": settings.EMBEDDING_API_KEY or None,
         }
 
-        response = await get_http_client().post(
+        response = await get_internal_http_client().post(
             f"{settings.DOC_PROCESS_BASE_URL}/edit-chunk",
             json=payload,
             headers=get_rag_internal_headers(),
@@ -267,7 +284,9 @@ class ChunkService:
         return result.get("data", {})
 
     @classmethod
-    async def batch_edit_chunks(cls, request: ChunkBatchEditRequest, user_id: str) -> Dict[str, Any]:
+    async def batch_edit_chunks(
+        cls, request: ChunkBatchEditRequest, user_id: str
+    ) -> Dict[str, Any]:
         """Batch edit chunks by proxying to the rag service.
 
         The rag service handles re-embedding which requires ChunkEmbedder.
@@ -285,11 +304,15 @@ class ChunkService:
                         }
                     },
                 )
-            chunks_payload.append({
-                "chunk_id": chunk.chunk_id,
-                "content": chunk.content,
-                "available_int": chunk.available_int if chunk.available_int is not None else 1,
-            })
+            chunks_payload.append(
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "content": chunk.content,
+                    "available_int": chunk.available_int
+                    if chunk.available_int is not None
+                    else 1,
+                }
+            )
 
         payload = {
             "chunks": chunks_payload,
@@ -301,7 +324,7 @@ class ChunkService:
             "api_key": settings.EMBEDDING_API_KEY or None,
         }
 
-        response = await get_http_client().post(
+        response = await get_internal_http_client().post(
             f"{settings.DOC_PROCESS_BASE_URL}/batch-edit-chunks",
             json=payload,
             headers=get_rag_internal_headers(),

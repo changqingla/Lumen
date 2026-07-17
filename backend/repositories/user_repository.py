@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 from models.user import User
 
@@ -29,13 +29,6 @@ class UserRepository:
         """Get user by email."""
         result = await self.db.execute(
             select(User).where(User.email == email)
-        )
-        return result.scalar_one_or_none()
-    
-    async def get_by_name(self, name: str) -> Optional[User]:
-        """Get user by name."""
-        result = await self.db.execute(
-            select(User).where(User.name == name)
         )
         return result.scalar_one_or_none()
     
@@ -101,7 +94,6 @@ class UserRepository:
 
         await self.db.refresh(user)
         return user
-    
     async def update(self, user: User, **kwargs) -> User:
         """Update user fields."""
         for key, value in kwargs.items():
@@ -110,7 +102,6 @@ class UserRepository:
         await self.db.commit()
         await self.db.refresh(user)
         return user
-    
     async def update_password(self, user_id: uuid.UUID, password_hash: str) -> User:
         """
         Update user password.
@@ -212,28 +203,3 @@ class UserRepository:
         await self.db.commit()
         await self.db.refresh(user)
         return user
-    
-    async def get_users_by_level(self, level: str, limit: int = 100) -> List[User]:
-        """
-        Get users by membership level.
-        
-        Args:
-            level: User level (basic/member/premium)
-            limit: Maximum number of users to return
-            
-        Returns:
-            List of users
-        """
-        result = await self.db.execute(
-            select(User)
-            .where(User.user_level == level)
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-    
-    async def get_all_admins(self) -> List[User]:
-        """Get all admin users."""
-        result = await self.db.execute(
-            select(User).where(User.is_admin == True)
-        )
-        return list(result.scalars().all())

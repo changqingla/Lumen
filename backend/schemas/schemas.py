@@ -43,12 +43,6 @@ class MoveDocumentRequest(BaseModel):
     targetKbId: str
 
 
-class KnowledgeChatSearchRequest(BaseModel):
-    """Knowledge base search request."""
-    question: str = ""
-    top_n: int = 10
-
-
 class FavoriteCheckRequest(BaseModel):
     """Batch favorite check request."""
     items: List[dict[str, Any]] = []

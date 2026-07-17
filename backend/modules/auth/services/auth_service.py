@@ -12,7 +12,6 @@ from utils.minio_client import upload_file
 from utils.avatar_security import read_avatar_upload_file, validate_avatar_upload
 from config.settings import settings
 from typing import Tuple, Optional, Dict
-from datetime import datetime
 import uuid
 import hashlib
 
@@ -43,17 +42,11 @@ class AuthService:
         existing = await self.user_repo.get_by_email(email)
         
         if type == "register" and existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"error": {"code": "CONFLICT", "message": "Email already registered"}}
-            )
+            return True
         if type == "reset" and not existing:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "账号未注册"}}
-            )
+            return True
 
-        return await self.email_service.send_verification_code(email)
+        return await self.email_service.send_verification_code(email, type)
 
     async def login(self, email: str, password: str) -> Tuple[str, dict]:
         """Login user and return token."""
@@ -73,7 +66,7 @@ class AuthService:
     async def register(self, email: str, password: str, name: str, code: str) -> Tuple[str, dict]:
         """Register new user."""
         # Check verification code first
-        is_valid = await self.email_service.verify_code(email, code)
+        is_valid = await self.email_service.verify_code(email, code, "register")
         if not is_valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -131,7 +124,7 @@ class AuthService:
     async def reset_password(self, email: str, password: str, code: str) -> None:
         """Reset user password."""
         # Check verification code first
-        is_valid = await self.email_service.verify_code(email, code)
+        is_valid = await self.email_service.verify_code(email, code, "reset")
         if not is_valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -265,11 +258,11 @@ class AuthService:
         # Upload to MinIO
         try:
             await upload_file(object_name, file_data, content_type)
-        except Exception as e:
+        except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"code": "UPLOAD_FAILED", "message": f"上传失败: {str(e)}"}}
-            )
+                detail={"error": {"code": "UPLOAD_FAILED", "message": "头像上传失败"}},
+            ) from exc
         
         # Generate public URL
         # Use Nginx proxy path: /minio/{bucket}/{object_name}

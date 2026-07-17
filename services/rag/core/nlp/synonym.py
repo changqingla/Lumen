@@ -40,10 +40,10 @@ project_root = current_dir.parent.parent  # 回到DeepRAG_SRC目录
 sys.path.insert(0, str(project_root))
 
 # 导入项目模块
-from core.utils import get_project_base_directory
+from core.utils import get_project_base_directory  # noqa: E402
 
 # 导入外部模块
-from nltk.corpus import wordnet
+from nltk.corpus import wordnet  # noqa: E402
 
 
 class Dealer:
@@ -142,8 +142,11 @@ class Dealer:
         try:
             d = json.loads(d)
             self.dictionary = d
-        except Exception as e:
-            logging.error("Fail to load synonym!" + str(e))  # 同义词加载失败
+        except Exception as error:
+            logging.error(
+                "Fail to load realtime synonyms: error_type=%s",
+                type(error).__name__,
+            )
 
     def lookup(self, tk, topn=8):
         """
@@ -195,35 +198,3 @@ class Dealer:
 
         # 返回指定数量的同义词
         return res[:topn]
-
-
-if __name__ == '__main__':
-    """
-    测试代码
-
-    创建同义词处理器实例并打印词典内容，用于调试和验证功能。
-    """
-    # 创建同义词处理器（不使用Redis）
-    dl = Dealer()
-
-    # 打印加载的同义词词典
-    print("同义词词典内容:")
-    print(dl.dictionary)
-
-    # 测试英文同义词查找
-    print("\n英文同义词测试:")
-    english_synonyms = dl.lookup("good")
-    print(f"'good' 的同义词: {english_synonyms}")
-
-    # 测试中文同义词查找（如果词典中有数据）
-    print("\n中文同义词测试:")
-    if dl.dictionary:
-        # 获取词典中的第一个词进行测试
-        first_word = list(dl.dictionary.keys())[0] if dl.dictionary else None
-        if first_word:
-            chinese_synonyms = dl.lookup(first_word)
-            print(f"'{first_word}' 的同义词: {chinese_synonyms}")
-        else:
-            print("词典为空，无法测试中文同义词")
-    else:
-        print("未加载到同义词词典")

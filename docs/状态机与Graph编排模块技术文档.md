@@ -28,7 +28,7 @@
 
 ## 3. 图入口在什么地方
 
-整个系统对 LangGraph Server 暴露的图入口，定义在 `backend/langgraph.json`。
+整个系统对 LangGraph Server 暴露的图入口，定义在 `runtimes/backend/langgraph.json`。
 
 这里做了两件关键事情：
 
@@ -58,7 +58,7 @@
 
 ## 5. 主图的真正装配点
 
-主图装配的核心文件是 `backend/src/agents/lead_agent/agent.py`。
+主图装配的核心文件是 `runtimes/backend/src/agents/lead_agent/agent.py`。
 
 `make_lead_agent()` 在这里完成几项关键工作：
 
@@ -220,7 +220,7 @@ bootstrap 模式很能体现这个项目的图编排方式。
 
 ## 14. 子 Agent 为什么也属于同一套编排哲学
 
-子 Agent 的构造在 `backend/src/subagents/executor.py`。
+子 Agent 的构造在 `runtimes/backend/src/subagents/executor.py`。
 
 它同样使用 `create_agent()`，但会切掉很多主图能力，只保留最小执行骨架：
 

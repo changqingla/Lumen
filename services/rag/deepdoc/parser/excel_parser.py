@@ -35,10 +35,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(current_dir, '..', '..')
 sys.path.insert(0, project_root)
 
-import pandas as pd
-from openpyxl import Workbook, load_workbook
+import pandas as pd  # noqa: E402
+from openpyxl import Workbook, load_workbook  # noqa: E402
 
-from core.nlp import find_codec
+from core.nlp import find_codec  # noqa: E402
 
 
 class DeepRAGExcelParser:
@@ -75,13 +75,17 @@ class DeepRAGExcelParser:
         if isinstance(file_like_object, str):
             try:
                 return load_workbook(file_like_object)
-            except Exception as e:
-                logging.info(f"****wxy: openpyxl load error for file path: {e}, try pandas instead")
+            except Exception as openpyxl_error:
+                logging.info(
+                    "Spreadsheet openpyxl path load failed; trying pandas: "
+                    "error_type=%s",
+                    type(openpyxl_error).__name__,
+                )
                 try:
                     df = pd.read_excel(file_like_object)
                     return DeepRAGExcelParser._dataframe_to_workbook(df)
-                except Exception as e_pandas:
-                    raise Exception(f"****wxy: pandas.read_excel error: {e_pandas}, original openpyxl error: {e}")
+                except Exception:
+                    raise ValueError("Spreadsheet input could not be parsed") from None
 
         # 读取文件头部4个字节来判断文件类型
         file_like_object.seek(0)
@@ -100,21 +104,25 @@ class DeepRAGExcelParser:
                 df = pd.read_csv(file_like_object)
                 return DeepRAGExcelParser._dataframe_to_workbook(df)
 
-            except Exception as e_csv:
-                raise Exception(f"****wxy: Failed to parse CSV and convert to Excel Workbook: {e_csv}")
+            except Exception:
+                raise ValueError("Tabular input could not be parsed") from None
 
         # 尝试使用openpyxl加载Excel文件
         try:
             return load_workbook(file_like_object)
-        except Exception as e:
-            logging.info(f"****wxy: openpyxl load error: {e}, try pandas instead")
+        except Exception as openpyxl_error:
+            logging.info(
+                "Spreadsheet openpyxl stream load failed; trying pandas: "
+                "error_type=%s",
+                type(openpyxl_error).__name__,
+            )
             try:
                 # openpyxl失败时，尝试使用pandas读取
                 file_like_object.seek(0)
                 df = pd.read_excel(file_like_object)
                 return DeepRAGExcelParser._dataframe_to_workbook(df)
-            except Exception as e_pandas:
-                raise Exception(f"****wxy: pandas.read_excel error: {e_pandas}, original openpyxl error: {e}")
+            except Exception:
+                raise ValueError("Spreadsheet input could not be parsed") from None
 
     @staticmethod
     def _dataframe_to_workbook(df):
@@ -282,32 +290,3 @@ class DeepRAGExcelParser:
             # 解码文件内容并统计行数
             txt = binary.decode(encoding, errors="ignore")
             return len(txt.split("\n"))
-
-
-if __name__ == "__main__":
-    """
-    主程序入口
-
-    当脚本直接运行时，创建DeepRAGExcelParser实例并处理命令行参数中指定的文件。
-    使用方法：python excel_parser.py <文件路径> [--html]
-    """
-    psr = DeepRAGExcelParser()
-
-    # 检查是否需要HTML输出
-    if len(sys.argv) > 2 and sys.argv[2] == "--html":
-        # HTML格式输出
-        html_chunks = psr.html(sys.argv[1])
-        print(f"HTML解析完成，共生成 {len(html_chunks)} 个表格块：")
-        print("=" * 60)
-        for i, chunk in enumerate(html_chunks, 1):
-            print(f"表格块 {i}:")
-            print(chunk)
-            print("-" * 40)
-    else:
-        # 结构化文本输出
-        result = psr(sys.argv[1])
-        print(f"解析完成，共提取 {len(result)} 行数据：")
-        print("-" * 50)
-        for i, line in enumerate(result, 1):
-            print(f"{i:3d}: {line}")
-        print("-" * 50)

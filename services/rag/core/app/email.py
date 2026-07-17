@@ -106,12 +106,3 @@ def chunk(
                     pass
 
     return main_res + attachment_res
-
-
-if __name__ == "__main__":
-    import sys
-
-    def dummy(prog=None, msg=""):
-        pass
-
-    chunk(sys.argv[1], callback=dummy)

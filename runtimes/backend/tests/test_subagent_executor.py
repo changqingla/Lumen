@@ -179,6 +179,34 @@ def msg(classes):
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.anyio
+async def test_usage_context_is_forwarded_to_subagent_runtime(classes, base_config, msg):
+    SubagentExecutor = classes["SubagentExecutor"]
+    captured_context = None
+    mock_agent = MagicMock()
+
+    async def mock_astream(*args, **kwargs):
+        nonlocal captured_context
+        captured_context = kwargs.get("context")
+        yield {"messages": [msg.human("Task"), msg.ai("Done", "msg-1")]}
+
+    mock_agent.astream = mock_astream
+    executor = SubagentExecutor(
+        config=base_config,
+        tools=[],
+        thread_id="test-thread",
+        usage_context="backend-signed-context",
+    )
+
+    with patch.object(executor, "_create_agent", return_value=mock_agent):
+        await executor._aexecute("Task")
+
+    assert captured_context == {
+        "thread_id": "test-thread",
+        "usage_context": "backend-signed-context",
+    }
+
+
 class TestAsyncExecutionPath:
     """Test _aexecute() async execution path."""
 
@@ -241,16 +269,10 @@ class TestAsyncExecutionPath:
         assert result.ai_messages[0]["id"] == "msg-1"
         assert result.ai_messages[1]["id"] == "msg-2"
 
-    def test_create_agent_reuses_parent_resolved_spec_when_inheriting(self, classes, base_config):
-        """Test that inherited subagents reuse the already resolved parent model spec."""
+    def test_create_agent_reresolves_parent_model_without_passing_secret_spec(self, classes, base_config):
+        """Inherited subagents resolve with the short-lived token, not a decrypted spec."""
         SubagentExecutor = classes["SubagentExecutor"]
         executor_module = importlib.import_module("src.subagents.executor")
-        parent_model_spec = {
-            "name": "user-model:demo",
-            "use": "langchain_openai:ChatOpenAI",
-            "config": {"model": "gpt-4.1-mini"},
-            "supports_vision": True,
-        }
         captured: dict[str, object] = {}
 
         def _fake_create_chat_model(**kwargs):
@@ -262,7 +284,6 @@ class TestAsyncExecutionPath:
             tools=[],
             parent_model="user-model:demo",
             parent_dynamic_model_token="dynamic-token",
-            parent_model_spec=parent_model_spec,
             thread_id="thread-1",
         )
 
@@ -275,7 +296,7 @@ class TestAsyncExecutionPath:
         assert captured["create_chat_model_kwargs"]["name"] == "user-model:demo"
         assert captured["create_chat_model_kwargs"]["dynamic_model_token"] == "dynamic-token"
         assert captured["create_chat_model_kwargs"]["thread_id"] == "thread-1"
-        assert captured["create_chat_model_kwargs"]["resolved_spec_payload"] == parent_model_spec
+        assert "resolved_spec_payload" not in captured["create_chat_model_kwargs"]
 
     @pytest.mark.anyio
     async def test_aexecute_handles_duplicate_messages(self, classes, base_config, mock_agent, msg):
@@ -330,7 +351,13 @@ class TestAsyncExecutionPath:
         assert "Part 2" in result.result
 
     @pytest.mark.anyio
-    async def test_aexecute_handles_agent_exception(self, classes, base_config, mock_agent):
+    async def test_aexecute_handles_agent_exception(
+        self,
+        classes,
+        base_config,
+        mock_agent,
+        caplog,
+    ):
         """Test that exceptions during execution are caught and returned as FAILED."""
         SubagentExecutor = classes["SubagentExecutor"]
         SubagentStatus = classes["SubagentStatus"]
@@ -347,7 +374,8 @@ class TestAsyncExecutionPath:
             result = await executor._aexecute("Task")
 
         assert result.status == SubagentStatus.FAILED
-        assert "Agent error" in result.error
+        assert result.error == "Subagent execution failed"
+        assert "Agent error" not in caplog.text
         assert result.completed_at is not None
 
     @pytest.mark.anyio
@@ -484,7 +512,7 @@ class TestSyncExecutionPath:
             result = executor.execute("Task")
 
         assert result.status == SubagentStatus.FAILED
-        assert "Asyncio run error" in result.error
+        assert result.error == "Subagent execution failed"
         assert result.completed_at is not None
 
     def test_execute_with_result_holder(self, classes, base_config, mock_agent, msg):
@@ -785,6 +813,29 @@ class TestCleanupBackgroundTask:
         """Test that cleanup doesn't raise for unknown task IDs."""
         # Should not raise
         executor_module.cleanup_background_task("nonexistent-task")
+
+    def test_terminal_publish_does_not_resurrect_cleaned_task(
+        self,
+        executor_module,
+    ):
+        task_id = "already-cleaned-task"
+        result = executor_module.SubagentResult(
+            task_id=task_id,
+            trace_id="test-trace",
+            status=executor_module.SubagentStatus.COMPLETED,
+            result="done",
+            completed_at=datetime.now(),
+        )
+
+        assert executor_module._publish_background_result(task_id, result) is False
+        assert (
+            executor_module._publish_background_failure(
+                task_id,
+                "failed",
+            )
+            is False
+        )
+        assert task_id not in executor_module._background_tasks
 
     def test_cleanup_removes_task_with_completed_at_even_if_running(
         self, executor_module, classes

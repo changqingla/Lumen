@@ -1,7 +1,7 @@
 """Knowledge Base API endpoints."""
-from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List
+from typing import Optional
 from config.database import get_db
 from config.settings import settings
 from middlewares.auth import get_current_user
@@ -11,13 +11,11 @@ from schemas.schemas import (
     CompleteDirectUploadRequest,
     CreateKnowledgeBaseRequest,
     InitDirectUploadRequest,
-    KnowledgeChatSearchRequest,
     MoveDocumentRequest,
     ShareToOrgsRequest,
     UpdateKBVisibilityRequest,
     UpdateKnowledgeBaseRequest,
 )
-from utils.audit_logger import record_user_prompt_event
 from utils.avatar_security import read_avatar_upload_file
 
 router = APIRouter(prefix="/kb", tags=["Knowledge Base"])
@@ -33,12 +31,6 @@ def _create_document_service(db: AsyncSession):
     from modules.knowledge.services.document_service import DocumentService
 
     return DocumentService(db)
-
-
-def _create_search_service(db: AsyncSession):
-    from modules.knowledge.services.search_service import SearchService
-
-    return SearchService(db)
 
 
 @router.get("")
@@ -112,16 +104,6 @@ async def get_knowledge_base_info(
     return await service.get_kb_info(kbId, str(current_user.id))
 
 
-@router.get("/quota")
-async def get_quota(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get storage quota."""
-    service = _create_kb_service(db)
-    return await service.get_quota(str(current_user.id))
-
-
 @router.post("/{kbId}/avatar")
 async def upload_kb_avatar(
     kbId: str,
@@ -169,13 +151,12 @@ async def init_direct_upload(
 async def complete_direct_upload(
     kbId: str,
     request: CompleteDirectUploadRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Complete direct upload and start background document processing."""
     service = _create_document_service(db)
-    return await service.complete_direct_upload(kbId, str(current_user.id), request.docId, background_tasks)
+    return await service.complete_direct_upload(kbId, str(current_user.id), request.docId)
 
 
 @router.get("/{kbId}/documents")
@@ -266,13 +247,12 @@ async def get_documents_markdown_batch(
 async def retry_document(
     kbId: str,
     docId: str,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Retry processing a failed document."""
     service = _create_document_service(db)
-    return await service.retry_document(docId, kbId, str(current_user.id), background_tasks)
+    return await service.retry_document(docId, kbId, str(current_user.id))
 
 
 @router.delete("/{kbId}/documents/{docId}")
@@ -307,46 +287,6 @@ async def move_document(
     """
     service = _create_document_service(db)
     return await service.move_document(docId, kbId, request.targetKbId, str(current_user.id))
-
-
-@router.post("/{kbId}/chat/messages")
-async def chat_with_kb(
-    kbId: str,
-    request: KnowledgeChatSearchRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Search in knowledge base (retrieve relevant chunks).
-    Note: LLM answer generation is not implemented yet.
-    """
-    service = _create_search_service(db)
-    question = request.question
-    top_n = request.top_n
-
-    await record_user_prompt_event(
-        event_type="knowledge_chat_question",
-        user=current_user,
-        prompt=question,
-        metadata={
-            "kb_id": kbId,
-            "top_n": top_n,
-        },
-    )
-    
-    search_results = await service.search_in_kb(
-        kbId,
-        str(current_user.id),
-        question,
-        top_n=top_n
-    )
-    
-    # Return search results (without LLM-generated answer)
-    return {
-        "messageId": "search_" + str(hash(question)),
-        "references": search_results["references"],
-        "answer": "检索完成，找到相关内容（LLM问答功能暂未实现）"
-    }
 
 
 # ============ Public Sharing & Subscription Features ============

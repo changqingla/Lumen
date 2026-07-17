@@ -30,7 +30,6 @@ _INLINE_IMAGE_PREFIXES = {
 }
 
 _MANIFEST_WRITE_MAX_MERGE_READS = 2
-_WORKSPACE_BRIEF_MAX_ITEMS = 5
 _manifest_locks: dict[str, asyncio.Lock] = {}
 _manifest_lock_guard = asyncio.Lock()
 
@@ -109,27 +108,6 @@ def _sanitize_segment(value: str, field_name: str) -> str:
     return normalized
 
 
-def _format_size(size_bytes: Optional[int]) -> str:
-    if size_bytes is None:
-        return "unknown size"
-    size = float(size_bytes)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            if unit == "B":
-                return f"{int(size)} {unit}"
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{int(size_bytes)} B"
-
-
-def _role_priority(role: str) -> int:
-    if role == "source":
-        return 0
-    if role == "derived":
-        return 1
-    return 2
-
-
 def _normalize_string_list(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     normalized: list[str] = []
@@ -199,24 +177,22 @@ class WorkspaceService:
         try:
             raw_payload = (await download_file(self.manifest_object_path)).decode("utf-8")
         except Exception as exc:
-            raise ValueError(f"workspace_manifest_read_failed: {exc}") from exc
+            raise ValueError("workspace_manifest_read_failed") from exc
 
         try:
             payload = json.loads(raw_payload)
         except Exception as exc:
-            raise ValueError(f"workspace_manifest_parse_failed: {exc}") from exc
+            raise ValueError("workspace_manifest_parse_failed") from exc
 
         try:
             manifest = WorkspaceManifest.model_validate(payload)
         except Exception as exc:
-            raise ValueError(f"workspace_manifest_validate_failed: {exc}") from exc
+            raise ValueError("workspace_manifest_validate_failed") from exc
         if manifest.session_id != self.session_id or manifest.user_id != self.user_id:
             raise ValueError("workspace_manifest_mismatch: session/user mismatch")
         for asset in manifest.assets:
             if not asset.object_path.startswith(f"{self.files_prefix}/"):
-                raise ValueError(
-                    f"workspace_manifest_invalid_asset: object_path 越界 {asset.object_path}"
-                )
+                raise ValueError("workspace_manifest_invalid_asset")
         return manifest
 
     async def save_manifest(self, manifest: WorkspaceManifest) -> None:
@@ -231,24 +207,6 @@ class WorkspaceService:
             json.dumps(latest_manifest.model_dump(exclude_none=True), ensure_ascii=False, indent=2).encode("utf-8"),
             "application/json",
         )
-
-    async def resolve_request_attachments(
-        self,
-        attachments: Optional[List[WorkspaceAttachmentInput]] = None,
-        image_data_urls: Optional[List[str]] = None,
-    ) -> List[WorkspaceAttachmentRecord]:
-        lock = await _get_manifest_lock(self.manifest_object_path)
-        async with lock:
-            manifest = await self.load_manifest()
-            _, mutated = await self._resolve_request_assets_locked(
-                manifest,
-                attachments=attachments,
-                image_data_urls=image_data_urls,
-            )
-
-            if mutated:
-                await self.save_manifest(manifest)
-            return list(manifest.assets)
 
     async def resolve_request_assets(
         self,
@@ -269,53 +227,6 @@ class WorkspaceService:
             if mutated:
                 await self.save_manifest(manifest)
             return request_assets
-
-    def build_agent_workspace_brief(
-        self,
-        assets: Optional[Iterable[WorkspaceAttachmentRecord]] = None,
-    ) -> str:
-        resolved_assets = list(assets or [])
-        if not resolved_assets:
-            return ""
-
-        source_count = sum(1 for item in resolved_assets if item.role == "source")
-        derived_count = sum(1 for item in resolved_assets if item.role == "derived")
-        artifact_count = sum(1 for item in resolved_assets if item.role == "artifact")
-        lines = [
-            (
-                f"当前会话工作区共有 {len(resolved_assets)} 个真实文件"
-                f"（source={source_count}, derived={derived_count}, artifact={artifact_count}）。"
-            ),
-        ]
-        preview_assets = sorted(
-            resolved_assets,
-            key=lambda item: (_role_priority(item.role), item.workspace_path),
-        )[:_WORKSPACE_BRIEF_MAX_ITEMS]
-        for asset in preview_assets:
-            details = [
-                asset.mime_type or "unknown",
-                asset.role,
-                _format_size(asset.size_bytes),
-            ]
-            if "text" in asset.available_views:
-                details.append("text-view")
-            elif "vision" in asset.available_views:
-                details.append("vision-view")
-            elif asset.view_type and asset.view_type != "binary":
-                details.append(f"view={asset.view_type}")
-            if asset.input_mode != "workspace_file":
-                details.append(f"input_mode={asset.input_mode}")
-            lines.append(f"- {asset.workspace_path} ({', '.join(details)})")
-        remaining = len(resolved_assets) - len(preview_assets)
-        if remaining > 0:
-            lines.append(f"- 其余 {remaining} 个文件未在此展开，需要时再查看完整工作区清单")
-        lines.extend(
-            [
-                "格式转换、样式/结构/元信息处理优先使用 Workspace + Sandbox。",
-                "如果只是问内容或总结，优先结合 KB 或 derived 内容视图。",
-            ]
-        )
-        return "\n".join(lines)
 
     async def _resolve_request_assets_locked(
         self,

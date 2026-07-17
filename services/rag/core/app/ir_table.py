@@ -36,6 +36,7 @@
   * 不做数据类型识别，直接使用原始值
 """
 
+import logging
 import re
 from io import BytesIO
 from pathlib import Path
@@ -46,6 +47,8 @@ from openpyxl import load_workbook
 from deepdoc.parser.utils import get_text
 from core.nlp import rag_tokenizer, tokenize
 from deepdoc.parser import ExcelParser
+
+logger = logging.getLogger(__name__)
 
 
 def unmerge_and_fill_excel(file_path, keep_title=True, unmerge_start_row=2, 
@@ -478,9 +481,12 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000,
                     # 添加到行文本
                     row_txt.append(f"{col_name}:{str_value}")
                     
-                except Exception as e:
+                except Exception as exc:
                     # 如果处理某个字段时出错，跳过该字段但继续处理其他字段
-                    print(f"Warning: Error processing column '{col_name}': {e}")
+                    logger.warning(
+                        "Skipping an invalid table cell (error_type=%s)",
+                        type(exc).__name__,
+                    )
                     continue
             
             # 如果这行没有任何内容，跳过
@@ -496,55 +502,3 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000,
             res.append(d)
 
     return res
-
-
-if __name__ == "__main__":
-    import sys
-    
-    print("=" * 80)
-    print("智能表格解析器（ir-table）- 自动处理合并单元格")
-    print("=" * 80)
-    print()
-    print("功能：")
-    print("  1. 自动检测和处理 Excel 文件中的合并单元格")
-    print("  2. 保留标题行格式")
-    print("  3. 智能填充合并区域")
-    print("  4. 支持所有工作表批量处理")
-    print()
-    print("使用方法：")
-    print("  python ir-table.py <excel_file>")
-    print()
-    print("Python 代码示例：")
-    print("  from core.app.ir_table import chunk")
-    print()
-    print("  # 方式1: 自动处理合并单元格（默认）")
-    print("  chunks = chunk('城市管理标准清单.xlsx', lang='Chinese')")
-    print()
-    print("  # 方式2: 自定义合并单元格处理参数")
-    print("  chunks = chunk(")
-    print("      '城市管理标准清单.xlsx',")
-    print("      lang='Chinese',")
-    print("      keep_title=True,          # 保留第1行标题")
-    print("      unmerge_start_row=3,      # 从第3行开始取消合并")
-    print("      only_columns=['A']        # 只处理A列的合并")
-    print("  )")
-    print()
-    print("  # 方式3: 关闭自动处理（使用原始 table 解析器行为）")
-    print("  chunks = chunk('data.xlsx', lang='Chinese', auto_unmerge=False)")
-    print()
-    print("=" * 80)
-    
-    if len(sys.argv) > 1:
-        print(f"\n正在处理文件: {sys.argv[1]}")
-        
-        def dummy(prog=None, msg=""):
-            if msg:
-                print(f"  {msg}")
-        
-        try:
-            chunks = chunk(sys.argv[1], callback=dummy)
-            print(f"\n✅ 成功生成 {len(chunks)} 个 chunks")
-        except Exception as e:
-            print(f"\n❌ 处理失败: {e}")
-    else:
-        print("\n⚠️  请提供 Excel 文件路径作为参数")

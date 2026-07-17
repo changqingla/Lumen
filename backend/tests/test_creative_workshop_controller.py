@@ -1,6 +1,8 @@
-import os
+import asyncio
 import io
 import json
+import logging
+import os
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,20 +13,37 @@ from uuid import UUID, uuid4
 os.environ["DEBUG"] = "false"
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
 from modules.creative_workshop import controller
 from modules.creative_workshop.paper_translation_service import (
+    QUEUE_ATTEMPTS_KEY,
+    QUEUE_GENERATIONS_KEY,
+    QUEUE_LEASE_TOKENS_KEY,
     QUEUE_PENDING_KEY,
+    QUEUE_PAYLOADS_KEY,
     QUEUE_PROCESSING_KEY,
-    QUEUE_PROCESSING_HEARTBEAT_KEY,
+    QUEUE_RECONCILE_CURSOR_KEY,
     QUEUE_SCHEDULED_KEY,
+    PaperTranslationLeaseLost,
     PaperTranslationQueueItem,
     PaperTranslationQueueWorker,
     PaperTranslationService,
     PaperTranslationTask,
+    PaperTranslationTaskLease,
+    _QUEUE_ACK_SCRIPT,
+    _QUEUE_ACQUIRE_SCRIPT,
+    _QUEUE_CANCEL_SCRIPT,
+    _QUEUE_ENQUEUE_SCRIPT,
+    _QUEUE_HEARTBEAT_SCRIPT,
+    _QUEUE_PROMOTE_SCRIPT,
+    _QUEUE_RECOVER_SCRIPT,
+    _QUEUE_RELEASE_SCRIPT,
+    _QUEUE_RETRY_SCRIPT,
     _extract_translated_markdown_path,
     _normalize_translated_markdown_artifact_path,
+    _normalize_scoped_pdf_resource_url,
     _remove_mermaid_diagram_blocks,
     _safe_pdf_url_fetcher,
 )
@@ -49,19 +68,36 @@ async def test_generate_image_requires_configured_api_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generate_image_posts_openai_compatible_payload(monkeypatch):
-    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_BASE_URL", "https://example.test/v1")
-    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_API_KEY", "test-key")
-    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_MODEL", "gpt-image-2")
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_IMAGE_BASE_URL",
+        "https://example.test/v1",
+    )
+    monkeypatch.setattr(
+        controller.settings, "CREATIVE_WORKSHOP_IMAGE_API_KEY", "test-key"
+    )
+    monkeypatch.setattr(
+        controller.settings, "CREATIVE_WORKSHOP_IMAGE_MODEL", "gpt-image-2"
+    )
     monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_TIMEOUT", 12.0)
 
     calls = []
 
     class _Response:
+        headers = {}
+
         def raise_for_status(self):
             return None
 
-        def json(self):
-            return {"data": [{"b64_json": "ZmFrZS1pbWFnZQ=="}]}
+        async def aiter_bytes(self):
+            yield b'{"data":[{"b64_json":"ZmFrZS1pbWFnZQ=="}]}'
+
+    class _StreamContext:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
 
     class _Client:
         def __init__(self, *args, **kwargs):
@@ -73,9 +109,9 @@ async def test_generate_image_posts_openai_compatible_payload(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def post(self, url, headers, json):
-            calls.append(("post", url, headers, json))
-            return _Response()
+        def stream(self, method, url, headers, json):
+            calls.append(("stream", method, url, headers, json))
+            return _StreamContext()
 
     monkeypatch.setattr(controller.httpx, "AsyncClient", _Client)
 
@@ -94,10 +130,14 @@ async def test_generate_image_posts_openai_compatible_payload(monkeypatch):
 
     assert result.b64_json == "ZmFrZS1pbWFnZQ=="
     assert result.mime_type == "image/jpeg"
-    assert calls[0] == ("init", {"timeout": 12.0})
-    assert calls[1][1] == "https://example.test/v1/images/generations"
-    assert calls[1][2]["Authorization"] == "Bearer test-key"
-    assert calls[1][3] == {
+    assert calls[0] == (
+        "init",
+        {"timeout": 12.0, "trust_env": False, "follow_redirects": False},
+    )
+    assert calls[1][2] == "https://example.test/v1/images/generations"
+    assert calls[1][3]["Authorization"] == "Bearer test-key"
+    assert calls[1][3]["Accept-Encoding"] == "identity"
+    assert calls[1][4] == {
         "model": "gpt-image-2",
         "prompt": "minimal icon",
         "size": "1536x1024",
@@ -109,19 +149,128 @@ async def test_generate_image_posts_openai_compatible_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_image_provider_error_body_and_url_are_not_exposed_or_logged(
+    monkeypatch, caplog
+):
+    secret_marker = "private-provider-body-and-query-secret"
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_IMAGE_API_KEY",
+        "configured-provider-key",
+    )
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_IMAGE_BASE_URL",
+        "https://example.test/v1",
+    )
+
+    request = httpx.Request(
+        "POST",
+        f"https://example.test/v1/images/generations?token={secret_marker}",
+    )
+    response = httpx.Response(500, text=secret_marker, request=request)
+
+    class _StreamContext:
+        async def __aenter__(self):
+            return response
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["trust_env"] is False
+            assert kwargs["follow_redirects"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def stream(self, method, url, headers, json):
+            return _StreamContext()
+
+    monkeypatch.setattr(controller.httpx, "AsyncClient", _Client)
+
+    with (
+        caplog.at_level(logging.WARNING, logger=controller.__name__),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await controller._post_image_provider_json(
+            path="/images/generations",
+            payload={"prompt": "private prompt"},
+        )
+
+    assert exc_info.value.status_code == 502
+    assert secret_marker not in str(exc_info.value.detail)
+    assert secret_marker not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "chunks"),
+    [
+        ({"content-length": "6"}, []),
+        ({}, [b"123", b"456"]),
+    ],
+)
+async def test_image_provider_response_limit_checks_declared_and_streamed_bytes(
+    monkeypatch, headers, chunks
+):
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_IMAGE_MAX_RESPONSE_BYTES",
+        5,
+    )
+
+    class _Response:
+        async def aiter_bytes(self):
+            for chunk in chunks:
+                yield chunk
+
+    response = _Response()
+    response.headers = headers
+
+    with pytest.raises(HTTPException) as exc_info:
+        await controller._read_image_provider_json(response)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["error"]["code"] == "IMAGE_PROVIDER_BAD_RESPONSE"
+
+
+@pytest.mark.asyncio
 async def test_generate_image_records_image_prompt(monkeypatch, tmp_path):
     user_id = uuid4()
     monkeypatch.setattr(controller.settings, "AUDIT_LOG_DIR", str(tmp_path))
-    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_BASE_URL", "https://example.test/v1")
-    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_API_KEY", "test-key")
-    monkeypatch.setattr(controller.settings, "CREATIVE_WORKSHOP_IMAGE_MODEL", "gpt-image-2")
+    monkeypatch.setattr(controller.settings, "AUDIT_LOG_INCLUDE_PROMPTS", False)
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_IMAGE_BASE_URL",
+        "https://example.test/v1",
+    )
+    monkeypatch.setattr(
+        controller.settings, "CREATIVE_WORKSHOP_IMAGE_API_KEY", "test-key"
+    )
+    monkeypatch.setattr(
+        controller.settings, "CREATIVE_WORKSHOP_IMAGE_MODEL", "gpt-image-2"
+    )
 
     class _Response:
+        headers = {}
+
         def raise_for_status(self):
             return None
 
-        def json(self):
-            return {"data": [{"b64_json": "ZmFrZS1pbWFnZQ=="}]}
+        async def aiter_bytes(self):
+            yield b'{"data":[{"b64_json":"ZmFrZS1pbWFnZQ=="}]}'
+
+    class _StreamContext:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
 
     class _Client:
         def __init__(self, *args, **kwargs):
@@ -133,8 +282,8 @@ async def test_generate_image_records_image_prompt(monkeypatch, tmp_path):
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def post(self, url, headers, json):
-            return _Response()
+        def stream(self, method, url, headers, json):
+            return _StreamContext()
 
     monkeypatch.setattr(controller.httpx, "AsyncClient", _Client)
 
@@ -146,20 +295,26 @@ async def test_generate_image_records_image_prompt(monkeypatch, tmp_path):
             output_format="png",
             output_compression=None,
         ),
-        current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+        current_user=SimpleNamespace(
+            id=user_id, name="alice", email="alice@example.com"
+        ),
     )
 
     [log_file] = list(tmp_path.glob("*/user-*.jsonl"))
     record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["event_type"] == "image2_prompt"
     assert record["user"]["id"] == str(user_id)
-    assert record["prompt"] == "赛博城市夜景"
+    assert "prompt" not in record
+    assert record["prompt_length"] == len("赛博城市夜景")
+    assert len(record["prompt_fingerprint"]) == 64
     assert record["metadata"]["model"] == "gpt-image-2"
     assert record["metadata"]["size"] == "1024x1536"
 
 
 class _FakeUpload:
-    def __init__(self, *, filename: str, content: bytes, content_type: str = "application/pdf"):
+    def __init__(
+        self, *, filename: str, content: bytes, content_type: str = "application/pdf"
+    ):
         self.filename = filename
         self.content_type = content_type
         self._file = io.BytesIO(content)
@@ -173,6 +328,8 @@ class _FakeRedis:
         self.lists: dict[str, list[str]] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
+        self.strings: dict[str, str] = {}
+        self._eval_lock = asyncio.Lock()
 
     async def lpush(self, key: str, value: str):
         self.lists.setdefault(key, []).insert(0, value)
@@ -216,6 +373,22 @@ class _FakeRedis:
     async def hdel(self, key: str, field: str):
         return int(self.hashes.setdefault(key, {}).pop(field, None) is not None)
 
+    async def get(self, key: str):
+        return self.strings.get(key)
+
+    async def set(self, key: str, value: str):
+        self.strings[key] = value
+        return True
+
+    async def delete(self, *keys: str):
+        deleted = 0
+        for key in keys:
+            deleted += int(self.strings.pop(key, None) is not None)
+            deleted += int(self.lists.pop(key, None) is not None)
+            deleted += int(self.hashes.pop(key, None) is not None)
+            deleted += int(self.sorted_sets.pop(key, None) is not None)
+        return deleted
+
     async def zadd(self, key: str, mapping: dict[str, float]):
         values = self.sorted_sets.setdefault(key, {})
         added = 0
@@ -228,10 +401,167 @@ class _FakeRedis:
         values = self.sorted_sets.setdefault(key, {})
         minimum = float(min)
         maximum = float(max)
-        return [member for member, score in values.items() if minimum <= score <= maximum]
+        return [
+            member for member, score in values.items() if minimum <= score <= maximum
+        ]
 
     async def zrem(self, key: str, member: str):
         return int(self.sorted_sets.setdefault(key, {}).pop(member, None) is not None)
+
+    async def zscore(self, key: str, member: str):
+        return self.sorted_sets.setdefault(key, {}).get(member)
+
+    async def zcard(self, key: str):
+        return len(self.sorted_sets.setdefault(key, {}))
+
+    async def eval(self, script: str, numkeys: int, *args):
+        async with self._eval_lock:
+            return await self._eval_unlocked(script, numkeys, *args)
+
+    async def _eval_unlocked(self, script: str, numkeys: int, *args):
+        assert numkeys == 7
+        (
+            pending_key,
+            processing_key,
+            scheduled_key,
+            payloads_key,
+            attempts_key,
+            tokens_key,
+            generations_key,
+        ) = args[:7]
+        argv = args[7:]
+
+        if script == _QUEUE_ENQUEUE_SCRIPT:
+            task_id, payload, attempt, ready_at = argv
+            if any(
+                task_id in self.sorted_sets.setdefault(key, {})
+                for key in (pending_key, processing_key, scheduled_key)
+            ):
+                return 0
+            await self.hset(payloads_key, task_id, payload)
+            await self.hset(attempts_key, task_id, str(attempt))
+            await self.zadd(pending_key, {task_id: float(ready_at)})
+            return 1
+
+        if script == _QUEUE_ACQUIRE_SCRIPT:
+            now, lease_until, token = argv
+            due = sorted(
+                (
+                    (score, task_id)
+                    for task_id, score in self.sorted_sets.setdefault(
+                        pending_key, {}
+                    ).items()
+                    if score <= float(now)
+                )
+            )
+            for _, task_id in due[:20]:
+                await self.zrem(pending_key, task_id)
+                payload = await self.hget(payloads_key, task_id)
+                if payload is None:
+                    await self.hdel(attempts_key, task_id)
+                    continue
+                attempt = await self.hget(attempts_key, task_id) or "1"
+                await self.zadd(processing_key, {task_id: float(lease_until)})
+                await self.hset(tokens_key, task_id, token)
+                generation = int(await self.hget(generations_key, task_id) or 0) + 1
+                await self.hset(generations_key, task_id, str(generation))
+                return [task_id, payload, attempt, generation]
+            return []
+
+        task_id = str(argv[0])
+        token = str(argv[1]) if len(argv) > 1 else ""
+        current_token = await self.hget(tokens_key, task_id)
+        current_deadline = await self.zscore(processing_key, task_id)
+
+        if script == _QUEUE_HEARTBEAT_SCRIPT:
+            now, lease_until = map(float, argv[2:4])
+            if (
+                current_token != token
+                or current_deadline is None
+                or current_deadline < now
+            ):
+                return 0
+            await self.zadd(processing_key, {task_id: lease_until})
+            return 1
+
+        if script in {_QUEUE_ACK_SCRIPT, _QUEUE_CANCEL_SCRIPT}:
+            now = float(argv[2])
+            if (
+                current_token != token
+                or current_deadline is None
+                or current_deadline < now
+            ):
+                return 0
+            for key in (pending_key, processing_key, scheduled_key):
+                await self.zrem(key, task_id)
+            for key in (payloads_key, attempts_key, tokens_key, generations_key):
+                await self.hdel(key, task_id)
+            return 1
+
+        if script == _QUEUE_RELEASE_SCRIPT:
+            now = float(argv[2])
+            if (
+                current_token != token
+                or current_deadline is None
+                or current_deadline < now
+            ):
+                return 0
+            await self.zrem(processing_key, task_id)
+            await self.hdel(tokens_key, task_id)
+            await self.zadd(pending_key, {task_id: now})
+            return 1
+
+        if script == _QUEUE_RETRY_SCRIPT:
+            now, ready_at = map(float, argv[2:4])
+            next_attempt = str(argv[4])
+            if (
+                current_token != token
+                or current_deadline is None
+                or current_deadline < now
+            ):
+                return 0
+            await self.zrem(processing_key, task_id)
+            await self.hdel(tokens_key, task_id)
+            await self.hset(attempts_key, task_id, next_attempt)
+            await self.zadd(scheduled_key, {task_id: ready_at})
+            return 1
+
+        if script == _QUEUE_PROMOTE_SCRIPT:
+            now, limit = float(argv[0]), int(argv[1])
+            due = sorted(
+                (
+                    (score, member)
+                    for member, score in self.sorted_sets.setdefault(
+                        scheduled_key, {}
+                    ).items()
+                    if score <= now
+                )
+            )
+            for _, member in due[:limit]:
+                await self.zrem(scheduled_key, member)
+                await self.zadd(pending_key, {member: now})
+            return len(due[:limit])
+
+        if script == _QUEUE_RECOVER_SCRIPT:
+            now, limit = float(argv[0]), int(argv[1])
+            expired = sorted(
+                (
+                    (score, member)
+                    for member, score in self.sorted_sets.setdefault(
+                        processing_key, {}
+                    ).items()
+                    if score <= now
+                )
+            )
+            for _, member in expired[:limit]:
+                await self.zrem(processing_key, member)
+                await self.hdel(tokens_key, member)
+                attempt = int(await self.hget(attempts_key, member) or 1) + 1
+                await self.hset(attempts_key, member, str(attempt))
+                await self.zadd(pending_key, {member: now})
+            return len(expired[:limit])
+
+        raise AssertionError("Unexpected Redis Lua script")
 
     def pipeline(self, transaction: bool = True):
         redis_client = self
@@ -256,11 +586,19 @@ class _FakeRedis:
                 results = []
                 for operation in self.operations:
                     if operation[0] == "zadd":
-                        results.append(await redis_client.zadd(operation[1], operation[2]))
+                        results.append(
+                            await redis_client.zadd(operation[1], operation[2])
+                        )
                     elif operation[0] == "lrem":
-                        results.append(await redis_client.lrem(operation[1], operation[2], operation[3]))
+                        results.append(
+                            await redis_client.lrem(
+                                operation[1], operation[2], operation[3]
+                            )
+                        )
                     elif operation[0] == "hdel":
-                        results.append(await redis_client.hdel(operation[1], operation[2]))
+                        results.append(
+                            await redis_client.hdel(operation[1], operation[2])
+                        )
                 return results
 
         return _Pipeline()
@@ -280,7 +618,9 @@ async def test_save_pdf_upload_streams_to_destination(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_save_pdf_upload_rejects_oversized_file_before_full_read(monkeypatch, tmp_path):
+async def test_save_pdf_upload_rejects_oversized_file_before_full_read(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(controller.settings, "MAX_UPLOAD_SIZE", 8)
     destination = tmp_path / "source.pdf"
 
@@ -345,17 +685,23 @@ async def test_create_paper_translation_task_enqueues_redis_job(monkeypatch, tmp
     service = _Service()
     redis_client = _FakeRedis()
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: service)
-    monkeypatch.setattr(controller, "get_redis_client", AsyncMock(return_value=redis_client))
+    monkeypatch.setattr(
+        controller, "get_redis_client", AsyncMock(return_value=redis_client)
+    )
     monkeypatch.setattr(controller, "record_user_prompt_event", AsyncMock())
 
     response = await controller.create_paper_translation_task(
         file=_FakeUpload(filename="paper.pdf", content=b"%PDF-1.4\nfake"),
-        current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+        current_user=SimpleNamespace(
+            id=user_id, name="alice", email="alice@example.com"
+        ),
     )
 
     assert response.task_id == "task-1"
     assert response.status == "queued"
-    service.create_task.assert_awaited_once_with(owner_id=str(user_id), filename="paper.pdf", model_name=None)
+    service.create_task.assert_awaited_once_with(
+        owner_id=str(user_id), filename="paper.pdf", model_name=None
+    )
     service.attach_source_pdf.assert_awaited_once_with(
         owner_id=str(user_id),
         task_id="task-1",
@@ -373,7 +719,9 @@ async def test_create_paper_translation_task_enqueues_redis_job(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_create_paper_translation_task_preserves_selected_model(monkeypatch, tmp_path):
+async def test_create_paper_translation_task_preserves_selected_model(
+    monkeypatch, tmp_path
+):
     user_id = uuid4()
     task = PaperTranslationTask(
         task_id="task-1",
@@ -416,13 +764,17 @@ async def test_create_paper_translation_task_preserves_selected_model(monkeypatc
     service = _Service()
     redis_client = _FakeRedis()
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: service)
-    monkeypatch.setattr(controller, "get_redis_client", AsyncMock(return_value=redis_client))
+    monkeypatch.setattr(
+        controller, "get_redis_client", AsyncMock(return_value=redis_client)
+    )
     monkeypatch.setattr(controller, "record_user_prompt_event", AsyncMock())
 
     response = await controller.create_paper_translation_task(
         file=_FakeUpload(filename="paper.pdf", content=b"%PDF-1.4\nfake"),
         model_name="  model-custom  ",
-        current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+        current_user=SimpleNamespace(
+            id=user_id, name="alice", email="alice@example.com"
+        ),
     )
 
     assert response.model_name == "model-custom"
@@ -440,7 +792,9 @@ async def test_create_paper_translation_task_preserves_selected_model(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_create_paper_translation_task_rejects_invalid_pdf_before_task_creation(monkeypatch, tmp_path):
+async def test_create_paper_translation_task_rejects_invalid_pdf_before_task_creation(
+    monkeypatch, tmp_path
+):
     user_id = uuid4()
 
     class _Service:
@@ -454,7 +808,9 @@ async def test_create_paper_translation_task_rejects_invalid_pdf_before_task_cre
     with pytest.raises(HTTPException) as exc_info:
         await controller.create_paper_translation_task(
             file=_FakeUpload(filename="paper.pdf", content=b"not a pdf"),
-            current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+            current_user=SimpleNamespace(
+                id=user_id, name="alice", email="alice@example.com"
+            ),
         )
 
     assert exc_info.value.status_code == 400
@@ -465,7 +821,9 @@ async def test_create_paper_translation_task_rejects_invalid_pdf_before_task_cre
 
 
 @pytest.mark.asyncio
-async def test_create_paper_translation_task_reports_unwritable_storage(monkeypatch, tmp_path):
+async def test_create_paper_translation_task_reports_unwritable_storage(
+    monkeypatch, tmp_path
+):
     user_id = uuid4()
 
     class _Service:
@@ -474,12 +832,18 @@ async def test_create_paper_translation_task_reports_unwritable_storage(monkeypa
 
     service = _Service()
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: service)
-    monkeypatch.setattr(Path, "mkdir", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("read-only")))
+    monkeypatch.setattr(
+        Path,
+        "mkdir",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("read-only")),
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await controller.create_paper_translation_task(
             file=_FakeUpload(filename="paper.pdf", content=b"%PDF-1.4\nfake"),
-            current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+            current_user=SimpleNamespace(
+                id=user_id, name="alice", email="alice@example.com"
+            ),
         )
 
     assert exc_info.value.status_code == 503
@@ -488,7 +852,9 @@ async def test_create_paper_translation_task_reports_unwritable_storage(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_create_paper_translation_task_marks_failed_when_queue_unavailable(monkeypatch, tmp_path):
+async def test_create_paper_translation_task_marks_failed_when_queue_unavailable(
+    monkeypatch, tmp_path
+):
     user_id = uuid4()
     task = PaperTranslationTask(
         task_id="task-1",
@@ -514,13 +880,17 @@ async def test_create_paper_translation_task_marks_failed_when_queue_unavailable
 
     service = _Service()
     monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: service)
-    monkeypatch.setattr(controller, "get_redis_client", AsyncMock(return_value=_FakeRedis()))
+    monkeypatch.setattr(
+        controller, "get_redis_client", AsyncMock(return_value=_FakeRedis())
+    )
     monkeypatch.setattr(controller, "record_user_prompt_event", AsyncMock())
 
     with pytest.raises(HTTPException) as exc_info:
         await controller.create_paper_translation_task(
             file=_FakeUpload(filename="paper.pdf", content=b"%PDF-1.4\nfake"),
-            current_user=SimpleNamespace(id=user_id, name="alice", email="alice@example.com"),
+            current_user=SimpleNamespace(
+                id=user_id, name="alice", email="alice@example.com"
+            ),
         )
 
     assert exc_info.value.status_code == 503
@@ -540,10 +910,20 @@ async def test_paper_translation_service_runs_mineru_then_agent(monkeypatch, tmp
     source_pdf_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
     source_pdf_path.parent.mkdir(parents=True, exist_ok=True)
     source_pdf_path.write_bytes(b"%PDF-1.4\nfake")
-    await service.attach_source_pdf(owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path)
+    await service.attach_source_pdf(
+        owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path
+    )
 
-    monkeypatch.setattr(MineruService, "convert_document", AsyncMock(return_value={"batch_id": "batch-1"}))
-    monkeypatch.setattr(MineruService, "get_task_status", AsyncMock(return_value={"status": "completed"}))
+    monkeypatch.setattr(
+        MineruService,
+        "convert_document",
+        AsyncMock(return_value={"batch_id": "batch-1"}),
+    )
+    monkeypatch.setattr(
+        MineruService,
+        "get_task_status",
+        AsyncMock(return_value={"status": "completed"}),
+    )
     monkeypatch.setattr(
         MineruService,
         "get_content_with_assets",
@@ -557,7 +937,9 @@ async def test_paper_translation_service_runs_mineru_then_agent(monkeypatch, tmp
     monkeypatch.setattr(
         service,
         "_translate_markdown_with_agent",
-        AsyncMock(return_value="# 标题\n\n中文正文。\n\n![](images/fig.jpg)\n\n## References\nSmith, 2020."),
+        AsyncMock(
+            return_value="# 标题\n\n中文正文。\n\n![](images/fig.jpg)\n\n## References\nSmith, 2020."
+        ),
     )
 
     await service.run_translation_task(
@@ -573,9 +955,15 @@ async def test_paper_translation_service_runs_mineru_then_agent(monkeypatch, tmp
     assert completed.mineru_batch_id == "batch-1"
     assert completed.source_markdown_path
     assert completed.translated_markdown_path
-    assert "English text" in open(completed.source_markdown_path, encoding="utf-8").read()
-    assert "中文正文" in open(completed.translated_markdown_path, encoding="utf-8").read()
-    assert (tmp_path / owner_id / task.task_id / "assets" / "images" / "fig.jpg").read_bytes() == b"fake-image"
+    assert (
+        "English text" in open(completed.source_markdown_path, encoding="utf-8").read()
+    )
+    assert (
+        "中文正文" in open(completed.translated_markdown_path, encoding="utf-8").read()
+    )
+    assert (
+        tmp_path / owner_id / task.task_id / "assets" / "images" / "fig.jpg"
+    ).read_bytes() == b"fake-image"
     service._translate_markdown_with_agent.assert_awaited_once_with(
         owner_id=owner_id,
         task_id=task.task_id,
@@ -593,7 +981,9 @@ async def test_paper_translation_task_thread_id_is_uuid(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_agent_uses_skill_and_downloads_artifact(monkeypatch, tmp_path):
+async def test_paper_translation_agent_uses_skill_and_downloads_artifact(
+    monkeypatch, tmp_path
+):
     owner_id = str(uuid4())
     captured: dict[str, object] = {}
 
@@ -625,7 +1015,9 @@ async def test_paper_translation_agent_uses_skill_and_downloads_artifact(monkeyp
                 "assistant_id": kwargs["assistant_id"],
                 "context": {
                     "thread_id": kwargs["thread_id"],
-                    "disable_model_streaming": kwargs.get("disable_model_streaming", False),
+                    "disable_model_streaming": kwargs.get(
+                        "disable_model_streaming", False
+                    ),
                 },
                 "input": {"messages": []},
             }
@@ -643,7 +1035,7 @@ async def test_paper_translation_agent_uses_skill_and_downloads_artifact(monkeyp
 
         async def aiter_text(self):
             yield (
-                'event: values\n'
+                "event: values\n"
                 'data: {"messages":[{"type":"ai","content":"{\\"translated_markdown_path\\":\\"/mnt/user-data/outputs/demo.zh.md\\"}"}]}\n\n'
             )
 
@@ -701,7 +1093,9 @@ async def test_paper_translation_agent_uses_skill_and_downloads_artifact(monkeyp
         runtime_service=_RuntimeService(),
         model_config_session_factory=lambda: _Session(),
     )
-    task = await service.create_task(owner_id=owner_id, filename="demo.pdf", model_name="model-custom")
+    task = await service.create_task(
+        owner_id=owner_id, filename="demo.pdf", model_name="model-custom"
+    )
 
     result = await service._translate_markdown_with_agent(
         owner_id=owner_id,
@@ -718,33 +1112,298 @@ async def test_paper_translation_agent_uses_skill_and_downloads_artifact(monkeyp
     assert model_resolution_kwargs["thread_id"] == task.thread_id
     assert captured["template_kwargs"]["model_name"] == "model-1"
     assert captured["template_kwargs"].get("disable_model_streaming", False) is False
+    assert captured["template_kwargs"]["recursion_limit"] == (
+        controller.settings.CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_RECURSION_LIMIT
+    )
     assert captured["stream_request"]["context"]["disable_model_streaming"] is False
     assert captured["stream_request"]["context"]["dynamic_model_token"] == "token-1"
-    assert "paper-translation" in captured["stream_request"]["input"]["messages"][0]["content"]
-    assert captured["downloaded_artifact"] == (task.thread_id, "/mnt/user-data/outputs/demo.zh.md")
+    prompt = captured["stream_request"]["input"]["messages"][0]["content"]
+    assert "paper-translation" in prompt
+    assert "/mnt/user-data/outputs/demo.zh.md" in prompt
+    assert "禁止使用 bash" in prompt
+    assert captured["downloaded_artifact"] == (
+        task.thread_id,
+        "/mnt/user-data/outputs/demo.zh.md",
+    )
+
+
+@pytest.mark.asyncio
+async def test_paper_translation_agent_continues_after_recursion_limit_with_progress(
+    monkeypatch, tmp_path, caplog
+):
+    owner_id = str(uuid4())
+    secret_marker = "private-runtime-error-payload"
+    stream_requests: list[dict] = []
+    download_calls: list[tuple[str, str]] = []
+    stream_events = iter(
+        [
+            (
+                "event: error\n"
+                f'data: {{"error":"GraphRecursionError","message":"{secret_marker}"}}\n\n'
+            ),
+            (
+                "event: values\n"
+                'data: {"messages":[{"type":"ai","content":"{\\"translated_markdown_path\\":'
+                '\\"/mnt/user-data/outputs/demo.zh.md\\"}"}]}\n\n'
+            ),
+        ]
+    )
+
+    class _RuntimeService:
+        langgraph_url = "http://langgraph"
+
+        def build_thread_id(self, thread_id):
+            return str(thread_id)
+
+        async def ensure_thread_exists(self, thread_id):
+            return {}
+
+        async def resolve_assistant_id(self):
+            return "assistant-1"
+
+        async def list_runtime_models(self):
+            return [{"name": "model-1"}]
+
+        async def upload_bytes(self, **kwargs):
+            return {
+                "filename": kwargs["filename"],
+                "size": len(kwargs["data"]),
+                "virtual_path": f"/mnt/user-data/uploads/{kwargs['filename']}",
+            }
+
+        def build_run_request_template(self, **kwargs):
+            return {
+                "assistant_id": kwargs["assistant_id"],
+                "context": {"thread_id": kwargs["thread_id"]},
+                "config": {"recursion_limit": kwargs["recursion_limit"]},
+                "input": {"messages": []},
+            }
+
+        def build_run_stream_path(self, thread_id):
+            return f"/threads/{thread_id}/runs/stream"
+
+        async def download_thread_artifact_text(self, thread_id, virtual_path):
+            download_calls.append((thread_id, virtual_path))
+            return "# 部分译文" if len(download_calls) == 1 else "# 完整译文"
+
+    class _Response:
+        def __init__(self, event_text):
+            self.event_text = event_text
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_text(self):
+            yield self.event_text
+
+    class _StreamContext:
+        def __init__(self, event_text):
+            self.response = _Response(event_text)
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def stream(self, method, url, headers, json):
+            stream_requests.append(json)
+            return _StreamContext(next(stream_events))
+
+    monkeypatch.setattr(
+        "modules.creative_workshop.paper_translation_service.httpx.AsyncClient",
+        _Client,
+    )
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_RECURSION_LIMIT",
+        17,
+    )
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_MAX_CONTINUATIONS",
+        2,
+    )
+
+    service = PaperTranslationService(
+        storage_root=tmp_path, runtime_service=_RuntimeService()
+    )
+    monkeypatch.setattr(
+        service,
+        "_resolve_agent_model_context",
+        AsyncMock(return_value=("model-1", None)),
+    )
+    task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="modules.creative_workshop.paper_translation_service",
+    ):
+        result = await service._translate_markdown_with_agent(
+            owner_id=owner_id,
+            task_id=task.task_id,
+            filename="demo.pdf",
+            markdown="# Title",
+        )
+
+    assert result == "# 完整译文"
+    assert len(stream_requests) == 2
+    assert secret_marker not in caplog.text
+    assert all(
+        request["config"]["recursion_limit"] == 17 for request in stream_requests
+    )
+    assert stream_requests[1]["input"]["messages"][0]["content"].startswith(
+        "继续尚未完成的论文翻译任务"
+    )
+    assert download_calls == [
+        (task.thread_id, "/mnt/user-data/outputs/demo.zh.md"),
+        (task.thread_id, "/mnt/user-data/outputs/demo.zh.md"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_paper_translation_agent_stops_continuation_without_progress(
+    monkeypatch, tmp_path
+):
+    owner_id = str(uuid4())
+    stream_count = 0
+
+    class _RuntimeService:
+        langgraph_url = "http://langgraph"
+
+        def build_thread_id(self, thread_id):
+            return str(thread_id)
+
+        async def ensure_thread_exists(self, thread_id):
+            return {}
+
+        async def resolve_assistant_id(self):
+            return "assistant-1"
+
+        async def list_runtime_models(self):
+            return [{"name": "model-1"}]
+
+        async def upload_bytes(self, **kwargs):
+            return {"filename": kwargs["filename"], "size": len(kwargs["data"])}
+
+        def build_run_request_template(self, **kwargs):
+            return {"context": {}, "input": {"messages": []}}
+
+        def build_run_stream_path(self, thread_id):
+            return f"/threads/{thread_id}/runs/stream"
+
+        async def download_thread_artifact_text(self, thread_id, virtual_path):
+            return "# 没有变化的部分译文"
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        async def aiter_text(self):
+            yield (
+                "event: error\n"
+                'data: {"error":"GraphRecursionError","message":"Recursion limit reached"}\n\n'
+            )
+
+    class _StreamContext:
+        async def __aenter__(self):
+            return _Response()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def stream(self, method, url, headers, json):
+            nonlocal stream_count
+            stream_count += 1
+            return _StreamContext()
+
+    monkeypatch.setattr(
+        "modules.creative_workshop.paper_translation_service.httpx.AsyncClient",
+        _Client,
+    )
+    monkeypatch.setattr(
+        controller.settings,
+        "CREATIVE_WORKSHOP_PAPER_TRANSLATION_AGENT_MAX_CONTINUATIONS",
+        2,
+    )
+
+    service = PaperTranslationService(
+        storage_root=tmp_path, runtime_service=_RuntimeService()
+    )
+    monkeypatch.setattr(
+        service,
+        "_resolve_agent_model_context",
+        AsyncMock(return_value=("model-1", None)),
+    )
+    task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
+
+    with pytest.raises(RuntimeError, match="停止产生有效进展"):
+        await service._translate_markdown_with_agent(
+            owner_id=owner_id,
+            task_id=task.task_id,
+            filename="demo.pdf",
+            markdown="# Title",
+        )
+
+    assert stream_count == 2
 
 
 def test_paper_translation_extracts_translated_markdown_path():
-    assert _extract_translated_markdown_path(
-        '{"translated_markdown_path":"/mnt/user-data/outputs/demo.zh.md"}'
-    ) == "/mnt/user-data/outputs/demo.zh.md"
-    assert _extract_translated_markdown_path(
-        '```json\n{"translated_markdown_path":"/mnt/user-data/outputs/demo.zh.md"}\n```'
-    ) == "/mnt/user-data/outputs/demo.zh.md"
-    assert _extract_translated_markdown_path(
-        "已完成：/mnt/user-data/outputs/demo.zh.md"
-    ) == "/mnt/user-data/outputs/demo.zh.md"
-    assert _extract_translated_markdown_path(
-        '已完成："/mnt/user-data/outputs/demo paper.zh.md"'
-    ) == "/mnt/user-data/outputs/demo paper.zh.md"
-    assert _extract_translated_markdown_path(
-        "已完成：</mnt/user-data/outputs/demo paper.zh.md>"
-    ) == "/mnt/user-data/outputs/demo paper.zh.md"
+    assert (
+        _extract_translated_markdown_path(
+            '{"translated_markdown_path":"/mnt/user-data/outputs/demo.zh.md"}'
+        )
+        == "/mnt/user-data/outputs/demo.zh.md"
+    )
+    assert (
+        _extract_translated_markdown_path(
+            '```json\n{"translated_markdown_path":"/mnt/user-data/outputs/demo.zh.md"}\n```'
+        )
+        == "/mnt/user-data/outputs/demo.zh.md"
+    )
+    assert (
+        _extract_translated_markdown_path("已完成：/mnt/user-data/outputs/demo.zh.md")
+        == "/mnt/user-data/outputs/demo.zh.md"
+    )
+    assert (
+        _extract_translated_markdown_path(
+            '已完成："/mnt/user-data/outputs/demo paper.zh.md"'
+        )
+        == "/mnt/user-data/outputs/demo paper.zh.md"
+    )
+    assert (
+        _extract_translated_markdown_path(
+            "已完成：</mnt/user-data/outputs/demo paper.zh.md>"
+        )
+        == "/mnt/user-data/outputs/demo paper.zh.md"
+    )
 
 
 def test_paper_translation_validates_translated_markdown_artifact_path():
     assert (
-        _normalize_translated_markdown_artifact_path("/mnt/user-data/outputs/demo.zh.md")
+        _normalize_translated_markdown_artifact_path(
+            "/mnt/user-data/outputs/demo.zh.md"
+        )
         == "/mnt/user-data/outputs/demo.zh.md"
     )
     assert (
@@ -756,32 +1415,49 @@ def test_paper_translation_validates_translated_markdown_artifact_path():
     with pytest.raises(ValueError):
         _normalize_translated_markdown_artifact_path("/mnt/user-data/outputs/demo.txt")
     with pytest.raises(ValueError):
-        _normalize_translated_markdown_artifact_path("/mnt/user-data/outputs/../demo.zh.md")
+        _normalize_translated_markdown_artifact_path(
+            "/mnt/user-data/outputs/../demo.zh.md"
+        )
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_service_records_failure(monkeypatch, tmp_path):
+async def test_paper_translation_service_records_sanitized_failure(
+    monkeypatch, tmp_path, caplog
+):
     owner_id = str(uuid4())
+    secret_marker = "private-mineru-provider-body"
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
     source_pdf_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
     source_pdf_path.parent.mkdir(parents=True, exist_ok=True)
     source_pdf_path.write_bytes(b"%PDF-1.4\nfake")
-    await service.attach_source_pdf(owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path)
-
-    monkeypatch.setattr(MineruService, "convert_document", AsyncMock(side_effect=RuntimeError("mineru down")))
-
-    await service.run_translation_task(
-        owner_id=owner_id,
-        task_id=task.task_id,
-        filename="demo.pdf",
-        source_pdf_path=str(source_pdf_path),
+    await service.attach_source_pdf(
+        owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_pdf_path
     )
+
+    monkeypatch.setattr(
+        MineruService,
+        "convert_document",
+        AsyncMock(side_effect=RuntimeError(secret_marker)),
+    )
+
+    with caplog.at_level(
+        logging.ERROR,
+        logger="modules.creative_workshop.paper_translation_service",
+    ):
+        await service.run_translation_task(
+            owner_id=owner_id,
+            task_id=task.task_id,
+            filename="demo.pdf",
+            source_pdf_path=str(source_pdf_path),
+        )
 
     failed = await service.get_task(owner_id=owner_id, task_id=task.task_id)
     assert failed is not None
     assert failed.status == "failed"
-    assert failed.error == "mineru down"
+    assert failed.error == "论文转换或翻译失败，请重新上传后再试"
+    assert secret_marker not in caplog.text
+    assert secret_marker not in json.dumps(failed.__dict__, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -789,7 +1465,14 @@ async def test_paper_translation_downloads_markdown_and_pdf(tmp_path, monkeypatc
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    md_path = service._write_task_text(owner_id, task.task_id, "translation.zh.md", "# 标题\n\n中文正文。")
+    md_path = await service._write_task_text_fenced(
+        owner_id,
+        task.task_id,
+        "translation.zh.md",
+        "# 标题\n\n中文正文。",
+        redis_client=None,
+        lease=None,
+    )
     await service._update_task(
         owner_id=owner_id,
         task_id=task.task_id,
@@ -811,15 +1494,23 @@ async def test_paper_translation_downloads_markdown_and_pdf(tmp_path, monkeypatc
             assert self.url_fetcher is not None
             return b"%PDF-1.7\nfake-rendered"
 
-    monkeypatch.setitem(__import__("sys").modules, "weasyprint", SimpleNamespace(HTML=_FakeHTML))
+    monkeypatch.setitem(
+        __import__("sys").modules, "weasyprint", SimpleNamespace(HTML=_FakeHTML)
+    )
     monkeypatch.setitem(
         __import__("sys").modules,
         "markdown",
         SimpleNamespace(markdown=lambda text, **kwargs: f"<h1>{text}</h1>"),
     )
-    markdown_name, markdown = await service.get_translated_markdown(owner_id=owner_id, task_id=task.task_id)
-    pdf_name, pdf_bytes = await service.get_translated_pdf(owner_id=owner_id, task_id=task.task_id)
-    cached_pdf_name, cached_pdf_bytes = await service.get_translated_pdf(owner_id=owner_id, task_id=task.task_id)
+    markdown_name, markdown = await service.get_translated_markdown(
+        owner_id=owner_id, task_id=task.task_id
+    )
+    pdf_name, pdf_bytes = await service.get_translated_pdf(
+        owner_id=owner_id, task_id=task.task_id
+    )
+    cached_pdf_name, cached_pdf_bytes = await service.get_translated_pdf(
+        owner_id=owner_id, task_id=task.task_id
+    )
 
     assert markdown_name == "demo.zh.md"
     assert markdown == "# 标题\n\n中文正文。"
@@ -837,7 +1528,8 @@ def test_mineru_extracts_markdown_and_image_assets_from_zip():
         zf.writestr("result/images/fig.jpg", b"image-bytes")
         zf.writestr("../unsafe.jpg", b"bad")
 
-    result = MineruService._extract_markdown_result_from_zip(zip_buffer.getvalue())
+    zip_buffer.seek(0)
+    result = MineruService._extract_markdown_result_from_zip_file(zip_buffer)
 
     assert result.markdown == "# Title\n\n![](images/fig.jpg)"
     assert result.markdown_path == "result/demo.md"
@@ -849,8 +1541,21 @@ async def test_paper_translation_rewrites_assets_to_urls_for_result_preview(tmp_
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    md_path = service._write_task_text(owner_id, task.task_id, "translation.zh.md", "# 标题\n\n![](images/fig.jpg)")
-    service._write_task_assets(owner_id, task.task_id, {"images/fig.jpg": b"image-bytes"})
+    md_path = await service._write_task_text_fenced(
+        owner_id,
+        task.task_id,
+        "translation.zh.md",
+        "# 标题\n\n![](images/fig.jpg)",
+        redis_client=None,
+        lease=None,
+    )
+    await service._write_task_assets_fenced(
+        owner_id,
+        task.task_id,
+        {"images/fig.jpg": b"image-bytes"},
+        redis_client=None,
+        lease=None,
+    )
     await service._update_task(
         owner_id=owner_id,
         task_id=task.task_id,
@@ -863,31 +1568,42 @@ async def test_paper_translation_rewrites_assets_to_urls_for_result_preview(tmp_
         task_id=task.task_id,
         asset_url_prefix=f"/api/creative-workshop/paper-translation/tasks/{task.task_id}/assets",
     )
-    _, download_markdown = await service.get_translated_markdown(owner_id=owner_id, task_id=task.task_id)
+    _, download_markdown = await service.get_translated_markdown(
+        owner_id=owner_id, task_id=task.task_id
+    )
 
-    assert f"![](/api/creative-workshop/paper-translation/tasks/{task.task_id}/assets/images/fig.jpg)" in preview_markdown
+    assert (
+        f"![](/api/creative-workshop/paper-translation/tasks/{task.task_id}/assets/images/fig.jpg)"
+        in preview_markdown
+    )
     assert "data:image" not in preview_markdown
     assert download_markdown == "# 标题\n\n![](images/fig.jpg)"
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_rewrites_complex_image_destinations(tmp_path, monkeypatch):
+async def test_paper_translation_rewrites_complex_image_destinations(
+    tmp_path, monkeypatch
+):
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    md_path = service._write_task_text(
+    md_path = await service._write_task_text_fenced(
         owner_id,
         task.task_id,
         "translation.zh.md",
         '# 标题\n\n![图](<images/fig (1).jpg> "caption")\n\n![普通](images/fig.jpg)',
+        redis_client=None,
+        lease=None,
     )
-    service._write_task_assets(
+    await service._write_task_assets_fenced(
         owner_id,
         task.task_id,
         {
             "images/fig (1).jpg": b"complex-image",
             "images/fig.jpg": b"simple-image",
         },
+        redis_client=None,
+        lease=None,
     )
     await service._update_task(
         owner_id=owner_id,
@@ -951,13 +1667,58 @@ def test_paper_translation_pdf_export_blocks_remote_resources():
         _safe_pdf_url_fetcher("https://example.com/figure.png")
 
 
+def test_paper_translation_pdf_export_requires_scoped_raster_assets(tmp_path):
+    asset_root = tmp_path / "task"
+    asset_root.mkdir()
+    image = asset_root / "figure.png"
+    image.write_bytes(b"fake-png")
+    text_file = asset_root / "task.json"
+    text_file.write_text("private manifest", encoding="utf-8")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"outside")
+
+    assert _normalize_scoped_pdf_resource_url(
+        image.as_uri(), allowed_root=asset_root
+    ) == image.as_uri()
+
+    with pytest.raises(RuntimeError, match="task asset boundary"):
+        _normalize_scoped_pdf_resource_url(
+            text_file.as_uri(), allowed_root=asset_root
+        )
+    with pytest.raises(RuntimeError, match="task asset boundary"):
+        _normalize_scoped_pdf_resource_url(outside.as_uri(), allowed_root=asset_root)
+    with pytest.raises(RuntimeError, match="explicit task root"):
+        _normalize_scoped_pdf_resource_url(image.as_uri(), allowed_root=None)
+
+
+def test_paper_translation_pdf_export_rejects_symlink_escape(tmp_path):
+    asset_root = tmp_path / "task"
+    asset_root.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"outside")
+    escaped = asset_root / "figure.png"
+    escaped.symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="task asset boundary"):
+        _normalize_scoped_pdf_resource_url(escaped.as_uri(), allowed_root=asset_root)
+
+
 @pytest.mark.asyncio
-async def test_paper_translation_downloads_markdown_from_relative_task_path(tmp_path, monkeypatch):
+async def test_paper_translation_downloads_markdown_from_relative_task_path(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root="storage")
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    md_path = service._write_task_text(owner_id, task.task_id, "translation.zh.md", "# 标题")
+    md_path = await service._write_task_text_fenced(
+        owner_id,
+        task.task_id,
+        "translation.zh.md",
+        "# 标题",
+        redis_client=None,
+        lease=None,
+    )
     await service._update_task(
         owner_id=owner_id,
         task_id=task.task_id,
@@ -965,7 +1726,9 @@ async def test_paper_translation_downloads_markdown_from_relative_task_path(tmp_
         translated_markdown_path=str(md_path),
     )
 
-    markdown_name, markdown = await service.get_translated_markdown(owner_id=owner_id, task_id=task.task_id)
+    markdown_name, markdown = await service.get_translated_markdown(
+        owner_id=owner_id, task_id=task.task_id
+    )
 
     assert markdown_name == "demo.zh.md"
     assert markdown == "# 标题"
@@ -988,7 +1751,9 @@ async def test_paper_translation_rejects_result_path_outside_task_dir(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_marks_stale_running_task_failed(monkeypatch, tmp_path):
+async def test_paper_translation_status_read_does_not_override_queue_owned_state(
+    tmp_path,
+):
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
@@ -999,64 +1764,48 @@ async def test_paper_translation_marks_stale_running_task_failed(monkeypatch, tm
         status="translating",
         updated_at=stale_time.isoformat(),
     )
-    monkeypatch.setattr(service, "_stale_after_seconds", lambda: 1.0)
 
     stale_task = await service.get_task(owner_id=owner_id, task_id=task.task_id)
 
     assert stale_task is not None
-    assert stale_task.status == "failed"
-    assert stale_task.error == "论文翻译任务已中断，请重新上传后再试"
+    assert stale_task.status == "translating"
+    assert stale_task.error is None
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_does_not_mark_queued_task_stale(monkeypatch, tmp_path):
+async def test_paper_translation_heartbeat_extends_only_current_lease(
+    monkeypatch, tmp_path
+):
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
+    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 60.0)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    stale_time = datetime.now(timezone.utc) - timedelta(hours=3)
-    await service._update_task(
-        owner_id=owner_id,
-        task_id=task.task_id,
-        status="queued",
-        updated_at=stale_time.isoformat(),
-    )
-    monkeypatch.setattr(service, "_stale_after_seconds", lambda: 1.0)
-
-    queued_task = await service.get_task(owner_id=owner_id, task_id=task.task_id)
-
-    assert queued_task is not None
-    assert queued_task.status == "queued"
-    assert queued_task.error is None
-
-
-@pytest.mark.asyncio
-async def test_paper_translation_heartbeat_refreshes_running_task_updated_at(tmp_path):
-    owner_id = str(uuid4())
-    service = PaperTranslationService(storage_root=tmp_path)
-    task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    stale_time = datetime.now(timezone.utc) - timedelta(hours=3)
-    running = await service._update_task(
-        owner_id=owner_id,
-        task_id=task.task_id,
-        status="translating",
-        updated_at=stale_time.isoformat(),
+    source_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_path
     )
     redis_client = _FakeRedis()
-    raw_item = json.dumps(
+    await service.enqueue_translation_task(
+        redis_client,
         PaperTranslationQueueItem(
             owner_id=owner_id,
             task_id=task.task_id,
-            filename=running.filename,
-            source_pdf_path="/tmp/source.pdf",
-        ).__dict__
+            filename=task.filename,
+            source_pdf_path=str(source_path),
+        ),
+    )
+    lease = await service.dequeue_translation_task(redis_client)
+    assert lease is not None
+    first_deadline = redis_client.sorted_sets[QUEUE_PROCESSING_KEY][task.task_id]
+
+    assert await service.heartbeat_translation_task(redis_client, lease) is True
+    assert (
+        redis_client.sorted_sets[QUEUE_PROCESSING_KEY][task.task_id] >= first_deadline
     )
 
-    await service.heartbeat_translation_task(redis_client, raw_item)
-    refreshed = await service.get_task(owner_id=owner_id, task_id=task.task_id)
-
-    assert refreshed is not None
-    assert refreshed.status == "translating"
-    assert refreshed.updated_at != stale_time.isoformat()
+    wrong_lease = PaperTranslationTaskLease(item=lease.item, token="wrong-token")
+    assert await service.heartbeat_translation_task(redis_client, wrong_lease) is False
 
 
 @pytest.mark.asyncio
@@ -1064,7 +1813,14 @@ async def test_paper_translation_status_response_omits_markdown_body(tmp_path):
     owner_id = str(uuid4())
     service = PaperTranslationService(storage_root=tmp_path)
     task = await service.create_task(owner_id=owner_id, filename="demo.pdf")
-    md_path = service._write_task_text(owner_id, task.task_id, "translation.zh.md", "# 很长的译文")
+    md_path = await service._write_task_text_fenced(
+        owner_id,
+        task.task_id,
+        "translation.zh.md",
+        "# 很长的译文",
+        redis_client=None,
+        lease=None,
+    )
     completed = await service._update_task(
         owner_id=owner_id,
         task_id=task.task_id,
@@ -1078,251 +1834,520 @@ async def test_paper_translation_status_response_omits_markdown_body(tmp_path):
     assert "translated_markdown" not in payload
 
 
-@pytest.mark.asyncio
-async def test_paper_translation_queue_recovers_stale_processing_items(monkeypatch):
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
-    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 10.0)
-    monkeypatch.setattr(service, "_max_retries", lambda: 1)
-    redis_client = _FakeRedis()
-    stale_item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id="stale-task",
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
+async def _enqueue_and_claim(
+    service: PaperTranslationService,
+    redis_client: _FakeRedis,
+    *,
+    owner_id: str,
+    task_id: str,
+    source_pdf_path: str,
+    attempt: int = 1,
+) -> PaperTranslationTaskLease:
+    await service.enqueue_translation_task(
+        redis_client,
+        PaperTranslationQueueItem(
+            owner_id=owner_id,
+            task_id=task_id,
+            filename="paper.pdf",
+            source_pdf_path=source_pdf_path,
+            attempt=attempt,
+        ),
     )
-    active_item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id="active-task",
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
-    )
-    stale_raw = json.dumps(stale_item.__dict__)
-    active_raw = json.dumps(active_item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, stale_raw)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, active_raw)
-    await redis_client.hset(QUEUE_PROCESSING_HEARTBEAT_KEY, stale_raw, "1")
-    await redis_client.hset(QUEUE_PROCESSING_HEARTBEAT_KEY, active_raw, str(datetime.now(timezone.utc).timestamp()))
-
-    recovered = await service.recover_processing_queue(redis_client)
-    dequeued = await service.dequeue_translation_task(redis_client)
-
-    assert recovered == 1
-    assert dequeued is not None
-    raw_item, parsed = dequeued
-    assert json.loads(raw_item)["task_id"] == "stale-task"
-    assert parsed.task_id == "stale-task"
-    assert active_raw in redis_client.lists[QUEUE_PROCESSING_KEY]
+    lease = await service.dequeue_translation_task(redis_client)
+    assert lease is not None
+    return lease
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_queue_defers_untracked_processing_items(monkeypatch):
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
-    redis_client = _FakeRedis()
-    item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id="recent-task",
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
-    )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, raw_item)
-
-    recovered = await service.recover_processing_queue(redis_client)
-
-    assert recovered == 0
-    assert raw_item in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert redis_client.hashes[QUEUE_PROCESSING_HEARTBEAT_KEY][raw_item]
-
-
-@pytest.mark.asyncio
-async def test_paper_translation_queue_marks_stale_processing_failed_when_retries_disabled(monkeypatch, tmp_path):
+async def test_paper_translation_queue_claims_once_across_workers(tmp_path):
     service = PaperTranslationService(storage_root=tmp_path)
-    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 10.0)
-    monkeypatch.setattr(service, "_max_retries", lambda: 0)
     redis_client = _FakeRedis()
-    task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
-    await service._update_task(owner_id="owner-1", task_id=task.task_id, status="translating")
-    item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id=task.task_id,
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
+    await service.enqueue_translation_task(
+        redis_client,
+        PaperTranslationQueueItem(
+            owner_id="owner-1",
+            task_id="task-1",
+            filename="paper.pdf",
+            source_pdf_path="/tmp/source.pdf",
+        ),
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, raw_item)
-    await redis_client.hset(QUEUE_PROCESSING_HEARTBEAT_KEY, raw_item, "1")
 
-    recovered = await service.recover_processing_queue(redis_client)
-    failed_task = await service.get_task(owner_id="owner-1", task_id=task.task_id)
+    first, second = await asyncio.gather(
+        service.dequeue_translation_task(redis_client),
+        service.dequeue_translation_task(redis_client),
+    )
 
-    assert recovered == 1
-    assert raw_item not in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert redis_client.lists.get(QUEUE_PENDING_KEY) is None
-    assert failed_task is not None
-    assert failed_task.status == "failed"
-    assert failed_task.error == "论文翻译任务已中断，请重新上传后再试"
+    leases = [lease for lease in (first, second) if lease is not None]
+    assert len(leases) == 1
+    assert leases[0].token == redis_client.hashes[QUEUE_LEASE_TOKENS_KEY]["task-1"]
+    assert leases[0].generation == int(
+        redis_client.hashes[QUEUE_GENERATIONS_KEY]["task-1"]
+    )
+    assert redis_client.sorted_sets[QUEUE_PROCESSING_KEY]["task-1"] > 0
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_queue_requeues_processing_item_on_shutdown():
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
+async def test_paper_translation_old_lease_cannot_commit_or_transition(
+    monkeypatch, tmp_path
+):
+    owner_id = "owner-1"
+    service = PaperTranslationService(storage_root=tmp_path)
+    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 60.0)
     redis_client = _FakeRedis()
-    item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id="task-1",
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
+    task = await service.create_task(owner_id=owner_id, filename="paper.pdf")
+    source_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id=owner_id, task_id=task.task_id, source_pdf_path=source_path
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, raw_item)
-    await service.heartbeat_translation_task(redis_client, raw_item)
+    old_lease = await _enqueue_and_claim(
+        service,
+        redis_client,
+        owner_id=owner_id,
+        task_id=task.task_id,
+        source_pdf_path=str(source_path),
+    )
+    await service.activate_translation_lease(redis_client, old_lease)
+    redis_client.sorted_sets[QUEUE_PROCESSING_KEY][task.task_id] = 0.0
+    assert await service.recover_processing_queue(redis_client) == 1
+    new_lease = await service.dequeue_translation_task(redis_client)
+    assert new_lease is not None
+    assert new_lease.token != old_lease.token
+    new_service = PaperTranslationService(storage_root=tmp_path)
+    await new_service.activate_translation_lease(redis_client, new_lease)
 
-    requeued = await service.requeue_processing_task(redis_client, raw_item)
+    new_result_path = await new_service._write_task_text_fenced(
+        owner_id,
+        task.task_id,
+        "translation.zh.md",
+        "new result",
+        redis_client=redis_client,
+        lease=new_lease,
+    )
+    await new_service._write_task_assets_fenced(
+        owner_id,
+        task.task_id,
+        {"images/figure.png": b"new image"},
+        redis_client=redis_client,
+        lease=new_lease,
+    )
+    with pytest.raises(PaperTranslationLeaseLost):
+        await service._write_task_text_fenced(
+            owner_id,
+            task.task_id,
+            "translation.zh.md",
+            "stale result",
+            redis_client=redis_client,
+            lease=old_lease,
+        )
+    with pytest.raises(PaperTranslationLeaseLost):
+        await service._update_task(
+            owner_id=owner_id,
+            task_id=task.task_id,
+            redis_client=redis_client,
+            lease=old_lease,
+            status="failed",
+            error="stale worker failure",
+        )
+    await new_service._update_task(
+        owner_id=owner_id,
+        task_id=task.task_id,
+        redis_client=redis_client,
+        lease=new_lease,
+        status="completed",
+        translated_markdown_path=str(new_result_path),
+    )
 
-    assert requeued is True
-    assert raw_item not in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert raw_item not in redis_client.hashes[QUEUE_PROCESSING_HEARTBEAT_KEY]
-    assert raw_item in redis_client.lists[QUEUE_PENDING_KEY]
-    dequeued = await service.dequeue_translation_task(redis_client)
-    assert dequeued is not None
-    _, parsed = dequeued
-    assert parsed.task_id == "task-1"
+    assert new_result_path.read_text() == "new result"
+    completed = await new_service.get_task(owner_id=owner_id, task_id=task.task_id)
+    assert completed is not None and completed.status == "completed"
+    assert completed.error is None
+    resolved_asset = new_service.resolve_asset_file(
+        owner_id=owner_id,
+        task_id=task.task_id,
+        asset_path="images/figure.png",
+    )
+    assert resolved_asset is not None and resolved_asset.read_bytes() == b"new image"
+    assert await service.acknowledge_translation_task(redis_client, old_lease) is False
+    assert await service.requeue_processing_task(redis_client, old_lease) is False
+    assert await service._cancel_claim(redis_client, old_lease) is False
+    assert task.task_id in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_queue_retries_failed_item(monkeypatch):
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
+async def test_paper_translation_fencing_closes_heartbeat_to_file_commit_race(
+    monkeypatch, tmp_path
+):
+    service = PaperTranslationService(storage_root=tmp_path)
+    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 60.0)
     redis_client = _FakeRedis()
     task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
-    item = PaperTranslationQueueItem(
+    source_path = service.source_pdf_path(owner_id="owner-1", task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id="owner-1", task_id=task.task_id, source_pdf_path=source_path
+    )
+    old_lease = await _enqueue_and_claim(
+        service,
+        redis_client,
         owner_id="owner-1",
         task_id=task.task_id,
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
-        attempt=1,
+        source_pdf_path=str(source_path),
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, raw_item)
+    await service.activate_translation_lease(redis_client, old_lease)
+
+    original_prepare = service._prepare_lease_commit
+    heartbeat_passed = asyncio.Event()
+    resume_old_worker = asyncio.Event()
+
+    async def _pause_after_heartbeat(client, lease):
+        await original_prepare(client, lease)
+        if lease.token == old_lease.token and not heartbeat_passed.is_set():
+            heartbeat_passed.set()
+            await resume_old_worker.wait()
+
+    monkeypatch.setattr(service, "_prepare_lease_commit", _pause_after_heartbeat)
+    stale_write = asyncio.create_task(
+        service._write_task_text_fenced(
+            "owner-1",
+            task.task_id,
+            "translation.zh.md",
+            "stale result",
+            redis_client=redis_client,
+            lease=old_lease,
+        )
+    )
+    await asyncio.wait_for(heartbeat_passed.wait(), timeout=2)
+
+    redis_client.sorted_sets[QUEUE_PROCESSING_KEY][task.task_id] = 0.0
+    assert await service.recover_processing_queue(redis_client) == 1
+    new_lease = await service.dequeue_translation_task(redis_client)
+    assert new_lease is not None
+    new_service = PaperTranslationService(storage_root=tmp_path)
+    await new_service.activate_translation_lease(redis_client, new_lease)
+    resume_old_worker.set()
+
+    with pytest.raises(PaperTranslationLeaseLost):
+        await stale_write
+    stale_result_path = (
+        service._task_dir("owner-1", task.task_id)
+        / ".leases"
+        / old_lease.token
+        / "translation.zh.md"
+    )
+    assert not stale_result_path.exists()
+    current = await service.get_task(owner_id="owner-1", task_id=task.task_id)
+    assert current is not None
+    assert current.active_lease_token == new_lease.token
+    assert current.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_paper_translation_queue_transitions_are_complete_atomic_states(
+    monkeypatch, tmp_path
+):
+    service = PaperTranslationService(storage_root=tmp_path)
     monkeypatch.setattr(service, "_max_retries", lambda: 2)
     monkeypatch.setattr(service, "_retry_delay_seconds", lambda attempt: 0.0)
+    redis_client = _FakeRedis()
+    task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
+    source_path = service.source_pdf_path(owner_id="owner-1", task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id="owner-1", task_id=task.task_id, source_pdf_path=source_path
+    )
 
-    retried = await service.retry_translation_task(redis_client, raw_item=raw_item, item=item)
+    lease = await _enqueue_and_claim(
+        service,
+        redis_client,
+        owner_id="owner-1",
+        task_id=task.task_id,
+        source_pdf_path=str(source_path),
+    )
+    await service.activate_translation_lease(redis_client, lease)
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_PENDING_KEY]
+    assert task.task_id in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
+    assert task.task_id in redis_client.hashes[QUEUE_PAYLOADS_KEY]
+    assert await service.acknowledge_translation_task(redis_client, lease) is False
+    assert task.task_id in redis_client.hashes[QUEUE_PAYLOADS_KEY]
 
-    assert retried is True
-    assert raw_item not in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert redis_client.lists.get(QUEUE_PENDING_KEY) is None
-    [scheduled] = list(redis_client.sorted_sets[QUEUE_SCHEDULED_KEY])
-    payload = json.loads(scheduled)
-    assert payload["task_id"] == task.task_id
-    assert payload["attempt"] == 2
-    assert payload["model_name"] is None
-    retried_task = await service.get_task(owner_id="owner-1", task_id=task.task_id)
-    assert retried_task is not None
-    assert retried_task.status == "queued"
-    assert retried_task.error is None
+    assert await service.retry_translation_task(redis_client, lease=lease) is True
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
+    assert task.task_id in redis_client.sorted_sets[QUEUE_SCHEDULED_KEY]
+    assert source_path.exists()
+    assert task.task_id in redis_client.hashes[QUEUE_PAYLOADS_KEY]
+
+    assert await service.promote_due_scheduled_tasks(redis_client) == 1
+    assert task.task_id in redis_client.sorted_sets[QUEUE_PENDING_KEY]
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_SCHEDULED_KEY]
+    retry_lease = await service.dequeue_translation_task(redis_client)
+    assert retry_lease is not None and retry_lease.item.attempt == 2
+    assert await service.requeue_processing_task(redis_client, retry_lease) is True
+    assert task.task_id in redis_client.sorted_sets[QUEUE_PENDING_KEY]
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
+
+    final_lease = await service.dequeue_translation_task(redis_client)
+    assert final_lease is not None
+    await service.activate_translation_lease(redis_client, final_lease)
+    assert await service._cancel_claim(redis_client, final_lease) is True
+    assert all(
+        task.task_id not in redis_client.sorted_sets[key]
+        for key in (QUEUE_PENDING_KEY, QUEUE_PROCESSING_KEY, QUEUE_SCHEDULED_KEY)
+    )
+    assert task.task_id not in redis_client.hashes[QUEUE_PAYLOADS_KEY]
+    assert task.task_id not in redis_client.hashes[QUEUE_ATTEMPTS_KEY]
+    assert source_path.exists()
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_queue_promotes_due_retry(monkeypatch):
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
+async def test_paper_translation_expired_recovery_is_idempotent_and_increments_attempt(
+    monkeypatch, tmp_path
+):
+    service = PaperTranslationService(storage_root=tmp_path)
+    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 60.0)
     redis_client = _FakeRedis()
-    item = PaperTranslationQueueItem(
+    lease = await _enqueue_and_claim(
+        service,
+        redis_client,
         owner_id="owner-1",
         task_id="task-1",
-        filename="paper.pdf",
         source_pdf_path="/tmp/source.pdf",
-        attempt=2,
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.zadd(QUEUE_SCHEDULED_KEY, {raw_item: 1.0})
+    redis_client.sorted_sets[QUEUE_PROCESSING_KEY]["task-1"] = 0.0
 
-    promoted = await service.promote_due_scheduled_tasks(redis_client)
+    assert await service.recover_processing_queue(redis_client) == 1
+    assert await service.recover_processing_queue(redis_client) == 0
+    recovered_lease = await service.dequeue_translation_task(redis_client)
 
-    assert promoted == 1
-    assert raw_item in redis_client.lists[QUEUE_PENDING_KEY]
-    assert raw_item not in redis_client.sorted_sets[QUEUE_SCHEDULED_KEY]
+    assert recovered_lease is not None
+    assert recovered_lease.item.attempt == 2
+    assert recovered_lease.token != lease.token
+    assert await service.heartbeat_translation_task(redis_client, lease) is False
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_queue_does_not_retry_after_max_retries(monkeypatch):
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
+async def test_paper_translation_reconciles_manifest_enqueue_gap_and_duplicate(
+    tmp_path,
+):
+    service = PaperTranslationService(storage_root=tmp_path)
     redis_client = _FakeRedis()
-    item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id="task-1",
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
-        attempt=3,
+    task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
+    source_path = service.source_pdf_path(owner_id="owner-1", task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+
+    assert await service.reconcile_queued_tasks(redis_client) == 1
+    assert await service.reconcile_queued_tasks(redis_client) == 0
+    lease = await service.dequeue_translation_task(redis_client)
+    restored = await service.get_task(owner_id="owner-1", task_id=task.task_id)
+
+    assert lease is not None
+    assert lease.item.task_id == task.task_id
+    assert lease.item.source_pdf_path == str(source_path.resolve())
+    assert restored is not None and restored.source_pdf_path == str(
+        source_path.resolve()
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, raw_item)
-    monkeypatch.setattr(service, "_max_retries", lambda: 2)
-
-    retried = await service.retry_translation_task(redis_client, raw_item=raw_item, item=item)
-
-    assert retried is False
-    assert raw_item not in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert redis_client.lists.get(QUEUE_PENDING_KEY) is None
-    assert redis_client.sorted_sets.get(QUEUE_SCHEDULED_KEY) is None
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_queue_does_not_retry_when_retries_disabled(monkeypatch):
-    service = PaperTranslationService(storage_root="/tmp/paper-translation-test")
+async def test_paper_translation_reconcile_cursor_reaches_tasks_beyond_batch(tmp_path):
+    service = PaperTranslationService(storage_root=tmp_path)
     redis_client = _FakeRedis()
-    item = PaperTranslationQueueItem(
-        owner_id="owner-1",
-        task_id="task-1",
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
-        attempt=1,
+    tasks = []
+    for owner_id in ("owner-a", "owner-b"):
+        task = await service.create_task(owner_id=owner_id, filename="paper.pdf")
+        source_path = service.source_pdf_path(owner_id=owner_id, task_id=task.task_id)
+        source_path.write_bytes(b"%PDF-1.4\nfake")
+        tasks.append(task)
+
+    assert await service.reconcile_queued_tasks(redis_client, limit=1) == 1
+    assert redis_client.strings[QUEUE_RECONCILE_CURSOR_KEY]
+    assert await service.reconcile_queued_tasks(redis_client, limit=1) == 1
+
+    assert {task.task_id for task in tasks} == set(
+        redis_client.sorted_sets[QUEUE_PENDING_KEY]
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PROCESSING_KEY, raw_item)
-    monkeypatch.setattr(service, "_max_retries", lambda: 0)
-
-    retried = await service.retry_translation_task(redis_client, raw_item=raw_item, item=item)
-
-    assert retried is False
-    assert raw_item not in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert redis_client.lists.get(QUEUE_PENDING_KEY) is None
-    assert redis_client.sorted_sets.get(QUEUE_SCHEDULED_KEY) is None
 
 
 @pytest.mark.asyncio
-async def test_paper_translation_worker_records_original_failure_when_retries_disabled(monkeypatch, tmp_path):
+async def test_paper_translation_foreign_terminal_manifest_is_reprocessed(
+    monkeypatch, tmp_path
+):
+    service = PaperTranslationService(storage_root=tmp_path)
+    monkeypatch.setattr(service, "_queue_visibility_timeout_seconds", lambda: 60.0)
+    monkeypatch.setattr(service, "_max_retries", lambda: 1)
+    redis_client = _FakeRedis()
+    task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
+    source_path = service.source_pdf_path(owner_id="owner-1", task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id="owner-1", task_id=task.task_id, source_pdf_path=source_path
+    )
+    first_lease = await _enqueue_and_claim(
+        service,
+        redis_client,
+        owner_id="owner-1",
+        task_id=task.task_id,
+        source_pdf_path=str(source_path),
+    )
+    await service.activate_translation_lease(redis_client, first_lease)
+    translated_path = await service._write_task_text_fenced(
+        "owner-1",
+        task.task_id,
+        "translation.zh.md",
+        "old completed result",
+        redis_client=redis_client,
+        lease=first_lease,
+    )
+    await service._update_task(
+        owner_id="owner-1",
+        task_id=task.task_id,
+        redis_client=redis_client,
+        lease=first_lease,
+        status="completed",
+        translated_markdown_path=str(translated_path),
+    )
+    redis_client.sorted_sets[QUEUE_PROCESSING_KEY][task.task_id] = 0.0
+    assert await service.recover_processing_queue(redis_client) == 1
+    duplicate_lease = await service.dequeue_translation_task(redis_client)
+    assert duplicate_lease is not None and duplicate_lease.token != first_lease.token
+    worker = PaperTranslationQueueWorker(service=service, redis_client=redis_client)
+
+    async def _rerun(**kwargs):
+        current_lease = kwargs["lease"]
+        current_path = await service._write_task_text_fenced(
+            "owner-1",
+            task.task_id,
+            "translation.zh.md",
+            "new completed result",
+            redis_client=redis_client,
+            lease=current_lease,
+        )
+        await service._update_task(
+            owner_id="owner-1",
+            task_id=task.task_id,
+            redis_client=redis_client,
+            lease=current_lease,
+            status="completed",
+            translated_markdown_path=str(current_path),
+        )
+
+    run_mock = AsyncMock(side_effect=_rerun)
+    monkeypatch.setattr(service, "run_translation_task", run_mock)
+    worker._running = True
+
+    await worker._handle_lease(duplicate_lease, 0)
+    worker._running = False
+    completed = await service.get_task(owner_id="owner-1", task_id=task.task_id)
+
+    run_mock.assert_awaited_once()
+    assert completed is not None
+    assert completed.terminal_lease_token == duplicate_lease.token
+    assert completed.thread_id != task.thread_id
+    assert completed.translated_markdown_path != str(translated_path)
+    assert (
+        Path(completed.translated_markdown_path).read_text() == "new completed result"
+    )
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
+    assert task.task_id not in redis_client.hashes[QUEUE_PAYLOADS_KEY]
+
+
+@pytest.mark.asyncio
+async def test_paper_translation_worker_shutdown_atomically_requeues_owned_lease(
+    monkeypatch, tmp_path
+):
+    service = PaperTranslationService(storage_root=tmp_path)
+    redis_client = _FakeRedis()
+    task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
+    source_path = service.source_pdf_path(owner_id="owner-1", task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id="owner-1", task_id=task.task_id, source_pdf_path=source_path
+    )
+    await service.enqueue_translation_task(
+        redis_client,
+        PaperTranslationQueueItem(
+            owner_id="owner-1",
+            task_id=task.task_id,
+            filename="paper.pdf",
+            source_pdf_path=str(source_path),
+        ),
+    )
+    started = asyncio.Event()
+
+    async def _block(**kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "run_translation_task", _block)
+    worker = PaperTranslationQueueWorker(service=service, redis_client=redis_client)
+    worker._running = True
+    consumer = asyncio.create_task(worker._consume_loop(0))
+    worker._tasks = [consumer]
+    await asyncio.wait_for(started.wait(), timeout=2)
+
+    await worker.stop()
+
+    assert task.task_id in redis_client.sorted_sets[QUEUE_PENDING_KEY]
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
+    assert task.task_id not in redis_client.hashes[QUEUE_LEASE_TOKENS_KEY]
+
+
+@pytest.mark.asyncio
+async def test_paper_translation_worker_bounds_stale_retries(monkeypatch, tmp_path):
     service = PaperTranslationService(storage_root=tmp_path)
     monkeypatch.setattr(service, "_max_retries", lambda: 0)
     redis_client = _FakeRedis()
     task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
-    item = PaperTranslationQueueItem(
+    source_path = service.source_pdf_path(owner_id="owner-1", task_id=task.task_id)
+    source_path.write_bytes(b"%PDF-1.4\nfake")
+    await service.attach_source_pdf(
+        owner_id="owner-1", task_id=task.task_id, source_pdf_path=source_path
+    )
+    lease = await _enqueue_and_claim(
+        service,
+        redis_client,
         owner_id="owner-1",
         task_id=task.task_id,
-        filename="paper.pdf",
-        source_pdf_path="/tmp/source.pdf",
+        source_pdf_path=str(source_path),
     )
-    raw_item = json.dumps(item.__dict__)
-    await redis_client.lpush(QUEUE_PENDING_KEY, raw_item)
+    redis_client.sorted_sets[QUEUE_PROCESSING_KEY][task.task_id] = 0.0
+    await service.recover_processing_queue(redis_client)
+    exhausted_lease = await service.dequeue_translation_task(redis_client)
+    assert exhausted_lease is not None and exhausted_lease.item.attempt == 2
+    worker = PaperTranslationQueueWorker(service=service, redis_client=redis_client)
 
-    async def _fail_once(**kwargs):
-        worker._running = False
-        raise RuntimeError("agent stream failed")
-
-    monkeypatch.setattr(service, "run_translation_task", _fail_once)
-    monkeypatch.setattr("modules.creative_workshop.paper_translation_service.asyncio.sleep", AsyncMock())
-    worker = PaperTranslationQueueWorker(
-        service=service,
-        redis_client=redis_client,
-    )
-    worker._running = True
-
-    await worker._consume_loop(0)
+    await worker._handle_lease(exhausted_lease, 0)
     failed_task = await service.get_task(owner_id="owner-1", task_id=task.task_id)
 
-    assert raw_item not in redis_client.lists[QUEUE_PROCESSING_KEY]
-    assert failed_task is not None
-    assert failed_task.status == "failed"
-    assert failed_task.error == "agent stream failed"
+    assert await service.heartbeat_translation_task(redis_client, lease) is False
+    assert failed_task is not None and failed_task.status == "failed"
+    assert task.task_id not in redis_client.sorted_sets[QUEUE_PROCESSING_KEY]
+    assert source_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_paper_translation_manifest_replace_failure_preserves_previous_json(
+    monkeypatch, tmp_path
+):
+    service = PaperTranslationService(storage_root=tmp_path)
+    task = await service.create_task(owner_id="owner-1", filename="paper.pdf")
+    manifest_path = service._task_manifest_path("owner-1", task.task_id)
+    original = manifest_path.read_bytes()
+
+    def _fail_replace(source, destination):
+        raise OSError("simulated crash before atomic publish")
+
+    monkeypatch.setattr(
+        "modules.creative_workshop.paper_translation_service.os.replace", _fail_replace
+    )
+    with pytest.raises(OSError, match="simulated crash"):
+        await service._update_task(
+            owner_id="owner-1", task_id=task.task_id, status="translating"
+        )
+
+    assert manifest_path.read_bytes() == original
+    assert json.loads(original)["status"] == "queued"
+    assert not list(manifest_path.parent.glob(".*.tmp"))
 
 
 @pytest.mark.asyncio
@@ -1336,8 +2361,14 @@ async def test_paper_translation_sse_parser_collects_message_tuple_and_values():
     async for event in PaperTranslationService._iter_sse_events(_Response()):
         events.append(event)
 
-    assert events[0] == ("messages-tuple", {"type": "ai", "id": "m1", "content": "你好"})
-    assert events[1] == ("values", {"messages": [{"type": "ai", "id": "m2", "content": "最终译文"}]})
+    assert events[0] == (
+        "messages-tuple",
+        {"type": "ai", "id": "m1", "content": "你好"},
+    )
+    assert events[1] == (
+        "values",
+        {"messages": [{"type": "ai", "id": "m2", "content": "最终译文"}]},
+    )
 
 
 @pytest.mark.asyncio
@@ -1359,7 +2390,9 @@ async def test_download_paper_translation_markdown_response(monkeypatch):
             assert asset_url_prefix is None
             return "demo.zh.md", "# 标题"
 
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _Service()
+    )
 
     response = await controller.download_paper_translation_markdown(
         task_id="task-1",
@@ -1368,11 +2401,16 @@ async def test_download_paper_translation_markdown_response(monkeypatch):
 
     assert response.media_type == "text/markdown; charset=utf-8"
     assert response.body == "# 标题".encode("utf-8")
-    assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''demo.zh.md"
+    assert (
+        response.headers["content-disposition"]
+        == "attachment; filename*=UTF-8''demo.zh.md"
+    )
 
 
 @pytest.mark.asyncio
-async def test_download_paper_translation_markdown_for_knowledge_base_inlines_assets(monkeypatch):
+async def test_download_paper_translation_markdown_for_knowledge_base_inlines_assets(
+    monkeypatch,
+):
     user_id = uuid4()
 
     class _Service:
@@ -1390,7 +2428,9 @@ async def test_download_paper_translation_markdown_for_knowledge_base_inlines_as
             assert asset_url_prefix is None
             return "demo.zh.md", "# 标题\n\n![](images/fig.jpg)"
 
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _Service()
+    )
 
     response = await controller.download_paper_translation_markdown_for_knowledge_base(
         task_id="task-1",
@@ -1399,7 +2439,10 @@ async def test_download_paper_translation_markdown_for_knowledge_base_inlines_as
 
     assert response.media_type == "text/markdown; charset=utf-8"
     assert response.body == "# 标题\n\n![](images/fig.jpg)".encode("utf-8")
-    assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''demo.zh.md"
+    assert (
+        response.headers["content-disposition"]
+        == "attachment; filename*=UTF-8''demo.zh.md"
+    )
 
 
 @pytest.mark.asyncio
@@ -1419,7 +2462,10 @@ async def test_get_paper_translation_result_response(monkeypatch):
             assert owner_id == str(user_id)
             assert task_id == "task-1"
             assert inline_assets is False
-            assert asset_url_prefix == "/api/creative-workshop/paper-translation/tasks/task-1/assets"
+            assert (
+                asset_url_prefix
+                == "/api/creative-workshop/paper-translation/tasks/task-1/assets"
+            )
             assert sign_asset_url is not None
             signed_url = sign_asset_url(
                 "/api/creative-workshop/paper-translation/tasks/task-1/assets/images/fig.jpg",
@@ -1427,7 +2473,9 @@ async def test_get_paper_translation_result_response(monkeypatch):
             )
             return "demo.zh.md", f"# 标题\n\n![]({signed_url})"
 
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _Service()
+    )
 
     response = await controller.get_paper_translation_result(
         task_id="task-1",
@@ -1436,7 +2484,9 @@ async def test_get_paper_translation_result_response(monkeypatch):
 
     assert response.media_type == "text/markdown; charset=utf-8"
     body = response.body.decode("utf-8")
-    assert body.startswith("# 标题\n\n![](/api/creative-workshop/paper-translation/tasks/task-1/assets/images/fig.jpg?asset_token=")
+    assert body.startswith(
+        "# 标题\n\n![](/api/creative-workshop/paper-translation/tasks/task-1/assets/images/fig.jpg?asset_token="
+    )
     assert response.headers["cache-control"] == "no-store"
 
 
@@ -1459,7 +2509,9 @@ async def test_get_paper_translation_asset_response(monkeypatch, tmp_path):
             return asset_path_fixture
 
     asset_path_fixture = asset_path
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _Service()
+    )
 
     response = await controller.get_paper_translation_asset(
         task_id="task-1",
@@ -1482,6 +2534,9 @@ async def test_get_paper_translation_asset_accepts_signed_token(monkeypatch, tmp
         task_id="task-1",
         asset_path="images/fig.jpg",
     )
+    from utils.security import decode_access_token
+
+    assert decode_access_token(token) is None
 
     class _Service:
         async def get_task(self, *, owner_id, task_id):
@@ -1496,7 +2551,9 @@ async def test_get_paper_translation_asset_accepts_signed_token(monkeypatch, tmp
             return asset_path_fixture
 
     asset_path_fixture = asset_path
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _Service()
+    )
 
     response = await controller.get_paper_translation_asset(
         task_id="task-1",
@@ -1510,12 +2567,16 @@ async def test_get_paper_translation_asset_accepts_signed_token(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_favorite_paper_translation_result_creates_and_favorites_document(monkeypatch):
+async def test_favorite_paper_translation_result_creates_and_favorites_document(
+    monkeypatch,
+):
     user_id = uuid4()
     calls = {}
 
     class _TranslationService:
-        async def get_translated_markdown(self, *, owner_id, task_id, inline_assets=False, **kwargs):
+        async def get_translated_markdown(
+            self, *, owner_id, task_id, inline_assets=False, **kwargs
+        ):
             assert owner_id == str(user_id)
             assert task_id == "task-1"
             assert inline_assets is True
@@ -1549,10 +2610,18 @@ async def test_favorite_paper_translation_result_creates_and_favorites_document(
             calls["favorite_doc"] = (doc_id, kb_id, owner_id)
             return {"success": True}
 
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _TranslationService())
-    monkeypatch.setattr("modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo)
-    monkeypatch.setattr("modules.knowledge.services.document_service.DocumentService", _DocumentService)
-    monkeypatch.setattr("modules.favorites.services.favorite_service.FavoriteService", _FavoriteService)
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _TranslationService()
+    )
+    monkeypatch.setattr(
+        "modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo
+    )
+    monkeypatch.setattr(
+        "modules.knowledge.services.document_service.DocumentService", _DocumentService
+    )
+    monkeypatch.setattr(
+        "modules.favorites.services.favorite_service.FavoriteService", _FavoriteService
+    )
 
     response = await controller.favorite_paper_translation_result(
         task_id="task-1",
@@ -1570,7 +2639,9 @@ async def test_favorite_paper_translation_result_creates_and_favorites_document(
 
 
 @pytest.mark.asyncio
-async def test_get_paper_translation_favorite_status_returns_existing_state(monkeypatch):
+async def test_get_paper_translation_favorite_status_returns_existing_state(
+    monkeypatch,
+):
     user_id = uuid4()
 
     class _KbRepo:
@@ -1600,9 +2671,16 @@ async def test_get_paper_translation_favorite_status_returns_existing_state(monk
             assert items == [{"type": "document", "id": "doc-1"}]
             return {"document:doc-1": True}
 
-    monkeypatch.setattr("modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo)
-    monkeypatch.setattr("modules.knowledge.repositories.document_repository.DocumentRepository", _DocumentRepo)
-    monkeypatch.setattr("modules.favorites.services.favorite_service.FavoriteService", _FavoriteService)
+    monkeypatch.setattr(
+        "modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo
+    )
+    monkeypatch.setattr(
+        "modules.knowledge.repositories.document_repository.DocumentRepository",
+        _DocumentRepo,
+    )
+    monkeypatch.setattr(
+        "modules.favorites.services.favorite_service.FavoriteService", _FavoriteService
+    )
 
     response = await controller.get_paper_translation_favorite_status(
         task_id="task-1",
@@ -1617,7 +2695,9 @@ async def test_get_paper_translation_favorite_status_returns_existing_state(monk
 
 
 @pytest.mark.asyncio
-async def test_get_paper_translation_favorite_status_returns_false_when_document_missing(monkeypatch):
+async def test_get_paper_translation_favorite_status_returns_false_when_document_missing(
+    monkeypatch,
+):
     user_id = uuid4()
 
     class _KbRepo:
@@ -1634,8 +2714,13 @@ async def test_get_paper_translation_favorite_status_returns_false_when_document
         async def get_by_kb_and_source(self, kb_id, source):
             return None
 
-    monkeypatch.setattr("modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo)
-    monkeypatch.setattr("modules.knowledge.repositories.document_repository.DocumentRepository", _DocumentRepo)
+    monkeypatch.setattr(
+        "modules.knowledge.repositories.kb_repository.KnowledgeBaseRepository", _KbRepo
+    )
+    monkeypatch.setattr(
+        "modules.knowledge.repositories.document_repository.DocumentRepository",
+        _DocumentRepo,
+    )
 
     response = await controller.get_paper_translation_favorite_status(
         task_id="task-1",
@@ -1658,7 +2743,9 @@ async def test_get_paper_translation_source_pdf_response(monkeypatch):
             assert task_id == "task-1"
             return "demo.pdf", b"%PDF-1.4\nfake"
 
-    monkeypatch.setattr(controller, "_get_paper_translation_service", lambda: _Service())
+    monkeypatch.setattr(
+        controller, "_get_paper_translation_service", lambda: _Service()
+    )
 
     response = await controller.get_paper_translation_source_pdf(
         task_id="task-1",
@@ -1667,5 +2754,6 @@ async def test_get_paper_translation_source_pdf_response(monkeypatch):
 
     assert response.media_type == "application/pdf"
     assert response.body == b"%PDF-1.4\nfake"
-    assert response.headers["content-disposition"] == "inline; filename*=UTF-8''demo.pdf"
-
+    assert (
+        response.headers["content-disposition"] == "inline; filename*=UTF-8''demo.pdf"
+    )

@@ -48,7 +48,7 @@ class ChannelStore:
             try:
                 return json.loads(self._path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
-                logger.warning("Corrupt channel store at %s, starting fresh", self._path)
+                logger.warning("Corrupt channel store; starting fresh")
         return {}
 
     def _save(self) -> None:

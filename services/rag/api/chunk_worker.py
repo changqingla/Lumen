@@ -103,7 +103,7 @@ def process_chunk_in_process(
             "process_id": os.getpid(),
         }
 
-    except Exception as e:
+    except Exception:
         return {
             "success": False,
             "chunks": None,
@@ -111,6 +111,6 @@ def process_chunk_in_process(
             "full_content": "",
             "processing_time": time.time() - start_time,
             "parser_type": parser_type,
-            "error": str(e),
+            "error": "文档分块失败",
             "process_id": os.getpid(),
         }

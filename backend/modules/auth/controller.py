@@ -1,8 +1,12 @@
 """Authentication API endpoints with membership support."""
-from fastapi import APIRouter, Depends, Request, UploadFile, File
+import uuid
+
+from fastapi import APIRouter, Depends, File, Header, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from config.database import get_db
 from modules.auth.rate_limiter import (
+    GUEST_SESSION_RATE_LIMIT,
     LOGIN_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
     RESET_PASSWORD_RATE_LIMIT,
@@ -18,13 +22,15 @@ from modules.auth.schemas import (
     UserProfile,
     CheckUsernameRequest,
     CheckUsernameResponse,
+    GuestSessionResponse,
     UpdateProfileRequest,
     UploadAvatarResponse,
     ActivateMembershipRequest,
 )
 from middlewares.auth import get_current_user
 from models.user import User
-import uuid
+from config.settings import settings
+from utils.security import create_guest_token, decode_guest_token
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -33,6 +39,29 @@ def _create_auth_service(db: AsyncSession):
     from modules.auth.services.auth_service import AuthService
 
     return AuthService(db)
+
+
+@router.post("/guest-session", response_model=GuestSessionResponse)
+async def create_guest_session(
+    http_request: Request,
+    existing_token: str | None = Header(default=None, alias="X-Guest-Token"),
+):
+    """Issue or reuse an unforgeable identity for the anonymous chat trial."""
+    token = str(existing_token or "").strip()
+    if token and decode_guest_token(token) is not None:
+        return {
+            "guest_token": token,
+            "expires_in": settings.GUEST_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        }
+
+    # Expired or otherwise invalid local credentials follow the same
+    # rate-limited issuance path as a first visit, so clients can recover.
+    await enforce_auth_rate_limit(http_request, GUEST_SESSION_RATE_LIMIT)
+    token = create_guest_token(str(uuid.uuid4()))
+    return {
+        "guest_token": token,
+        "expires_in": settings.GUEST_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    }
 
 
 @router.post("/login", response_model=AuthResponse)

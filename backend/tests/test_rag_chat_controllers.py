@@ -58,7 +58,9 @@ async def test_get_messages_returns_history(monkeypatch):
     session_id = uuid4()
     user_id = uuid4()
     repo = MagicMock()
-    repo.get_session = AsyncMock(return_value=SimpleNamespace(user_id=user_id))
+    repo.get_session_for_user = AsyncMock(
+        return_value=SimpleNamespace(user_id=user_id)
+    )
     repo.get_session_messages = AsyncMock(return_value=[_FakeMessage({"id": "m-1", "role": "assistant"})])
     workspace_service = MagicMock()
     workspace_service.load_manifest = AsyncMock(return_value=SimpleNamespace(assets=[]))
@@ -78,6 +80,41 @@ async def test_get_messages_returns_history(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_messages_redacts_workspace_manifest_failure(
+    monkeypatch,
+    caplog,
+):
+    marker = "private-workspace-object-detail"
+    session_id = uuid4()
+    user_id = uuid4()
+    repo = MagicMock()
+    repo.get_session_for_user = AsyncMock(return_value=SimpleNamespace(user_id=user_id))
+    repo.get_session_messages = AsyncMock(
+        return_value=[_FakeMessage({"id": "m-1", "role": "assistant"})]
+    )
+    workspace_service = MagicMock()
+    workspace_service.load_manifest = AsyncMock(side_effect=ValueError(marker))
+    chat_service = MagicMock()
+    chat_service.chat_repo = repo
+    monkeypatch.setattr(chat_controller, "_create_chat_service", lambda db: chat_service)
+    monkeypatch.setattr(
+        chat_controller,
+        "_create_workspace_service",
+        lambda session_id, user_id: workspace_service,
+    )
+
+    response = await chat_controller.get_messages(
+        session_id=session_id,
+        db=object(),
+        identity=_identity(user_id),
+    )
+
+    assert response["messages"] == [{"id": "m-1", "role": "assistant"}]
+    assert marker not in caplog.text
+    assert "ValueError" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_get_messages_merges_attachment_status_from_workspace_manifest(monkeypatch):
     session_id = uuid4()
     user_id = uuid4()
@@ -87,7 +124,9 @@ async def test_get_messages_merges_attachment_status_from_workspace_manifest(mon
         f"sessions/{session_id}/files/uploads/{attachment_id}/report.docx"
     )
     repo = MagicMock()
-    repo.get_session = AsyncMock(return_value=SimpleNamespace(user_id=user_id))
+    repo.get_session_for_user = AsyncMock(
+        return_value=SimpleNamespace(user_id=user_id)
+    )
     repo.get_session_messages = AsyncMock(return_value=[
         _FakeMessage({
             "id": "m-1",
@@ -314,6 +353,8 @@ async def test_add_message_records_user_question_to_audit_log(monkeypatch, tmp_p
     session_id = uuid4()
     user_id = uuid4()
     monkeypatch.setattr(audit_logger.settings, "AUDIT_LOG_DIR", str(tmp_path))
+    monkeypatch.setattr(audit_logger.settings, "AUDIT_LOG_INCLUDE_PROMPTS", False)
+    monkeypatch.setattr(audit_logger, "_last_pruned_on", None)
 
     session = SimpleNamespace(
         id=session_id,
@@ -340,7 +381,8 @@ async def test_add_message_records_user_question_to_audit_log(monkeypatch, tmp_p
     record = json.loads(log_file.read_text(encoding="utf-8"))
     assert record["event_type"] == "chat_question"
     assert record["user"]["id"] == str(user_id)
-    assert record["prompt"] == "帮我总结这篇文章"
+    assert "prompt" not in record
+    assert record["prompt_length"] == len("帮我总结这篇文章")
     assert record["metadata"]["session_id"] == str(session_id)
     assert record["metadata"]["message_id"] == "msg-1"
     assert record["metadata"]["model"] == "gpt-5.4"
@@ -411,7 +453,13 @@ async def test_download_session_artifact_streams_runtime_file(monkeypatch):
     monkeypatch.setattr(
         chat_controller,
         "_get_insight_runtime_service",
-        lambda: SimpleNamespace(gateway_url="http://lumen_gateway:8001", request_timeout_seconds=15),
+        lambda: SimpleNamespace(
+            gateway_url="http://lumen_gateway:8001",
+            request_timeout_seconds=15,
+            gateway_request_headers=lambda: {
+                "X-Gateway-Internal-Token": "gateway-test-token"
+            },
+        ),
     )
 
     class _FakeStreamingHttpxResponse:
@@ -440,8 +488,11 @@ async def test_download_session_artifact_streams_runtime_file(monkeypatch):
     fake_clients = []
 
     class _FakeAsyncClient:
-        def __init__(self, timeout):
+        def __init__(self, timeout, headers, follow_redirects, trust_env):
             self.timeout = timeout
+            self.headers = headers
+            self.follow_redirects = follow_redirects
+            self.trust_env = trust_env
             self.closed = False
             self.response = _FakeStreamingHttpxResponse(
                 [b"runtime-", b"artifact"],
@@ -471,6 +522,11 @@ async def test_download_session_artifact_streams_runtime_file(monkeypatch):
 
     assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''final-image.png"
     assert response.headers["content-length"] == "15"
+    assert fake_clients[0].headers == {
+        "X-Gateway-Internal-Token": "gateway-test-token"
+    }
+    assert fake_clients[0].follow_redirects is False
+    assert fake_clients[0].trust_env is False
     assert await _collect_streaming_response(response) == b"runtime-artifact"
     assert fake_clients[0].response.closed is True
     assert fake_clients[0].closed is True
@@ -492,8 +548,8 @@ async def test_download_session_artifact_streams_minio_file(monkeypatch):
     monkeypatch.setattr(chat_controller, "_create_chat_service", lambda db: chat_service)
     monkeypatch.setattr(
         chat_controller,
-        "_get_minio_helpers",
-        lambda: (MagicMock(), AsyncMock(return_value=True)),
+        "_get_minio_object_exists",
+        lambda: AsyncMock(return_value=True),
     )
 
     import utils.minio_client as minio_client

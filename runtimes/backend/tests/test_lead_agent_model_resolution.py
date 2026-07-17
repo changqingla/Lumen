@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.agents.lead_agent import agent as lead_agent_module
+from src.agents.runtime_context import RuntimeContext
 from src.config.app_config import AppConfig
 from src.config.model_config import ModelConfig
 from src.config.sandbox_config import SandboxConfig
@@ -123,6 +124,7 @@ def test_make_lead_agent_disables_thinking_when_model_does_not_support_it(monkey
     assert captured["name"] == "safe-model"
     assert captured["thinking_enabled"] is False
     assert result["model"] is not None
+    assert result["context_schema"] is RuntimeContext
 
 
 def test_make_lead_agent_omits_reasoning_effort_when_not_requested(monkeypatch):
@@ -277,7 +279,60 @@ def test_make_lead_agent_can_disable_model_streaming(monkeypatch):
     lead_agent_module.make_lead_agent(config)
 
     assert captured["disable_streaming"] is True
-    assert config["metadata"]["disable_model_streaming"] is True
+
+
+def test_make_lead_agent_metadata_never_contains_dynamic_model_secrets(monkeypatch):
+    app_config = _make_app_config([_make_model("user-model", supports_thinking=False)])
+
+    import src.tools as tools_module
+
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(tools_module, "get_available_tools", lambda **kwargs: [])
+    monkeypatch.setattr(
+        lead_agent_module,
+        "_build_middlewares",
+        lambda config, model_name, supports_vision=False, agent_name=None: [],
+    )
+    monkeypatch.setattr(
+        lead_agent_module,
+        "resolve_chat_model_spec",
+        lambda model_name, dynamic_model_token=None, thread_id=None: ResolvedChatModelSpec(
+            name=model_name,
+            display_name=model_name,
+            description=None,
+            use="langchain_openai:ChatOpenAI",
+            config={"model": model_name, "api_key": "sk-user-secret"},
+            supports_vision=False,
+            supports_thinking=False,
+            supports_reasoning_effort=False,
+        ),
+    )
+    monkeypatch.setattr(lead_agent_module, "create_chat_model_from_spec", lambda *args, **kwargs: object())
+    monkeypatch.setattr(lead_agent_module, "create_agent", lambda **kwargs: kwargs)
+
+    config = {
+        "configurable": {
+            "model_name": "user-model",
+            "dynamic_model_token": "signed-secret-token",
+            "thread_id": "thread-1",
+            "thinking_enabled": False,
+        },
+        "metadata": {
+            "trace_id": "trace-1",
+            "dynamic_model_token": "stale-token",
+            "resolved_model_spec": {"config": {"api_key": "stale-api-key"}},
+        },
+    }
+
+    lead_agent_module.make_lead_agent(config)
+
+    assert config["metadata"] == {
+        "trace_id": "trace-1",
+        "agent_name": "default",
+        "model_name": "user-model",
+    }
+    assert "signed-secret-token" not in repr(config["metadata"])
+    assert "sk-user-secret" not in repr(config["metadata"])
 
 
 def test_build_middlewares_uses_resolved_model_name_for_vision(monkeypatch):
@@ -306,7 +361,24 @@ def test_build_middlewares_uses_resolved_model_name_for_vision(monkeypatch):
         supports_vision=True,
     )
 
-    assert any(isinstance(m, lead_agent_module.ViewImageMiddleware) for m in middlewares)
+    image_middleware = next(m for m in middlewares if isinstance(m, lead_agent_module.ViewImageMiddleware))
+    assert image_middleware.enable_image_injection is True
+
+
+def test_build_middlewares_keeps_legacy_image_cleanup_for_non_vision_models(monkeypatch):
+    app_config = _make_app_config([_make_model("text-model", supports_thinking=False)])
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(lead_agent_module, "_create_summarization_middleware", lambda: None)
+    monkeypatch.setattr(lead_agent_module, "_create_todo_list_middleware", lambda is_plan_mode: None)
+
+    middlewares = lead_agent_module._build_middlewares(
+        {"configurable": {"is_plan_mode": False, "subagent_enabled": False}},
+        model_name="text-model",
+        supports_vision=False,
+    )
+
+    image_middleware = next(m for m in middlewares if isinstance(m, lead_agent_module.ViewImageMiddleware))
+    assert image_middleware.enable_image_injection is False
 
 
 def test_make_lead_agent_passes_thread_id_to_dynamic_model_resolution(monkeypatch):

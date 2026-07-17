@@ -19,6 +19,7 @@ def replace_virtual_path(path: str, thread_data: ThreadDataState | None) -> str:
     映射规则：
         /mnt/user-data/workspace/* -> thread_data['workspace_path']/*
         /mnt/user-data/uploads/* -> thread_data['uploads_path']/*
+        /mnt/user-data/knowledge/* -> thread_data['knowledge_path']/*
         /mnt/user-data/outputs/* -> thread_data['outputs_path']/*
 
     参数：
@@ -38,6 +39,7 @@ def replace_virtual_path(path: str, thread_data: ThreadDataState | None) -> str:
     path_mapping = {
         "workspace": thread_data.get("workspace_path"),
         "uploads": thread_data.get("uploads_path"),
+        "knowledge": thread_data.get("knowledge_path"),
         "outputs": thread_data.get("outputs_path"),
     }
 
@@ -83,6 +85,35 @@ def replace_virtual_paths_in_command(command: str, thread_data: ThreadDataState 
         return replace_virtual_path(full_path, thread_data)
 
     return pattern.sub(replace_match, command)
+
+
+def restore_virtual_paths_in_output(
+    output: str,
+    thread_data: ThreadDataState | None,
+) -> str:
+    """Replace local thread-directory paths with their sandbox-visible names."""
+
+    if thread_data is None:
+        return output
+    mappings = {
+        f"{VIRTUAL_PATH_PREFIX}/workspace": thread_data.get("workspace_path"),
+        f"{VIRTUAL_PATH_PREFIX}/uploads": thread_data.get("uploads_path"),
+        f"{VIRTUAL_PATH_PREFIX}/knowledge": thread_data.get("knowledge_path"),
+        f"{VIRTUAL_PATH_PREFIX}/outputs": thread_data.get("outputs_path"),
+    }
+    restored = output
+    ordered = sorted(
+        (
+            (str(actual), virtual)
+            for virtual, actual in mappings.items()
+            if actual
+        ),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for actual, virtual in ordered:
+        restored = restored.replace(actual, virtual)
+    return restored
 
 
 def get_thread_data(runtime: ToolRuntime[ContextT, ThreadState] | None) -> ThreadDataState | None:
@@ -190,7 +221,7 @@ def ensure_thread_directories_exist(runtime: ToolRuntime[ContextT, ThreadState] 
     # 创建三个标准目录
     import os
 
-    for key in ["workspace_path", "uploads_path", "outputs_path"]:
+    for key in ["workspace_path", "uploads_path", "knowledge_path", "outputs_path"]:
         path = thread_data.get(key)
         if path:
             os.makedirs(path, exist_ok=True)
@@ -212,14 +243,16 @@ def bash_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, com
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
+        thread_data = None
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             command = replace_virtual_paths_in_command(command, thread_data)
-        return sandbox.execute_command(command)
-    except SandboxError as e:
-        return f"Error: {e}"
-    except Exception as e:
-        return f"Error: Unexpected error executing command: {type(e).__name__}: {e}"
+        output = sandbox.execute_command(command)
+        return restore_virtual_paths_in_output(output, thread_data)
+    except SandboxError as exc:
+        return f"Error: {exc.message}"
+    except Exception as exc:
+        return f"Error: Unexpected error executing command ({type(exc).__name__})"
 
 
 @tool("ls", parse_docstring=False)
@@ -229,24 +262,26 @@ def ls_tool(runtime: ToolRuntime[ContextT, ThreadState], description: str, path:
         description: 请用简短语句说明为何要列出该目录。必须第一个提供此参数。
         path: 要列出的目录**绝对路径**。
     """
+    requested_path = path
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
+        thread_data = None
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             path = replace_virtual_path(path, thread_data)
         children = sandbox.list_dir(path)
         if not children:
             return "(empty)"
-        return "\n".join(children)
-    except SandboxError as e:
-        return f"Error: {e}"
+        return restore_virtual_paths_in_output("\n".join(children), thread_data)
+    except SandboxError as exc:
+        return f"Error: {exc.message}"
     except FileNotFoundError:
-        return f"Error: Directory not found: {path}"
+        return f"Error: Directory not found: {requested_path}"
     except PermissionError:
-        return f"Error: Permission denied: {path}"
-    except Exception as e:
-        return f"Error: Unexpected error listing directory: {type(e).__name__}: {e}"
+        return f"Error: Permission denied: {requested_path}"
+    except Exception as exc:
+        return f"Error: Unexpected error listing directory ({type(exc).__name__})"
 
 
 @tool("read_file", parse_docstring=False)
@@ -264,9 +299,11 @@ def read_file_tool(
         start_line: 可选起始行号（从 1 开始，含当前行）。与 end_line 配合可读取指定区间。
         end_line: 可选结束行号（从 1 开始，含当前行）。与 start_line 配合可读取指定区间。
     """
+    requested_path = path
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
+        thread_data = None
         if is_local_sandbox(runtime):
             thread_data = get_thread_data(runtime)
             path = replace_virtual_path(path, thread_data)
@@ -275,17 +312,17 @@ def read_file_tool(
             return "(empty)"
         if start_line is not None and end_line is not None:
             content = "\n".join(content.splitlines()[start_line - 1 : end_line])
-        return content
-    except SandboxError as e:
-        return f"Error: {e}"
+        return restore_virtual_paths_in_output(content, thread_data)
+    except SandboxError as exc:
+        return f"Error: {exc.message}"
     except FileNotFoundError:
-        return f"Error: File not found: {path}"
+        return f"Error: File not found: {requested_path}"
     except PermissionError:
-        return f"Error: Permission denied reading file: {path}"
+        return f"Error: Permission denied reading file: {requested_path}"
     except IsADirectoryError:
-        return f"Error: Path is a directory, not a file: {path}"
-    except Exception as e:
-        return f"Error: Unexpected error reading file: {type(e).__name__}: {e}"
+        return f"Error: Path is a directory, not a file: {requested_path}"
+    except Exception as exc:
+        return f"Error: Unexpected error reading file ({type(exc).__name__})"
 
 
 @tool("write_file", parse_docstring=False)
@@ -302,6 +339,7 @@ def write_file_tool(
         path: 要写入文件的**绝对路径**。必须第二个提供此参数。
         content: 写入文件的内容。必须第三个提供此参数。
     """
+    requested_path = path
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
@@ -310,16 +348,16 @@ def write_file_tool(
             path = replace_virtual_path(path, thread_data)
         sandbox.write_file(path, content, append)
         return "OK"
-    except SandboxError as e:
-        return f"Error: {e}"
+    except SandboxError as exc:
+        return f"Error: {exc.message}"
     except PermissionError:
-        return f"Error: Permission denied writing to file: {path}"
+        return f"Error: Permission denied writing to file: {requested_path}"
     except IsADirectoryError:
-        return f"Error: Path is a directory, not a file: {path}"
-    except OSError as e:
-        return f"Error: Failed to write file '{path}': {e}"
-    except Exception as e:
-        return f"Error: Unexpected error writing file: {type(e).__name__}: {e}"
+        return f"Error: Path is a directory, not a file: {requested_path}"
+    except OSError:
+        return f"Error: Failed to write file: {requested_path}"
+    except Exception as exc:
+        return f"Error: Unexpected error writing file ({type(exc).__name__})"
 
 
 @tool("str_replace", parse_docstring=False)
@@ -341,6 +379,7 @@ def str_replace_tool(
         new_str: 新子串。必须第四个提供此参数。
         replace_all: 是否替换全部匹配项。若为 False，仅替换第一个匹配项。默认 False。
     """
+    requested_path = path
     try:
         sandbox = ensure_sandbox_initialized(runtime)
         ensure_thread_directories_exist(runtime)
@@ -351,18 +390,18 @@ def str_replace_tool(
         if not content:
             return "OK"
         if old_str not in content:
-            return f"Error: String to replace not found in file: {path}"
+            return f"Error: String to replace not found in file: {requested_path}"
         if replace_all:
             content = content.replace(old_str, new_str)
         else:
             content = content.replace(old_str, new_str, 1)
         sandbox.write_file(path, content)
         return "OK"
-    except SandboxError as e:
-        return f"Error: {e}"
+    except SandboxError as exc:
+        return f"Error: {exc.message}"
     except FileNotFoundError:
-        return f"Error: File not found: {path}"
+        return f"Error: File not found: {requested_path}"
     except PermissionError:
-        return f"Error: Permission denied accessing file: {path}"
-    except Exception as e:
-        return f"Error: Unexpected error replacing string: {type(e).__name__}: {e}"
+        return f"Error: Permission denied accessing file: {requested_path}"
+    except Exception as exc:
+        return f"Error: Unexpected error replacing string ({type(exc).__name__})"

@@ -19,11 +19,10 @@ import re
 import csv
 from copy import deepcopy
 from io import BytesIO
-from timeit import default_timer as timer
 from openpyxl import load_workbook
 
 from deepdoc.parser.utils import get_text
-from core.nlp import is_english, random_choices, qbullets_category, add_positions, has_qbullet, docx_question_level
+from core.nlp import is_english, random_choices, docx_question_level
 from core.nlp import rag_tokenizer, tokenize_table, concat_img
 from deepdoc.parser import ExcelParser, DocxParser
 from docx import Document
@@ -88,14 +87,17 @@ class Docx(DocxParser):
             related_part = document.part.related_parts[embed]
         except KeyError:
             # 跳过损坏的图片引用（如指向 NULL 的关系）
-            logging.warning(f"跳过损坏的图片引用: {embed}")
+            logging.warning("DOCX image skipped: reason=damaged_relationship")
             return None
         try:
             image = related_part.image
             image = Image.open(BytesIO(image.blob)).convert('RGB')
             return image
-        except (AttributeError, Exception) as e:
-            logging.warning(f"无法读取图片 {embed}: {e}")
+        except (AttributeError, Exception) as error:
+            logging.warning(
+                "DOCX image skipped: reason=read_failure error_type=%s",
+                type(error).__name__,
+            )
             return None
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
@@ -337,11 +339,3 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
 
     raise NotImplementedError(
         "Excel, csv(txt), markdown and docx format files are supported.")
-
-
-if __name__ == "__main__":
-    import sys
-
-    def dummy(prog=None, msg=""):
-        pass
-    chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)

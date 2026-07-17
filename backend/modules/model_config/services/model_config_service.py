@@ -33,8 +33,27 @@ from modules.model_config.security.model_config_security import (
     encrypt_api_key,
     mask_api_key,
 )
+from utils.outbound_endpoint_policy import (
+    OUTBOUND_ENDPOINT_ERROR_MESSAGE,
+    OutboundEndpointError,
+    OutboundEndpointPolicy,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _log_provider_http_failure(
+    provider_code: str,
+    error: httpx.HTTPError,
+) -> None:
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    logger.warning(
+        "Provider HTTP request failed: provider=%s status=%s error_type=%s",
+        provider_code,
+        status_code,
+        type(error).__name__,
+    )
 
 
 def build_user_model_binding_name(binding_id: UUID | str) -> str:
@@ -44,10 +63,19 @@ def build_user_model_binding_name(binding_id: UUID | str) -> str:
 class ModelConfigService:
     """Main application service for provider registry and user model bindings."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(
+        self,
+        db: AsyncSession,
+        *,
+        endpoint_policy: OutboundEndpointPolicy | None = None,
+    ) -> None:
         self.db = db
         self.provider_repo = UserModelProviderRepository(db)
         self.binding_repo = UserModelBindingRepository(db)
+        self.endpoint_policy = endpoint_policy or OutboundEndpointPolicy(
+            allow_private_networks=settings.MODEL_PROVIDER_ALLOW_PRIVATE_ENDPOINTS,
+            dns_timeout_seconds=settings.MODEL_PROVIDER_DNS_TIMEOUT_SECONDS,
+        )
 
     def list_provider_catalog(
         self,
@@ -184,6 +212,8 @@ class ModelConfigService:
     ) -> dict[str, Any]:
         provider = self._require_provider(provider_code)
         resolved_base_url = self._resolve_requested_base_url(provider, base_url)
+        if provider.code == "custom":
+            resolved_base_url = await self._validate_outbound_url(resolved_base_url)
         try:
             existing = await self.provider_repo.get_by_user_and_provider(user_id, provider.code)
             normalized_api_key = str(api_key or "").strip()
@@ -557,6 +587,8 @@ class ModelConfigService:
         }
         resolved_base_url = self._resolve_provider_base_url(provider, binding.provider_credential)
         if resolved_base_url:
+            if provider.code == "custom":
+                resolved_base_url = await self._validate_outbound_url(resolved_base_url)
             resolved_config["base_url"] = resolved_base_url
 
         return {
@@ -600,7 +632,9 @@ class ModelConfigService:
 
         try:
             if provider.remote_models_format == "anthropic":
-                response = await client.get(
+                response = await self._request_outbound(
+                    client,
+                    "GET",
                     url,
                     headers={
                         "x-api-key": api_key,
@@ -608,12 +642,16 @@ class ModelConfigService:
                     },
                 )
             elif provider.remote_models_format == "gemini":
-                response = await client.get(
+                response = await self._request_outbound(
+                    client,
+                    "GET",
                     url,
-                    params={"key": api_key},
+                    headers={"x-goog-api-key": api_key},
                 )
             else:
-                response = await client.get(
+                response = await self._request_outbound(
+                    client,
+                    "GET",
                     url,
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
@@ -622,13 +660,13 @@ class ModelConfigService:
             detail = "拉取供应商模型列表失败"
             if exc.response.status_code in {401, 403}:
                 detail = "API Key 无效或没有获取模型列表的权限"
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
         except httpx.HTTPError as exc:
-            logger.exception("Failed to fetch remote provider models for '%s'", provider.code)
+            _log_provider_http_failure(provider.code, exc)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="连接模型供应商失败，请稍后重试",
-            ) from exc
+            ) from None
 
         payload = response.json()
         remote_models = self._parse_remote_provider_models(provider, payload)
@@ -720,7 +758,9 @@ class ModelConfigService:
 
         for candidate_model in provider.models:
             try:
-                response = await client.post(
+                response = await self._request_outbound(
+                    client,
+                    "POST",
                     probe_url,
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={
@@ -735,16 +775,16 @@ class ModelConfigService:
                 detail = "拉取供应商模型列表失败"
                 if exc.response.status_code in {401, 403}:
                     detail = "API Key 无效或没有获取模型列表的权限"
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
                 last_status_error = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
             except HTTPException:
                 raise
             except httpx.HTTPError as exc:
-                logger.exception("Failed to probe provider models for '%s'", provider.code)
+                _log_provider_http_failure(provider.code, exc)
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="连接模型供应商失败，请稍后重试",
-                ) from exc
+                ) from None
 
         if last_status_error is not None:
             raise last_status_error
@@ -764,7 +804,9 @@ class ModelConfigService:
         client = get_http_client()
         try:
             if provider.remote_models_format == "anthropic":
-                response = await client.post(
+                response = await self._request_outbound(
+                    client,
+                    "POST",
                     f"{resolved_base_url.rstrip('/')}/v1/messages",
                     headers={
                         "x-api-key": api_key,
@@ -778,9 +820,11 @@ class ModelConfigService:
                     },
                 )
             elif provider.remote_models_format == "gemini":
-                response = await client.post(
+                response = await self._request_outbound(
+                    client,
+                    "POST",
                     f"{resolved_base_url.rstrip('/')}/v1beta/models/{model_name}:generateContent",
-                    params={"key": api_key},
+                    headers={"x-goog-api-key": api_key},
                     json={
                         "contents": [
                             {
@@ -791,7 +835,9 @@ class ModelConfigService:
                     },
                 )
             else:
-                response = await client.post(
+                response = await self._request_outbound(
+                    client,
+                    "POST",
                     f"{resolved_base_url.rstrip('/')}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={
@@ -805,13 +851,13 @@ class ModelConfigService:
             detail = "模型健康检测失败"
             if exc.response.status_code in {401, 403}:
                 detail = "API Key 无效或没有访问该模型的权限"
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from None
         except httpx.HTTPError as exc:
-            logger.exception("Failed to run health check for '%s' model '%s'", provider.code, model_name)
+            _log_provider_http_failure(provider.code, exc)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="连接模型供应商失败，请稍后重试",
-            ) from exc
+            ) from None
 
     async def _build_provider_credentials_map(self, user_id: UUID) -> dict[str, dict[str, Any]]:
         credentials = await self.provider_repo.list_by_user(user_id)
@@ -852,8 +898,8 @@ class ModelConfigService:
             return str(getattr(credential, "custom_base_url", "") or "").strip()
         return str(provider.base_url or "").strip()
 
-    @staticmethod
     def _resolve_preview_base_url(
+        self,
         provider: ProviderDefinition,
         credential: Any | None,
         requested_base_url: str | None,
@@ -861,23 +907,17 @@ class ModelConfigService:
         if provider.code == "custom":
             normalized = str(requested_base_url or "").strip()
             if normalized:
-                return ModelConfigService._resolve_requested_base_url(provider, normalized)
+                return self._resolve_requested_base_url(provider, normalized)
             return ModelConfigService._resolve_provider_base_url(provider, credential)
         return str(provider.base_url or "").strip()
 
-    @staticmethod
-    def _resolve_requested_base_url(provider: ProviderDefinition, requested_base_url: str | None) -> str:
+    def _resolve_requested_base_url(self, provider: ProviderDefinition, requested_base_url: str | None) -> str:
         if provider.code != "custom":
             return str(provider.base_url or "").strip()
 
         normalized = str(requested_base_url or "").strip()
         if not normalized:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先填写 Base URL")
-        if not normalized.startswith(("http://", "https://")):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Base URL 必须以 http:// 或 https:// 开头",
-            )
         return normalized.rstrip("/")
 
     @staticmethod
@@ -911,7 +951,33 @@ class ModelConfigService:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
         resolved_base_url = self._resolve_preview_base_url(provider, credential, base_url)
+        if provider.code == "custom":
+            resolved_base_url = await self._validate_outbound_url(resolved_base_url)
         return credential, effective_api_key, resolved_base_url
+
+    async def _validate_outbound_url(self, url: str) -> str:
+        try:
+            return await self.endpoint_policy.validate_url(url)
+        except OutboundEndpointError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=OUTBOUND_ENDPOINT_ERROR_MESSAGE,
+            ) from exc
+
+    async def _request_outbound(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        try:
+            return await self.endpoint_policy.request(client, method, url, **kwargs)
+        except OutboundEndpointError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=OUTBOUND_ENDPOINT_ERROR_MESSAGE,
+            ) from exc
 
     @staticmethod
     def _find_remote_provider_model(remote_models: list[dict[str, Any]], model_name: str) -> dict[str, Any]:

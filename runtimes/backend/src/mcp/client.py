@@ -62,7 +62,10 @@ def build_servers_config(extensions_config: ExtensionsConfig) -> dict[str, dict[
         try:
             servers_config[server_name] = build_server_params(server_name, server_config)
             logger.info(f"Configured MCP server: {server_name}")
-        except Exception as e:
-            logger.error(f"Failed to configure MCP server '{server_name}': {e}")
+        except Exception as exc:
+            logger.error(
+                "Failed to configure MCP server (%s)",
+                type(exc).__name__,
+            )
 
     return servers_config

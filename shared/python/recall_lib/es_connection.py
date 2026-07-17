@@ -8,9 +8,88 @@
 
 import logging
 from typing import List, Dict, Any, Optional
+from urllib.parse import urlsplit, urlunsplit
+
 from elasticsearch import AsyncElasticsearch
 
-logger = logging.getLogger('embed_store.es_connection')
+from ._logging import log_operation_failure
+
+logger = logging.getLogger("recall_lib.es_connection")
+
+ES_ENDPOINT_ERROR_MESSAGE = "Elasticsearch endpoint does not meet security requirements"
+
+
+def normalize_es_endpoint(value: str) -> str:
+    """Validate ES endpoint syntax while allowing deployment-local hostnames."""
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 2048 or "\\" in normalized:
+        raise ValueError(ES_ENDPOINT_ERROR_MESSAGE)
+    parsed = urlsplit(normalized)
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError(ES_ENDPOINT_ERROR_MESSAGE)
+    try:
+        port = parsed.port
+        host = parsed.hostname.rstrip(".").lower().encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        raise ValueError(ES_ENDPOINT_ERROR_MESSAGE) from None
+    if not host or any(character.isspace() for character in host):
+        raise ValueError(ES_ENDPOINT_ERROR_MESSAGE)
+    netloc_host = f"[{host}]" if ":" in host else host
+    netloc = f"{netloc_host}:{port}" if port is not None else netloc_host
+    return urlunsplit((parsed.scheme.lower(), netloc, "", "", ""))
+
+
+def create_es_connection(
+    config: Optional[Dict[str, Any]] = None,
+) -> "SimpleESConnection":
+    """Build a connection without discarding authentication or timeout options."""
+    options = dict(
+        config
+        or {
+            "hosts": "http://localhost:9200",
+            "timeout": 600,
+        }
+    )
+    host = options.pop("hosts", "http://localhost:9200")
+    return SimpleESConnection(host, **options)
+
+
+def _summarize_bulk_failure(item: Any) -> Dict[str, Any]:
+    """Return bounded bulk-error metadata without the original document or reason."""
+    if not isinstance(item, dict) or not item:
+        return {"operation": "unknown", "status": "unknown"}
+
+    operation = next(iter(item))
+    if operation not in {"index", "create", "update", "delete"}:
+        operation = "unknown"
+    details = item.get(operation)
+    if not isinstance(details, dict):
+        return {"operation": operation, "status": "unknown"}
+
+    status = details.get("status")
+    return {
+        "operation": operation,
+        "status": status if isinstance(status, int) else "unknown",
+    }
+
+
+def _log_bulk_failure(prefix: str, item: Any) -> None:
+    """Log only structural bulk-error metadata, never the original `_source`."""
+    summary = _summarize_bulk_failure(item)
+    logger.error(
+        "%s: operation=%s status=%s",
+        prefix,
+        summary["operation"],
+        summary["status"],
+    )
 
 
 class SimpleESConnection:
@@ -29,7 +108,7 @@ class SimpleESConnection:
             hosts: ES服务器地址
             **kwargs: 其他ES连接参数（username, password, timeout等）
         """
-        self.hosts = hosts
+        self.hosts = normalize_es_endpoint(hosts)
         self.kwargs = kwargs
         self.es: Optional[AsyncElasticsearch] = None
         self._connected = False
@@ -51,7 +130,7 @@ class SimpleESConnection:
             self.es = AsyncElasticsearch(
                 hosts=[self.hosts],
                 basic_auth=auth,
-                verify_certs=False,
+                verify_certs=bool(self.kwargs.get("verify_certs", True)),
                 request_timeout=self.kwargs.get('timeout', 60),
                 max_retries=3,
                 retry_on_timeout=True,
@@ -61,11 +140,11 @@ class SimpleESConnection:
 
             # 测试连接
             health = await self.es.cluster.health()
-            logger.info(f"ES异步连接成功: {self.hosts}, 状态: {health['status']}")
+            logger.info("ES异步连接成功: 状态=%s", health["status"])
             self._connected = True
 
-        except Exception as e:
-            logger.error(f"ES连接失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch connection", error)
             raise
 
     async def ensure_connected(self):
@@ -78,7 +157,7 @@ class SimpleESConnection:
         if self.es:
             await self.es.close()
             self._connected = False
-            logger.info(f"ES连接已关闭: {self.hosts}")
+            logger.info("ES连接已关闭")
 
     async def create_index(self, index_name: str, vector_dim: int = 1024) -> bool:
         """
@@ -195,8 +274,8 @@ class SimpleESConnection:
             await self.es.indices.create(index=index_name, body=mapping)
             logger.info(f"成功创建索引: {index_name}")
             return True
-        except Exception as e:
-            logger.error(f"创建索引失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch index creation", error)
             return False
 
     async def index_exists(self, index_name: str) -> bool:
@@ -204,8 +283,8 @@ class SimpleESConnection:
         await self.ensure_connected()
         try:
             return await self.es.indices.exists(index=index_name)
-        except Exception as e:
-            logger.error(f"检查索引存在性失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch index existence check", error)
             return False
 
     async def get_existing_vector_fields(self, index_name: str) -> List[str]:
@@ -245,8 +324,8 @@ class SimpleESConnection:
             logger.info(f"索引 {index_name} 中存在的向量字段: {vector_fields}")
             return vector_fields
             
-        except Exception as e:
-            logger.error(f"获取向量字段失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch vector field lookup", error)
             return []
 
     async def vector_field_exists(self, index_name: str, vector_field: str) -> bool:
@@ -308,8 +387,8 @@ class SimpleESConnection:
             logger.info(f"成功向索引 {index_name} 添加向量字段 {vector_field} (维度: {vector_dim})")
             return True
             
-        except Exception as e:
-            logger.error(f"添加向量字段失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch vector field creation", error)
             return False
 
     async def ensure_vector_field(self, index_name: str, vector_dim: int) -> bool:
@@ -341,8 +420,8 @@ class SimpleESConnection:
             logger.info(f"向量字段 {vector_field} 不存在，添加到索引 {index_name}")
             return await self.add_vector_field(index_name, vector_dim)
             
-        except Exception as e:
-            logger.error(f"确保向量字段存在失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch vector field reconciliation", error)
             return False
 
     async def delete_index(self, index_name: str) -> bool:
@@ -356,8 +435,8 @@ class SimpleESConnection:
             else:
                 logger.info(f"索引 {index_name} 不存在")
                 return True
-        except Exception as e:
-            logger.error(f"删除索引失败: {e}")
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch index deletion", error)
             return False
 
     async def bulk_index(self, index_name: str, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -416,44 +495,28 @@ class SimpleESConnection:
                     if success:
                         success_count += 1
                     else:
-                        errors.append(info)
-                        # 记录详细错误信息
-                        if isinstance(info, dict):
-                            operation = list(info.keys())[0]  # 'index', 'create', 'update', 'delete'
-                            error_info = info[operation]
-                            doc_id = error_info.get('_id', 'unknown_id')
-                            error_detail = error_info.get('error', {})
-                            error_type = error_detail.get('type', 'unknown')
-                            error_reason = error_detail.get('reason', 'unknown reason')
-                            logger.error(f"文档索引失败: ID={doc_id}, 操作={operation}, 类型={error_type}, 原因={error_reason}")
-                            logger.error(f"完整错误信息: {info}")
-                        else:
-                            logger.error(f"文档索引失败: {info}")
+                        errors.append(_summarize_bulk_failure(info))
+                        _log_bulk_failure("Document indexing failed", info)
             
             except BulkIndexError as bulk_error:
-                # 捕获BulkIndexError异常并提取详细错误信息
-                logger.error(f"捕获到BulkIndexError异常: {bulk_error}")
-                
                 # 从异常对象中提取错误信息
                 if hasattr(bulk_error, 'errors') and bulk_error.errors:
+                    logger.error(
+                        "BulkIndexError raised: error_count=%s",
+                        len(bulk_error.errors),
+                    )
                     for error_item in bulk_error.errors:
-                        errors.append(error_item)
-                        # 记录详细错误信息
-                        if isinstance(error_item, dict):
-                            operation = list(error_item.keys())[0]  # 'index', 'create', 'update', 'delete'
-                            error_info = error_item[operation]
-                            doc_id = error_info.get('_id', 'unknown_id')
-                            error_detail = error_info.get('error', {})
-                            error_type = error_detail.get('type', 'unknown')
-                            error_reason = error_detail.get('reason', 'unknown reason')
-                            logger.error(f"BulkIndexError - 文档索引失败: ID={doc_id}, 操作={operation}, 类型={error_type}, 原因={error_reason}")
-                            logger.error(f"BulkIndexError - 完整错误信息: {error_item}")
-                        else:
-                            logger.error(f"BulkIndexError - 文档索引失败: {error_item}")
+                        errors.append(_summarize_bulk_failure(error_item))
+                        _log_bulk_failure("Bulk document indexing failed", error_item)
                 else:
-                    # 如果没有errors属性，记录异常本身
-                    errors.append(str(bulk_error))
-                    logger.error(f"BulkIndexError异常详情: {str(bulk_error)}")
+                    errors.append(
+                        {
+                            "operation": "unknown",
+                            "status": "unknown",
+                            "error_type": type(bulk_error).__name__,
+                        }
+                    )
+                    logger.error("BulkIndexError raised without item details")
 
             if errors:
                 logger.error(f"批量索引失败: {len(errors)} document(s) failed to index.")
@@ -465,9 +528,18 @@ class SimpleESConnection:
                 "errors": errors
             }
 
-        except Exception as e:
-            logger.error(f"批量索引异常: {e}")
-            return {"success": 0, "errors": [str(e)]}
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch bulk indexing", error)
+            return {
+                "success": 0,
+                "errors": [
+                    {
+                        "operation": "unknown",
+                        "status": "unknown",
+                        "error_type": type(error).__name__,
+                    }
+                ],
+            }
 
     async def search(self, index_name: str, query: Dict[str, Any], size: int = 10) -> Dict[str, Any]:
         """
@@ -501,9 +573,9 @@ class SimpleESConnection:
             if hasattr(response, 'body'):
                 return response.body
             return dict(response)
-        except Exception as e:
-            logger.error(f"搜索失败: {e}")
-            return {"hits": {"hits": []}}
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch search", error)
+            raise
 
     async def delete_documents_by_doc_id(self, index_name: str, document_id: str) -> Dict[str, Any]:
         """
@@ -547,16 +619,15 @@ class SimpleESConnection:
                 "message": f"成功删除文档 {document_id} 的 {deleted_count} 个分块"
             }
 
-        except Exception as e:
-            error_msg = f"删除文档 {document_id} 失败: {e}"
-            logger.error(error_msg)
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch document deletion", error)
             return {
                 "success": False,
                 "deleted_count": 0,
                 "document_id": document_id,
                 "index_name": index_name,
-                "error": str(e),
-                "message": error_msg
+                "error": "Elasticsearch document deletion failed",
+                "message": "文档删除失败",
             }
 
     async def get_health(self) -> Dict[str, Any]:
@@ -564,6 +635,9 @@ class SimpleESConnection:
         await self.ensure_connected()
         try:
             return await self.es.cluster.health()
-        except Exception as e:
-            logger.error(f"获取健康状态失败: {e}")
-            return {"status": "error", "error": str(e)}
+        except Exception as error:
+            log_operation_failure(logger, "Elasticsearch health check", error)
+            return {
+                "status": "error",
+                "error": "Elasticsearch health check failed",
+            }

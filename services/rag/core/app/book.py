@@ -14,7 +14,6 @@
 #  limitations under the License.
 #
 
-import logging
 from tika import parser
 import re
 from io import BytesIO
@@ -104,11 +103,3 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
     res.extend(tokenize_chunks(chunks, doc, eng))
 
     return res
-
-
-if __name__ == "__main__":
-    import sys
-
-    def dummy(prog=None, msg=""):
-        pass
-    chunk(sys.argv[1], from_page=1, to_page=10, callback=dummy)

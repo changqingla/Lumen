@@ -1,12 +1,19 @@
 """带防抖机制的记忆更新队列。"""
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
+from src.agents.memory.scope import (
+    normalize_agent_name,
+    normalize_memory_scope,
+)
 from src.config.memory_config import get_memory_config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -15,7 +22,8 @@ class ConversationContext:
 
     thread_id: str
     messages: list[Any]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    memory_scope: str
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     agent_name: str | None = None
 
 
@@ -33,33 +41,57 @@ class MemoryUpdateQueue:
         self._timer: threading.Timer | None = None
         self._processing = False
 
-    def add(self, thread_id: str, messages: list[Any], agent_name: str | None = None) -> None:
+    def add(
+        self,
+        thread_id: str,
+        messages: list[Any],
+        *,
+        memory_scope: str,
+        agent_name: str | None = None,
+    ) -> None:
         """向队列添加一条会话更新任务。
 
         参数：
             thread_id: 线程 ID。
             messages: 会话消息列表。
-            agent_name: 若提供则按 agent 维度存储记忆；否则使用全局记忆。
+            memory_scope: Required Backend-issued tenant partition.
+            agent_name: Optional agent subpartition within that scope.
         """
         config = get_memory_config()
         if not config.enabled:
             return
 
+        scope = normalize_memory_scope(memory_scope)
+        normalized_agent = normalize_agent_name(agent_name)
         context = ConversationContext(
             thread_id=thread_id,
             messages=messages,
-            agent_name=agent_name,
+            memory_scope=scope,
+            agent_name=normalized_agent,
         )
 
         with self._lock:
-            # 若该线程已有待处理任务，用最新一条覆盖旧任务
-            self._queue = [c for c in self._queue if c.thread_id != thread_id]
+            # Debounce only within the exact tenant/agent/thread partition.
+            # Reusing a thread ID in another tenant must never evict its task.
+            self._queue = [
+                queued
+                for queued in self._queue
+                if (
+                    queued.memory_scope,
+                    queued.agent_name,
+                    queued.thread_id,
+                )
+                != (scope, normalized_agent, thread_id)
+            ]
             self._queue.append(context)
 
             # 重置或启动防抖计时器
             self._reset_timer()
 
-        print(f"Memory update queued for thread {thread_id}, queue size: {len(self._queue)}")
+        logger.info(
+            "Memory update queued, queue size: %s",
+            len(self._queue),
+        )
 
     def _reset_timer(self) -> None:
         """重置防抖计时器。"""
@@ -77,7 +109,7 @@ class MemoryUpdateQueue:
         self._timer.daemon = True
         self._timer.start()
 
-        print(f"Memory update timer set for {config.debounce_seconds}s")
+        logger.info("Memory update timer set for %ss", config.debounce_seconds)
 
     def _process_queue(self) -> None:
         """处理当前队列中的全部会话上下文。"""
@@ -98,25 +130,29 @@ class MemoryUpdateQueue:
             self._queue.clear()
             self._timer = None
 
-        print(f"Processing {len(contexts_to_process)} queued memory updates")
+        logger.info("Processing %s queued memory updates", len(contexts_to_process))
 
         try:
             updater = MemoryUpdater()
 
             for context in contexts_to_process:
                 try:
-                    print(f"Updating memory for thread {context.thread_id}")
+                    logger.info("Updating queued memory")
                     success = updater.update_memory(
                         messages=context.messages,
+                        memory_scope=context.memory_scope,
                         thread_id=context.thread_id,
                         agent_name=context.agent_name,
                     )
                     if success:
-                        print(f"Memory updated successfully for thread {context.thread_id}")
+                        logger.info("Memory updated successfully")
                     else:
-                        print(f"Memory update skipped/failed for thread {context.thread_id}")
-                except Exception as e:
-                    print(f"Error updating memory for thread {context.thread_id}: {e}")
+                        logger.warning("Memory update skipped or failed")
+                except Exception as exc:
+                    logger.error(
+                        "Error updating memory (%s)",
+                        type(exc).__name__,
+                    )
 
                 # 多任务批处理时小幅延迟，降低触发限流概率
                 if len(contexts_to_process) > 1:
@@ -137,6 +173,7 @@ class MemoryUpdateQueue:
                 self._timer = None
             self._queue.clear()
             self._processing = False
+
 
 # 全局单例队列实例
 _memory_queue: MemoryUpdateQueue | None = None

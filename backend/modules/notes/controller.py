@@ -1,14 +1,13 @@
 """Notes API endpoints."""
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List
+from typing import Optional
 from config.database import get_db
 from modules.notes.schemas import (
     BatchDeleteNotesRequest,
     CreateNoteRequest,
     NoteFolderRequest,
     NoteItem,
-    NoteFolderItem,
     UpdateNoteRequest,
 )
 from middlewares.auth import get_current_user

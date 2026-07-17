@@ -5,7 +5,7 @@ const GUEST_LOGIN_PROMPT_EVENT = 'lumen:guest-login-prompt';
 export interface GuestModeState {
   enabled: boolean;
   usedMessageCount: number;
-  guestId: string;
+  guestToken: string;
 }
 
 export interface GuestLoginPromptDetail {
@@ -17,7 +17,7 @@ export interface GuestLoginPromptDetail {
 const DEFAULT_GUEST_MODE_STATE: GuestModeState = {
   enabled: false,
   usedMessageCount: 0,
-  guestId: '',
+  guestToken: '',
 };
 
 let cachedGuestModeState: GuestModeState = DEFAULT_GUEST_MODE_STATE;
@@ -25,15 +25,8 @@ let cachedGuestModeState: GuestModeState = DEFAULT_GUEST_MODE_STATE;
 const areGuestModeStatesEqual = (left: GuestModeState, right: GuestModeState) => (
   left.enabled === right.enabled
   && left.usedMessageCount === right.usedMessageCount
-  && left.guestId === right.guestId
+  && left.guestToken === right.guestToken
 );
-
-const createGuestId = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `guest_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-};
 
 const readStoredGuestModeState = (): GuestModeState => {
   if (typeof window === 'undefined') {
@@ -50,10 +43,13 @@ const readStoredGuestModeState = (): GuestModeState => {
     const parsedCount = typeof parsed.usedMessageCount === 'number'
       ? parsed.usedMessageCount
       : (parsed.hasUsedMessage ? 1 : 0);
+    const guestToken = typeof parsed.guestToken === 'string' ? parsed.guestToken.trim() : '';
     return {
-      enabled: Boolean(parsed.enabled),
-      usedMessageCount: Number.isFinite(parsedCount) ? Math.max(0, Math.floor(parsedCount)) : 0,
-      guestId: typeof parsed.guestId === 'string' ? parsed.guestId.trim() : '',
+      // Legacy client-generated guest IDs are intentionally not migrated into
+      // credentials. The user must obtain a server-signed guest session.
+      enabled: Boolean(parsed.enabled && guestToken),
+      usedMessageCount: guestToken && Number.isFinite(parsedCount) ? Math.max(0, Math.floor(parsedCount)) : 0,
+      guestToken,
     };
   } catch {
     return DEFAULT_GUEST_MODE_STATE;
@@ -85,14 +81,18 @@ export const isGuestModeEnabled = (): boolean => syncCachedGuestModeState().enab
 
 export const getGuestUsedMessageCount = (): number => syncCachedGuestModeState().usedMessageCount;
 
-export const getGuestModeGuestId = (): string => syncCachedGuestModeState().guestId;
+export const getGuestModeGuestToken = (): string => syncCachedGuestModeState().guestToken;
 
-export const enableGuestMode = () => {
+export const enableGuestMode = (guestToken: string) => {
+  const normalizedToken = guestToken.trim();
+  if (!normalizedToken) {
+    throw new Error('Guest session token is required');
+  }
   const current = syncCachedGuestModeState();
   writeGuestModeState({
     enabled: true,
-    usedMessageCount: current.usedMessageCount,
-    guestId: current.guestId || createGuestId(),
+    usedMessageCount: current.guestToken === normalizedToken ? current.usedMessageCount : 0,
+    guestToken: normalizedToken,
   });
 };
 
@@ -105,15 +105,17 @@ export const disableGuestMode = () => {
   writeGuestModeState({
     enabled: false,
     usedMessageCount: current.usedMessageCount,
-    guestId: current.guestId || createGuestId(),
+    guestToken: current.guestToken,
   });
 };
 
 export const markGuestMessageUsed = () => {
   const current = syncCachedGuestModeState();
+  if (!current.enabled || !current.guestToken) {
+    return;
+  }
   writeGuestModeState({
     ...current,
-    enabled: true,
     usedMessageCount: current.usedMessageCount + 1,
   });
 };

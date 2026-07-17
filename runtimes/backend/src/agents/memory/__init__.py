@@ -1,9 +1,11 @@
-"""全局记忆机制入口模块。
+"""Tenant-scoped long-term memory entry points.
 
 该模块提供以下能力：
-- 在 `memory.json` 中存储用户上下文与会话历史
+- 按 Backend 签发的 opaque scope 存储用户上下文与会话历史
 - 使用 LLM 对对话进行摘要与事实提取
 - 将相关记忆注入系统提示词以实现个性化回复
+
+旧的全局 `memory.json` 不会被读取或自动迁移。
 """
 
 from src.agents.memory.prompt import (

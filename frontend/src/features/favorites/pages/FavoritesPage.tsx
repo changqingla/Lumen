@@ -435,7 +435,7 @@ export default function FavoritesPage() {
     }
     if (isGuestMode && hasReachedGuestMessageLimit) {
       promptLogin({
-        title: '登陆解锁更多功能',
+        title: '登录解锁更多功能',
         message: '游客试用仅支持发送 3 条消息，登录后可继续完整体验。',
         confirmText: '去登录',
       });
@@ -449,8 +449,8 @@ export default function FavoritesPage() {
       textareaRef.current.style.height = 'auto';
     }
 
-    await sendMessage(text);
-    if (isGuestMode) {
+    const didPersistGuestMessage = await sendMessage(text);
+    if (isGuestMode && didPersistGuestMessage) {
       consumeGuestMessage();
     }
     // 清除配额超限弹窗（如果有的话）

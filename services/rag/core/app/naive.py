@@ -44,7 +44,7 @@ class Docx(DocxParser):
             related_part = document.part.related_parts[embed]
         except KeyError:
             # 跳过损坏的图片引用（如指向 NULL 的关系）
-            logging.warning(f"跳过损坏的图片引用: {embed}")
+            logging.warning("DOCX image skipped: reason=damaged_relationship")
             return None
         try:
             image_blob = related_part.image.blob
@@ -59,7 +59,7 @@ class Docx(DocxParser):
             return None
         except AttributeError:
             # related_part 可能为 None（被补丁跳过的关系）
-            logging.warning(f"跳过无效的图片关系: {embed}")
+            logging.warning("DOCX image skipped: reason=invalid_relationship")
             return None
         try:
             image = Image.open(BytesIO(image_blob)).convert('RGB')
@@ -321,7 +321,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             return (chunks, full_content) if return_full_content else chunks
 
         res.extend(tokenize_chunks_docx(chunks, doc, is_english, images))
-        logging.info("naive_merge({}): {}".format(filename, timer() - st))
+        logging.info("naive_merge completed: elapsed_seconds=%.3f", timer() - st)
         return (res, full_content) if return_full_content else res
 
     elif re.search(r"\.xlsx?$", filename, re.IGNORECASE):
@@ -393,8 +393,8 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
             sections = [(_, "") for _ in sections if _]
             callback(0.8, "Finish parsing.")
         else:
-            callback(0.8, f"tika.parser got empty content from {filename}.")
-            logging.warning(f"tika.parser got empty content from {filename}.")
+            callback(0.8, "tika.parser returned empty content.")
+            logging.warning("tika.parser returned empty content")
             return ([], "") if return_full_content else []
 
     else:
@@ -410,18 +410,5 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
         return (chunks, full_content) if return_full_content else chunks
 
     res.extend(tokenize_chunks(chunks, doc, is_english))
-    logging.info("naive_merge({}): {}".format(filename, timer() - st))
+    logging.info("naive_merge completed: elapsed_seconds=%.3f", timer() - st)
     return (res, full_content) if return_full_content else res
-
-
-if __name__ == "__main__":
-    import sys
-
-
-    def dummy(prog=None, msg=""):
-        pass
-
-
-    chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)
-
-

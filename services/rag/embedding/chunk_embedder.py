@@ -21,7 +21,7 @@ current_dir = Path(__file__).parent.absolute()
 DeepRAG_root = current_dir.parent
 sys.path.insert(0, str(DeepRAG_root))
 
-from core.llm import EmbeddingModel
+from core.llm import EmbeddingModel  # noqa: E402
 
 
 class EmbeddingConfig:
@@ -123,10 +123,13 @@ class IndependentEmbeddingModel:
                 # 初始化模型
                 self.model = model_class(**init_params)
 
-            logging.info(f"嵌入模型初始化成功: {self.config.model_factory}/{self.config.model_name}")
+            logging.info("Embedding model initialized")
 
-        except Exception as e:
-            logging.error(f"嵌入模型初始化失败: {e}")
+        except Exception as error:
+            logging.error(
+                "Embedding model initialization failed: error_type=%s",
+                type(error).__name__,
+            )
             raise
     
     def encode(self, texts: List[str]) -> Tuple[np.ndarray, int]:
@@ -145,8 +148,11 @@ class IndependentEmbeddingModel:
         try:
             embeddings, token_count = self.model.encode(texts)
             return embeddings, token_count
-        except Exception as e:
-            logging.error(f"文本编码失败: {e}")
+        except Exception as error:
+            logging.error(
+                "Embedding encode failed: stage=documents error_type=%s",
+                type(error).__name__,
+            )
             raise
 
     def encode_queries(self, query: str) -> Tuple[np.ndarray, int]:
@@ -165,8 +171,11 @@ class IndependentEmbeddingModel:
         try:
             embedding, token_count = self.model.encode_queries(query)
             return embedding, token_count
-        except Exception as e:
-            logging.error(f"查询编码失败: {e}")
+        except Exception as error:
+            logging.error(
+                "Embedding encode failed: stage=query error_type=%s",
+                type(error).__name__,
+            )
             raise
 
 
@@ -220,8 +229,11 @@ class ChunkEmbedder:
         try:
             test_embeddings, _ = self.embedding_model.encode(["test"])
             self.vector_size = len(test_embeddings[0])
-        except Exception as e:
-            logging.error(f"向量大小初始化失败: {e}")
+        except Exception as error:
+            logging.error(
+                "Embedding vector-size initialization failed: error_type=%s",
+                type(error).__name__,
+            )
             raise
 
     def _progress_callback(self, progress: float = None, msg: str = ""):
@@ -233,9 +245,13 @@ class ChunkEmbedder:
             msg (str): 状态消息
         """
         if progress is not None:
-            logging.info(f"嵌入进度: {progress:.1%} - {msg}")
+            logging.info(
+                "Embedding progress: progress=%.1f%% message_present=%s",
+                progress * 100,
+                bool(msg),
+            )
         else:
-            logging.info(f"嵌入状态: {msg}")
+            logging.info("Embedding status updated: message_present=%s", bool(msg))
     
     async def embed_chunks(self,
                           chunks: List[Dict[str, Any]],

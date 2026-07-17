@@ -12,12 +12,13 @@
     "web:dev": "vite --config frontend/vite.config.ts",
     "web:build": "tsc --project frontend/tsconfig.json --noEmit && vite build --config frontend/vite.config.ts",
     "web:lint": "cd frontend && ../node_modules/.bin/eslint --config eslint.config.js \"src/**/*.{ts,tsx}\"",
+    "web:test": "node --experimental-strip-types --test frontend/tests/*.test.ts",
     "web:preview": "vite preview --config frontend/vite.config.ts",
     "web:check": "tsc --project frontend/tsconfig.json --noEmit"
   },
   "dependencies": {
     "@jvmr/pptx-to-html": "^1.0.1",
-    "dompurify": "^3.4.3",
+    "dompurify": "^3.4.12",
     "katex": "^0.16.47",
     "lucide-react": "^0.511.0",
     "mammoth": "^1.11.0",
@@ -27,7 +28,7 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "react-pdf-highlighter": "^7.0.0",
-    "react-router-dom": "^7.3.0",
+    "react-router-dom": "^7.18.1",
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",

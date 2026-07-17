@@ -6,6 +6,7 @@ from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
 from modules.knowledge.repositories.document_repository import DocumentRepository
 from modules.knowledge.repositories.kb_subscription_repository import KBSubscriptionRepository
 from modules.organization.repositories.organization_member_repository import OrganizationMemberRepository
+from repositories.user_repository import UserRepository
 from modules.favorites.entities.favorite import Favorite
 from modules.knowledge.entities.knowledge_base import KnowledgeBase
 from typing import List, Tuple, Optional
@@ -25,6 +26,16 @@ class FavoriteService:
         self.doc_repo = DocumentRepository(db)
         self.subscription_repo = KBSubscriptionRepository(db)
         self.org_member_repo = OrganizationMemberRepository(db)
+        self.user_repo = UserRepository(db)
+
+    async def _get_access_context(
+        self,
+        user_id: str,
+    ) -> Tuple[uuid.UUID, List[uuid.UUID], bool]:
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        user_org_ids = await self.org_member_repo.get_user_org_ids(user_uuid)
+        user = await self.user_repo.get_by_id(user_uuid)
+        return user_uuid, user_org_ids, bool(user and user.is_admin)
     
     async def _check_kb_access(self, kb_id: str, user_id: str) -> Optional[KnowledgeBase]:
         """
@@ -36,36 +47,13 @@ class FavoriteService:
         2. KB is public (visibility == 'public')
         3. KB is shared to an organization the user belongs to
         """
-        # 1. Check if user owns the KB
-        kb = await self.kb_repo.get_by_id(kb_id, user_id)
-        if kb:
-            return kb
-        
-        # 2. Get KB without owner check
-        kb = await self.kb_repo.get_by_id_any(kb_id)
-        if not kb:
-            return None
-        
-        # 3. Check if KB is public
-        if kb.visibility == 'public':
-            return kb
-        
-        # 4. Check if KB is shared to user's organizations
-        if kb.visibility == 'organization':
-            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
-            user_org_ids = await self.org_member_repo.get_user_org_ids(user_uuid)
-            
-            if not kb.shared_to_orgs or not user_org_ids:
-                return None
-            
-            # Convert both to string sets for comparison
-            shared_org_ids = set(str(org_id) for org_id in kb.shared_to_orgs)
-            user_orgs_set = set(str(org_id) for org_id in user_org_ids)
-            
-            if shared_org_ids.intersection(user_orgs_set):
-                return kb
-        
-        return None
+        user_uuid, user_org_ids, is_admin = await self._get_access_context(user_id)
+        return await self.kb_repo.get_accessible_by_id(
+            kb_id,
+            user_uuid,
+            user_org_ids,
+            is_admin=is_admin,
+        )
     
     async def favorite_kb(
         self,
@@ -124,8 +112,11 @@ class FavoriteService:
                 try:
                     await self.subscription_repo.unsubscribe(user_id, kb_id)
                     logger.info(f"Auto-unsubscribed user {user_id} from KB {kb_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to auto-unsubscribe from KB {kb_id}: {e}")
+                except Exception as exc:
+                    logger.warning(
+                        "Favorite auto-unsubscribe failed (error_type=%s)",
+                        type(exc).__name__,
+                    )
         
         return {"success": success}
     
@@ -178,12 +169,16 @@ class FavoriteService:
         page_size: int = 20
     ) -> Tuple[List[dict], int]:
         """List favorite knowledge bases with creator info."""
-        from repositories.user_repository import UserRepository
         from modules.organization.repositories.organization_repository import OrganizationRepository
-        
-        user_repo = UserRepository(self.db)
-        
-        kbs, total = await self.favorite_repo.list_kb_favorites(user_id, page, page_size)
+
+        _, user_org_ids, is_admin = await self._get_access_context(user_id)
+        kbs, total = await self.favorite_repo.list_kb_favorites(
+            user_id,
+            page,
+            page_size,
+            user_org_ids=user_org_ids,
+            is_admin=is_admin,
+        )
         
         # Enrich with creator info
         result = []
@@ -191,7 +186,7 @@ class FavoriteService:
             kb_dict = kb.to_dict(include_owner=True)
             
             # Get creator info
-            creator = await user_repo.get_by_id(kb.owner_id)
+            creator = await self.user_repo.get_by_id(kb.owner_id)
             if creator:
                 kb_dict['creator_name'] = creator.name
                 kb_dict['creator_avatar'] = creator.avatar
@@ -217,7 +212,14 @@ class FavoriteService:
         page_size: int = 20
     ) -> Tuple[List[dict], int]:
         """List favorite documents with KB info."""
-        docs, total = await self.favorite_repo.list_doc_favorites(user_id, page, page_size)
+        _, user_org_ids, is_admin = await self._get_access_context(user_id)
+        docs, total = await self.favorite_repo.list_doc_favorites(
+            user_id,
+            page,
+            page_size,
+            user_org_ids=user_org_ids,
+            is_admin=is_admin,
+        )
         
         # Enrich with KB info
         result = []

@@ -2,7 +2,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime
 from modules.admin.entities.activation_code import ActivationCode
 import uuid
 
@@ -69,7 +69,7 @@ class ActivationCodeRepository:
         await self.db.commit()
         await self.db.refresh(activation_code)
         return activation_code
-    
+
     async def get_by_code(self, code: str) -> Optional[ActivationCode]:
         """Get activation code by code string."""
         result = await self.db.execute(
@@ -161,11 +161,3 @@ class ActivationCodeRepository:
         await self.db.commit()
         await self.db.refresh(activation_code)
         return activation_code
-    
-    async def count_by_type(self, type: str) -> int:
-        """Count activation codes by type."""
-        result = await self.db.execute(
-            select(func.count(ActivationCode.id))
-            .where(ActivationCode.type == type)
-        )
-        return result.scalar() or 0

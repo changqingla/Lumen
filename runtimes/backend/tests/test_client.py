@@ -1,7 +1,9 @@
 """Tests for InsightFlowClient."""
 
 import json
+import stat
 import tempfile
+import warnings
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -15,6 +17,22 @@ from src.gateway.routers.memory import MemoryConfigResponse, MemoryStatusRespons
 from src.gateway.routers.models import ModelResponse, ModelsListResponse
 from src.gateway.routers.skills import SkillInstallResponse, SkillResponse, SkillsListResponse
 from src.gateway.routers.uploads import UploadResponse
+
+CLIENT_SKILL_MD = b"---\nname: client-skill\ndescription: Client security test\n---\n\nInstructions\n"
+
+
+def _write_client_skill_archive(
+    archive_path: Path,
+    members: list[tuple[str | zipfile.ZipInfo, bytes]],
+    *,
+    compression: int = zipfile.ZIP_STORED,
+) -> None:
+    with zipfile.ZipFile(archive_path, "w", compression=compression) as archive:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for name, content in members:
+                archive.writestr(name, content)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -443,7 +461,7 @@ class TestMcpConfig:
             client._agent = MagicMock()
 
             with (
-                patch("src.client.ExtensionsConfig.resolve_config_path", return_value=tmp_path),
+                patch("src.config.extensions_config.ExtensionsConfig.resolve_config_path", return_value=tmp_path),
                 patch("src.client.get_extensions_config", return_value=current_config),
                 patch("src.client.reload_extensions_config", return_value=reloaded_config),
             ):
@@ -506,7 +524,7 @@ class TestSkillsManagement:
 
             with (
                 patch("src.skills.loader.load_skills", side_effect=[[skill], [updated_skill]]),
-                patch("src.client.ExtensionsConfig.resolve_config_path", return_value=tmp_path),
+                patch("src.config.extensions_config.ExtensionsConfig.resolve_config_path", return_value=tmp_path),
                 patch("src.client.get_extensions_config", return_value=ext_config),
                 patch("src.client.reload_extensions_config"),
             ):
@@ -537,10 +555,7 @@ class TestSkillsManagement:
             skills_root = tmp_path / "skills"
             (skills_root / "custom").mkdir(parents=True)
 
-            with (
-                patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
-                patch("src.gateway.routers.skills._validate_skill_frontmatter", return_value=(True, "OK", "my-skill")),
-            ):
+            with patch("src.skills.loader.get_skills_root_path", return_value=skills_root):
                 result = client.install_skill(archive_path)
 
             assert result["success"] is True
@@ -559,6 +574,102 @@ class TestSkillsManagement:
                 client.install_skill(tmp_path)
         finally:
             tmp_path.unlink()
+
+    @pytest.mark.parametrize("unsafe_name", ["../outside.txt", "C:/outside.txt", r"client-skill\..\outside.txt"])
+    def test_install_skill_rejects_unsafe_archive_paths(self, client, tmp_path, unsafe_name):
+        archive_path = tmp_path / "client-skill.skill"
+        _write_client_skill_archive(
+            archive_path,
+            [("client-skill/SKILL.md", CLIENT_SKILL_MD), (unsafe_name, b"outside")],
+        )
+        skills_root = tmp_path / "skills"
+
+        with (
+            patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
+            pytest.raises(ValueError, match="path|backslash"),
+        ):
+            client.install_skill(archive_path)
+
+        assert not (tmp_path / "outside.txt").exists()
+        assert not list((skills_root / "custom").glob(".skill-install-*"))
+
+    @pytest.mark.parametrize("file_type", [stat.S_IFLNK, stat.S_IFIFO])
+    def test_install_skill_rejects_links_and_special_files(self, client, tmp_path, file_type):
+        archive_path = tmp_path / "client-skill.skill"
+        special = zipfile.ZipInfo("client-skill/unsafe")
+        special.create_system = 3
+        special.external_attr = (file_type | 0o644) << 16
+        _write_client_skill_archive(
+            archive_path,
+            [("client-skill/SKILL.md", CLIENT_SKILL_MD), (special, b"target")],
+        )
+        skills_root = tmp_path / "skills"
+
+        with (
+            patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
+            pytest.raises(ValueError, match="symbolic link|special file"),
+        ):
+            client.install_skill(archive_path)
+
+        assert not list((skills_root / "custom").glob(".skill-install-*"))
+
+    def test_install_skill_rejects_duplicate_members(self, client, tmp_path):
+        archive_path = tmp_path / "client-skill.skill"
+        _write_client_skill_archive(
+            archive_path,
+            [
+                ("client-skill/SKILL.md", CLIENT_SKILL_MD),
+                ("client-skill/asset.txt", b"one"),
+                ("client-skill/asset.txt", b"two"),
+            ],
+        )
+        skills_root = tmp_path / "skills"
+
+        with (
+            patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
+            pytest.raises(ValueError, match="duplicate member path"),
+        ):
+            client.install_skill(archive_path)
+
+        assert not list((skills_root / "custom").glob(".skill-install-*"))
+
+    def test_install_skill_rejects_compression_ratio_bomb(self, client, tmp_path):
+        archive_path = tmp_path / "client-skill.skill"
+        _write_client_skill_archive(
+            archive_path,
+            [
+                ("client-skill/SKILL.md", CLIENT_SKILL_MD),
+                ("client-skill/compressible.bin", b"0" * (2 * 1024 * 1024)),
+            ],
+            compression=zipfile.ZIP_DEFLATED,
+        )
+        skills_root = tmp_path / "skills"
+
+        with (
+            patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
+            pytest.raises(ValueError, match="compression ratio limit"),
+        ):
+            client.install_skill(archive_path)
+
+        assert not list((skills_root / "custom").glob(".skill-install-*"))
+
+    def test_install_skill_preserves_existing_target(self, client, tmp_path):
+        archive_path = tmp_path / "client-skill.skill"
+        _write_client_skill_archive(archive_path, [("client-skill/SKILL.md", CLIENT_SKILL_MD)])
+        skills_root = tmp_path / "skills"
+        target = skills_root / "custom" / "client-skill"
+        target.mkdir(parents=True)
+        marker = target / "keep.txt"
+        marker.write_text("original", encoding="utf-8")
+
+        with (
+            patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
+            pytest.raises(FileExistsError, match="already exists"),
+        ):
+            client.install_skill(archive_path)
+
+        assert marker.read_text(encoding="utf-8") == "original"
+        assert not list((skills_root / "custom").glob(".skill-install-*"))
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +753,67 @@ class TestUploads:
         with pytest.raises(FileNotFoundError):
             client.upload_files("thread-1", ["/nonexistent/file.txt"])
 
+    def test_upload_files_rejects_managed_namespace(self, client, tmp_path):
+        managed = tmp_path / ("kb__11111111-1111-1111-1111-111111111111__22222222-2222-2222-2222-222222222222__notes.md")
+        managed.write_text("managed", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="reserved"):
+            client.upload_files("thread-1", [managed])
+
+    def test_upload_files_does_not_overwrite_existing_name(self, client, tmp_path):
+        uploads_dir = tmp_path / "uploads"
+        uploads_dir.mkdir()
+        (uploads_dir / "notes.txt").write_text("existing", encoding="utf-8")
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        source = source_dir / "notes.txt"
+        source.write_text("new", encoding="utf-8")
+
+        with patch.object(
+            InsightFlowClient,
+            "_get_uploads_dir",
+            return_value=uploads_dir,
+        ):
+            result = client.upload_files("thread-1", [source])
+
+        assert result["files"][0]["filename"] == "notes-2.txt"
+        assert (uploads_dir / "notes.txt").read_text(encoding="utf-8") == "existing"
+        assert (uploads_dir / "notes-2.txt").read_text(encoding="utf-8") == "new"
+
+    def test_upload_files_does_not_follow_raced_destination_symlink(
+        self,
+        client,
+        tmp_path,
+    ):
+        uploads_dir = tmp_path / "uploads"
+        uploads_dir.mkdir()
+        source = tmp_path / "notes.txt"
+        source.write_text("uploaded", encoding="utf-8")
+        outside = tmp_path / "outside.txt"
+        outside.write_text("preserve", encoding="utf-8")
+        raced_target = uploads_dir / "notes.txt"
+
+        def race_target(*_args, **_kwargs):
+            raced_target.symlink_to(outside)
+            return "notes.txt"
+
+        with (
+            patch.object(
+                InsightFlowClient,
+                "_get_uploads_dir",
+                return_value=uploads_dir,
+            ),
+            patch(
+                "src.gateway.routers.uploads._allocate_unique_filename",
+                side_effect=race_target,
+            ),
+            pytest.raises(FileExistsError),
+        ):
+            client.upload_files("thread-1", [source])
+
+        assert outside.read_text(encoding="utf-8") == "preserve"
+        assert raced_target.is_symlink()
+
     def test_list_uploads(self, client):
         with tempfile.TemporaryDirectory() as tmp:
             uploads_dir = Path(tmp)
@@ -683,6 +855,28 @@ class TestUploads:
             with patch.object(InsightFlowClient, "_get_uploads_dir", return_value=uploads_dir):
                 with pytest.raises(PermissionError):
                     client.delete_upload("thread-1", "../../etc/passwd")
+
+    def test_delete_upload_rejects_symlink_without_deleting_target(
+        self,
+        client,
+        tmp_path,
+    ):
+        uploads_dir = tmp_path / "uploads"
+        uploads_dir.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("preserve", encoding="utf-8")
+        (uploads_dir / "link.txt").symlink_to(outside)
+
+        with patch.object(
+            InsightFlowClient,
+            "_get_uploads_dir",
+            return_value=uploads_dir,
+        ):
+            with pytest.raises(PermissionError):
+                client.delete_upload("thread-1", "link.txt")
+
+        assert outside.read_text(encoding="utf-8") == "preserve"
+        assert (uploads_dir / "link.txt").is_symlink()
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +929,45 @@ class TestArtifacts:
                 with pytest.raises(PermissionError):
                     client.get_artifact("t1", "mnt/user-data/../../../etc/passwd")
 
+    def test_get_artifact_rejects_symlink_swap_after_resolution(
+        self,
+        client,
+        tmp_path,
+    ):
+        user_data_dir = tmp_path / "user-data"
+        outputs = user_data_dir / "outputs"
+        outputs.mkdir(parents=True)
+        artifact = outputs / "result.txt"
+        artifact.write_text("allowed", encoding="utf-8")
+        outside = tmp_path / "outside.txt"
+        outside.write_text("must not be read", encoding="utf-8")
+        mock_paths = MagicMock()
+        mock_paths.sandbox_user_data_dir.return_value = user_data_dir
+        from src import client as client_module
+
+        original_resolve = client_module.resolve_thread_file
+
+        def resolve_then_swap(*args, **kwargs):
+            resolved = original_resolve(*args, **kwargs)
+            artifact.unlink()
+            artifact.symlink_to(outside)
+            return resolved
+
+        with (
+            patch("src.client.get_paths", return_value=mock_paths),
+            patch(
+                "src.client.resolve_thread_file",
+                side_effect=resolve_then_swap,
+            ),
+            pytest.raises(PermissionError),
+        ):
+            client.get_artifact(
+                "t1",
+                "mnt/user-data/outputs/result.txt",
+            )
+
+        assert outside.read_text(encoding="utf-8") == "must not be read"
+
 
 # ===========================================================================
 # Scenario-based integration tests
@@ -747,8 +980,7 @@ class TestScenarioMultiTurnConversation:
     """Scenario: User has a multi-turn conversation within a single thread."""
 
     def test_two_turn_conversation(self, client):
-        """
-        """
+        """ """
         ai1 = AIMessage(content="I'm a helpful assistant.", id="ai-1")
         ai2 = AIMessage(content="Python is great!", id="ai-2")
 
@@ -999,7 +1231,7 @@ class TestScenarioConfigManagement:
 
             client._agent = MagicMock()  # Simulate existing agent
             with (
-                patch("src.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
+                patch("src.config.extensions_config.ExtensionsConfig.resolve_config_path", return_value=config_file),
                 patch("src.client.get_extensions_config", return_value=current_config),
                 patch("src.client.reload_extensions_config", return_value=reloaded_config),
             ):
@@ -1029,7 +1261,7 @@ class TestScenarioConfigManagement:
             client._agent = MagicMock()  # Simulate re-created agent
             with (
                 patch("src.skills.loader.load_skills", side_effect=[[skill], [toggled]]),
-                patch("src.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
+                patch("src.config.extensions_config.ExtensionsConfig.resolve_config_path", return_value=config_file),
                 patch("src.client.get_extensions_config", return_value=ext_config),
                 patch("src.client.reload_extensions_config"),
             ):
@@ -1247,10 +1479,7 @@ class TestScenarioSkillInstallAndUse:
             (skills_root / "custom").mkdir(parents=True)
 
             # Step 1: Install
-            with (
-                patch("src.skills.loader.get_skills_root_path", return_value=skills_root),
-                patch("src.gateway.routers.skills._validate_skill_frontmatter", return_value=(True, "OK", "my-analyzer")),
-            ):
+            with patch("src.skills.loader.get_skills_root_path", return_value=skills_root):
                 result = client.install_skill(archive)
             assert result["success"] is True
             assert (skills_root / "custom" / "my-analyzer" / "SKILL.md").exists()
@@ -1284,7 +1513,7 @@ class TestScenarioSkillInstallAndUse:
 
             with (
                 patch("src.skills.loader.load_skills", side_effect=[[installed_skill], [disabled_skill]]),
-                patch("src.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
+                patch("src.config.extensions_config.ExtensionsConfig.resolve_config_path", return_value=config_file),
                 patch("src.client.get_extensions_config", return_value=ext_config),
                 patch("src.client.reload_extensions_config"),
             ):
@@ -1531,7 +1760,7 @@ class TestGatewayConformance:
 
         with (
             patch("src.client.get_extensions_config", return_value=ext_config),
-            patch("src.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
+            patch("src.config.extensions_config.ExtensionsConfig.resolve_config_path", return_value=config_file),
             patch("src.client.reload_extensions_config", return_value=ext_config),
         ):
             result = client.update_mcp_config({"srv": server.model_dump.return_value})

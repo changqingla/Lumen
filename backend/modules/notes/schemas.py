@@ -46,14 +46,7 @@ class NoteItem(BaseModel):
     title: str
     content: str
     folder: str
+    folderId: Optional[str]
     tags: list[str]
     updatedAt: datetime
     createdAt: datetime
-
-
-class NoteFolderItem(BaseModel):
-    """Note folder item."""
-
-    id: str
-    name: str
-    count: int

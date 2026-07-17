@@ -15,6 +15,31 @@
 #
 
 from . import (
-    naive, book, presentation, manual, laws, qa, table,
-    one, email, presentation_vision, ppt_md_parser, ir_table
+    book,
+    email,
+    ir_table,
+    laws,
+    manual,
+    naive,
+    one,
+    ppt_md_parser,
+    presentation,
+    presentation_vision,
+    qa,
+    table,
 )
+
+__all__ = [
+    "book",
+    "email",
+    "ir_table",
+    "laws",
+    "manual",
+    "naive",
+    "one",
+    "ppt_md_parser",
+    "presentation",
+    "presentation_vision",
+    "qa",
+    "table",
+]

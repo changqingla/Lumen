@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from typing import Literal
 from uuid import UUID
 
@@ -24,10 +25,37 @@ def _create_model_config_service(db: AsyncSession):
     return ModelConfigService(db)
 
 
-def _verify_internal_request(x_internal_token: str = Header(default="", alias="X-Internal-Token")) -> None:
-    expected = str(settings.RAG_INTERNAL_API_TOKEN or "").strip()
-    provided = str(x_internal_token or "").strip()
-    if not expected or provided != expected:
+def _validated_model_resolver_token() -> str:
+    token = settings.MODEL_RESOLVER_INTERNAL_TOKEN.get_secret_value()
+    if (
+        not token
+        or token != token.strip()
+        or not token.isascii()
+        or not token.isprintable()
+        or len(token) < 32
+        or token.lower().startswith(
+            ("change-me", "replace-with-", "example", "template", "your-")
+        )
+    ):
+        raise RuntimeError("MODEL_RESOLVER_INTERNAL_TOKEN is not configured correctly")
+    return token
+
+
+def _verify_internal_request(
+    x_internal_token: list[str] | None = Header(
+        default=None,
+        alias="X-Internal-Token",
+    ),
+) -> None:
+    try:
+        expected = _validated_model_resolver_token()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Model resolver authentication is unavailable",
+        ) from exc
+    supplied = x_internal_token or []
+    if len(supplied) != 1 or not secrets.compare_digest(supplied[0], expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized internal request")
 
 

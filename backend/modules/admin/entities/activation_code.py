@@ -88,10 +88,6 @@ class ActivationCode(Base):
         
         return True, None
     
-    def use(self) -> None:
-        """使用激活码（增加使用次数）"""
-        self.used_count += 1
-    
     def get_membership_expiry_date(self, current_expiry: Optional[datetime] = None) -> Optional[datetime]:
         """
         计算激活后的会员到期时间
@@ -134,4 +130,3 @@ class ActivationCode(Base):
         chars = string.ascii_uppercase.replace('O', '').replace('I', '') + string.digits.replace('0', '')
         code = ''.join(secrets.choice(chars) for _ in range(length))
         return code
-

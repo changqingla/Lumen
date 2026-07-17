@@ -1,6 +1,6 @@
 # Lumen 项目 RAG 检索算法技术文档
 
-更新时间：2026-03-24
+更新时间：2026-07-15
 
 ## 1. 文档目标
 
@@ -26,18 +26,21 @@
 
 ## 3. 相关代码入口
 
-核心入口可以分成两条：
+当前显式语义检索入口是受内部 token 保护的 RAG HTTP 路由：
+`services/rag/api/routes/recall.py`。
 
-1. Lumen 后端直连检索：`src/services/search_service.py`
-2. Agent 工具侧混合召回：`agent/tools/kb_hybrid_recall_tool.py` -> `rag/api/routes/recall.py`
+Runtime Agent 当前不再持有独立的 `kb_hybrid_recall` 工具。Backend 会先校验
+知识库与文档 scope，再把允许读取的 Markdown 物化到线程工作区；Agent 通过
+受沙箱约束的文件工具读取这些材料。这条 Runtime 文件链路与本章描述的语义
+检索实现是两个不同入口，不能再引用已经删除的旧 Agent 工具作为当前架构。
 
-两条链路最终都落到同一套底层实现：
+该服务入口落到以下底层实现：
 
 1. `shared/python/recall_lib/retriever.py`
 2. `shared/python/recall_lib/es_adapter.py`
-3. `rag/core/nlp/query.py`
-4. `rag/embedding/chunk_embedder.py`
-5. `rag/embed_store/es_connection.py`
+3. `services/rag/core/nlp/query.py`
+4. `services/rag/embedding/chunk_embedder.py`
+5. `shared/python/recall_lib/es_connection.py`
 
 ## 4. 总体检索链路
 
@@ -58,11 +61,11 @@
 
 对应实现：
 
-1. `rag/embedding/chunk_embedder.py:288-340`
-2. `rag/embed_store/es_connection.py:100-190`
+1. `services/rag/embedding/chunk_embedder.py:288-340`
+2. `shared/python/recall_lib/es_connection.py:100-190`
 3. `services/rag/api/common_utils.py:185-197`
 4. `services/rag/core/nlp/__init__.py:252-255`
-5. `services/rag/embed_store/es_connection.py:131-164`
+5. `shared/python/recall_lib/es_connection.py:131-164`
 
 ### 4.2 查询阶段
 
@@ -79,12 +82,10 @@
 
 对应实现：
 
-1. `src/services/search_service.py:66-165`
-2. `agent/tools/kb_hybrid_recall_tool.py:82-210`
-3. `rag/api/routes/recall.py:22-126`
-4. `shared/python/recall_lib/retriever.py:356-544`
-5. `services/rag/recall/retriever.py:197-198`
-6. `services/rag/core/nlp/query.py:184-201`
+1. `services/rag/api/routes/recall.py:23-125`
+2. `shared/python/recall_lib/retriever.py:353-547`
+3. `shared/python/recall_lib/retriever.py:194-195`
+4. `services/rag/core/nlp/query.py:127-201`
 
 ## 5. 索引与向量化算法
 
@@ -102,7 +103,7 @@
 
 对应实现：
 
-1. `rag/embedding/chunk_embedder.py:288-329`
+1. `services/rag/embedding/chunk_embedder.py:288-329`
 
 这意味着项目认为“文件名/标题信息”对 chunk 语义有辅助价值，但不会压过正文主体。
 
@@ -112,9 +113,9 @@
 
 对应实现：
 
-1. `rag/embedding/chunk_embedder.py:337-340`
-2. `rag/embed_store/es_connection.py:183-189`
-3. `rag/embed_store/es_connection.py:266-342`
+1. `services/rag/embedding/chunk_embedder.py:337-340`
+2. `shared/python/recall_lib/es_connection.py:183-189`
+3. `shared/python/recall_lib/es_connection.py:266-342`
 
 ### 5.3 ES 向量索引使用 cosine
 
@@ -127,7 +128,7 @@ Elasticsearch 里的 dense vector 映射明确配置了：
 
 对应实现：
 
-1. `rag/embed_store/es_connection.py:183-189`
+1. `shared/python/recall_lib/es_connection.py:183-189`
 
 ## 6. 全文检索算法
 
@@ -143,7 +144,7 @@ Elasticsearch 里的 dense vector 映射明确配置了：
 
 对应实现：
 
-1. `rag/core/nlp/query.py:89-172`
+1. `services/rag/core/nlp/query.py:89-172`
 
 ### 6.2 字段加权策略
 
@@ -246,12 +247,12 @@ Elasticsearch 里的 dense vector 映射明确配置了：
 
 对应实现：
 
-1. `rag/core/nlp/query.py:39-48`
-2. `rag/api/common_utils.py:185-197`
-3. `rag/embed_store/es_connection.py:125-166`
-4. `rag/embed_store/chunk_store.py:182-190`
-5. `rag/core/nlp/rag_tokenizer.py:666-773`
-6. `rag/core/nlp/rag_tokenizer.py:806-861`
+1. `services/rag/core/nlp/query.py:39-48`
+2. `services/rag/api/common_utils.py:185-197`
+3. `shared/python/recall_lib/es_connection.py:125-166`
+4. `services/rag/embed_store/chunk_store.py:182-190`
+5. `services/rag/core/nlp/rag_tokenizer.py:666-773`
+6. `services/rag/core/nlp/rag_tokenizer.py:806-861`
 
 这个配置说明项目显式偏向：
 
@@ -275,8 +276,8 @@ Elasticsearch 里的 dense vector 映射明确配置了：
 
 对应实现：
 
-1. `rag/core/nlp/query.py:174-277`
-2. `rag/core/nlp/term_weight.py:348-499`
+1. `services/rag/core/nlp/query.py:174-277`
+2. `services/rag/core/nlp/term_weight.py:348-499`
 
 这里的“对 token 计算权重”不是简单地数这个词出现了几次，而是给查询中的每个英文词分配一个“重要性分数”，后续会直接写进 ES 查询串里，形成类似下面这样的查询片段：
 
@@ -300,7 +301,7 @@ Elasticsearch 里的 dense vector 映射明确配置了：
 
 对应实现：
 
-1. `rag/core/nlp/query.py:187-215`
+1. `services/rag/core/nlp/query.py:187-215`
 
 `weights()` 会为每个 token 生成一个归一化后的 `(token, weight)` 二元组。这个 weight 不是单一规则，而是由多类特征混合得到：
 
@@ -311,9 +312,9 @@ Elasticsearch 里的 dense vector 映射明确配置了：
 
 对应实现：
 
-1. `rag/core/nlp/term_weight.py:352-367`
-2. `rag/core/nlp/term_weight.py:376-468`
-3. `rag/core/nlp/term_weight.py:472-499`
+1. `services/rag/core/nlp/term_weight.py:352-367`
+2. `services/rag/core/nlp/term_weight.py:376-468`
+3. `services/rag/core/nlp/term_weight.py:472-499`
 
 从实现上看，可以近似理解为：
 
@@ -346,7 +347,7 @@ token 权重最终会进入查询字符串本身。
 
 对应实现：
 
-1. `rag/core/nlp/query.py:247-277`
+1. `services/rag/core/nlp/query.py:247-277`
 
 所以“对 token 计算权重”在工程上真正的意义是：
 
@@ -393,7 +394,7 @@ token 权重最终会进入查询字符串本身。
 
 对应实现：
 
-1. `rag/core/nlp/query.py:266-271`
+1. `services/rag/core/nlp/query.py:266-271`
 
 短语权重计算方式是：
 
@@ -428,7 +429,7 @@ token 权重最终会进入查询字符串本身。
 
 对应实现：
 
-1. `rag/core/nlp/query.py:223-277`
+1. `services/rag/core/nlp/query.py:223-277`
 
 因此，英文查询算法的本质可以概括成一句话：
 
@@ -446,14 +447,14 @@ token 权重最终会进入查询字符串本身。
 
 对应实现：
 
-1. `rag/core/nlp/query.py:279-462`
+1. `services/rag/core/nlp/query.py:279-462`
 
 这里的 `term` 不是最终检索时使用的最小 token，而是 `self.tw.split(txt)` 切出来的第一层查询单元。
 
 对应实现：
 
-1. `rag/core/nlp/query.py:294-300`
-2. `rag/core/nlp/term_weight.py:309-346`
+1. `services/rag/core/nlp/query.py:294-300`
+2. `services/rag/core/nlp/term_weight.py:309-346`
 
 `split()` 的行为比较像“粗粒度切分”：
 
@@ -505,9 +506,9 @@ token 权重最终会进入查询字符串本身。
 
 对应实现：
 
-1. `rag/core/nlp/rag_tokenizer.py:410-424`
-2. `rag/core/nlp/term_weight.py:154-158`
-3. `rag/core/nlp/term_weight.py:472-499`
+1. `services/rag/core/nlp/rag_tokenizer.py:410-424`
+2. `services/rag/core/nlp/term_weight.py:154-158`
+3. `services/rag/core/nlp/term_weight.py:472-499`
 
 为了便于理解，下面假设这一轮算出的结果是：
 
@@ -548,8 +549,8 @@ term_weights = [("位置编码", 0.78)]
 
 对应实现：
 
-1. `rag/core/nlp/query.py:400-402`
-2. `rag/core/nlp/query.py:404-407`
+1. `services/rag/core/nlp/query.py:400-402`
+2. `services/rag/core/nlp/query.py:404-407`
 
 如果一个 `term` 在 `weights([term])` 之后得到的不止一个子词，`_process_chinese_query()` 还会额外补一个 term 级邻近短语：
 
@@ -575,7 +576,7 @@ term_weights = [("位置编码", 0.78)]
 
 对应实现：
 
-1. `rag/core/nlp/query.py:312-315`
+1. `services/rag/core/nlp/query.py:312-315`
 
 再往下看 `_build_chinese_term_query()` 里的细粒度补召回，也遵循同样的规则：
 
@@ -596,7 +597,7 @@ term_weights = [("位置编码", 0.78)]
 
 对应实现：
 
-1. `rag/core/nlp/query.py:404-407`
+1. `services/rag/core/nlp/query.py:404-407`
 
 最后，这些片段会被拼进一个更大的 `MatchTextExpr.matching_text` 查询串，再统一交给 ES 执行全文检索。也就是说：
 
@@ -724,8 +725,8 @@ RAG 检索主链路里，全文查询最终会打到 `FulltextQueryer.query_fiel
 
 对应实现：
 
-1. `rag/core/nlp/query.py:39-48`
-2. `rag/embed_store/es_connection.py:125-166`
+1. `services/rag/core/nlp/query.py:39-48`
+2. `shared/python/recall_lib/es_connection.py:125-166`
 
 这组字段的设计非常关键，因为它说明项目并不是主要在原始正文 `content_with_weight` 上做全文检索，而是更依赖“预处理后的检索字段”：
 
@@ -746,7 +747,7 @@ RAG 检索主链路里，全文查询最终会打到 `FulltextQueryer.query_fiel
 
 对应实现：
 
-1. `rag/embed_store/es_connection.py:100-117`
+1. `shared/python/recall_lib/es_connection.py:100-117`
 
 这意味着项目对词法字段采取了两种思路：
 
@@ -827,7 +828,7 @@ RAG 检索主链路里，全文查询最终会打到 `FulltextQueryer.query_fiel
 对应实现：
 
 1. `services/rag/core/nlp/query.py:39-48`
-2. `services/rag/recall/es_adapter.py:217-230`
+2. `shared/python/recall_lib/es_adapter.py:215-229`
 
 #### 6.5.4 ES 在这里具体做了什么
 
@@ -889,7 +890,7 @@ RAG 检索主链路里，全文查询最终会打到 `FulltextQueryer.query_fiel
 
 1. `shared/python/recall_lib/retriever.py:257-275`
 2. `shared/python/recall_lib/retriever.py:330-351`
-3. `rag/core/nlp/query.py:495-550`
+3. `services/rag/core/nlp/query.py:495-550`
 
 因此，ES 倒排检索的作用可以分成两层：
 
@@ -901,7 +902,7 @@ RAG 检索主链路里，全文查询最终会打到 `FulltextQueryer.query_fiel
 对应实现：
 
 1. `shared/python/recall_lib/es_adapter.py:216-231`
-2. `src/services/chunk_service.py:108-176`
+2. `backend/modules/knowledge/services/chunk_service.py:108-176`
 
 ## 7. 向量召回算法
 
@@ -958,15 +959,14 @@ RAG 检索主链路里，全文查询最终会打到 `FulltextQueryer.query_fiel
 
 1. `shared/python/recall_lib/retriever.py:192-223`
 
-项目当前运行时默认参数是：
+RAG `RecallRequest` 当前默认参数是：
 
-1. Lumen 直连搜索：`SIMILARITY_THRESHOLD = 0.01`，`VECTOR_SIMILARITY_WEIGHT = 0.3`
-2. Agent recall 默认：`RECALL_SIMILARITY_THRESHOLD = 0.1`，`RECALL_VECTOR_SIMILARITY_WEIGHT = 0.3`
+1. `similarity_threshold = 0.1`
+2. `vector_similarity_weight = 0.3`
 
 对应实现：
 
-1. `src/config/settings.py:115-117`
-2. `src/config/settings.py:127-136`
+1. `services/rag/api/schemas.py:66-92`
 
 因此在当前配置下，混合权重更偏词法侧：
 
@@ -1040,9 +1040,9 @@ score = 0.7 * text_score + 0.3 * vector_score
 
 对应实现：
 
-1. `services/rag/recall/retriever.py:197-222`
-2. `services/rag/recall/es_adapter.py:207-274`
-3. `services/rag/recall/retriever.py:343-351`
+1. `shared/python/recall_lib/retriever.py:194-219`
+2. `shared/python/recall_lib/es_adapter.py:205-272`
+3. `shared/python/recall_lib/retriever.py:340-351`
 
 所以更准确的说法是：
 
@@ -1068,7 +1068,7 @@ score = 0.7 * text_score + 0.3 * vector_score
 
 对应实现：
 
-1. `rag/core/nlp/query.py:464-493`
+1. `services/rag/core/nlp/query.py:464-493`
 
 ### 8.4 Chunk token 权重是通过“重复拼接”编码的
 
@@ -1150,37 +1150,30 @@ score = 0.7 * text_score + 0.3 * vector_score
 1. `shared/python/recall_lib/retriever.py:264-275`
 2. `shared/python/recall_lib/retriever.py:428-455`
 
-## 11. Agent 链路里的检索约束
+## 11. 检索权限与 Runtime 边界
 
-Agent 侧的 `kb_hybrid_recall` 不是全库搜索，而是严格受 KBContext 白名单约束：
+RAG 的 `/api/hybrid-recall` 是受内部 token 保护的服务接口，只接受受信任调用方
+提供的非空 `doc_ids` 白名单；它自身不负责最终用户身份或租户授权，也不能直接暴露
+给浏览器。业务层若调用该接口，必须先完成知识库访问判定并固定文档范围。
 
-1. 从 `kb_docs` 提取 `doc_ids`
-2. 从 markdown 路径推导唯一 owner
-3. 构造用户级 ES 索引
-4. 把 `doc_ids` 传给 `/api/hybrid-recall`
-
-对应实现：
-
-1. `agent/tools/kb_hybrid_recall_tool.py:94-163`
-2. `rag/api/routes/recall.py:37-92`
-
-因此 Agent 工具看到的是“受限召回”，不是面向整库或全平台的开放式搜索。
+Runtime Agent 走另一条链路：Backend 在 prepare/run admission 阶段验证 KB、
+稳定的 materialization revision 和文件哈希，随后只把已授权 Markdown 放进线程
+工作区。这条链路不依赖文档的 embedding 或 Elasticsearch 状态；Agent 的文件读取
+能力受物化 manifest 约束，而不是靠旧的 `KBContext` 或浏览器提交的 `doc_ids` 约束。
 
 ## 12. 与项目里其他“搜索”能力的区别
 
 为了避免混淆，这里把几个常见能力区分一下：
 
-### 12.1 `kb_hybrid_recall`
+### 12.1 `/api/hybrid-recall`
 
-这是主 RAG 召回工具，走向量、全文检索、重排、白名单过滤这条链路。
+这是 RAG 服务对受信任内部调用方提供的同类检索入口。模型参数和 `doc_ids`
+由调用方显式提供，服务端仍强制要求非空文档白名单。
 
-### 12.2 `kb_search_doc`
+### 12.2 Runtime 工作区文件检索
 
-这不是语义检索，只是对 Markdown 原文做大小写不敏感的字面匹配扫描，更像 grep。
-
-对应实现：
-
-1. `agent/tools/kb_doc_tools.py:334-396`
+Runtime Agent 读取 prepare 阶段物化的 Markdown。`read_file`、`bash` 等文件工具
+做的是工作区内的字面读取或扫描，不等同于 Elasticsearch 语义检索。
 
 ### 12.3 `ChunkService.search_chunks`
 
@@ -1188,7 +1181,7 @@ Agent 侧的 `kb_hybrid_recall` 不是全库搜索，而是严格受 KBContext �
 
 对应实现：
 
-1. `src/services/chunk_service.py:108-176`
+1. `backend/modules/knowledge/services/chunk_service.py:108-176`
 
 ## 13. 当前实现的优点与边界
 
@@ -1205,7 +1198,7 @@ Agent 侧的 `kb_hybrid_recall` 不是全库搜索，而是严格受 KBContext �
 1. 当前 ES 候选召回阶段并不是严格意义上的“文本 + 向量联合打分”。
 2. 词法与向量的真正融合主要在重排，而不是 ES 首轮召回。
 3. 运行时默认 `vector_similarity_weight = 0.3`，整体更偏词法信号。
-4. `SearchService` 与 Agent recall 的相似度阈值默认值不同，可能导致两条入口的召回行为不完全一致。
+4. 内部 recall 接口与 Runtime 工作区是两种不同检索路径；模型、阈值和物化范围需要分别治理，不能假设结果天然一致。
 
 ## 14. 结论
 
@@ -1413,9 +1406,10 @@ ES 在 explain、profile、字段级打分分析这类搜索可观测性上更�
 1. 双路召回后合并候选
 2. 或者使用支持更明确混合打分的检索方式
 
-第二，统一两条入口的默认参数。
+第二，收敛内部入口的参数治理。
 
-现在 Lumen 直连搜索和 Agent recall 的默认 `similarity_threshold` 不一样，这会导致同样问题在不同入口下结果可能不一致。工程上我会优先统一默认阈值和权重，并做 A/B 验证。
+当前受信任调用方可以提交模型、阈值和权重。工程上应把它们收敛成版本化检索配置，
+只让调用方选择已审核的 profile，并通过 A/B 验证后升级默认值。
 
 第三，补充检索评估体系。
 

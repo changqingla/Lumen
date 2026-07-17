@@ -94,7 +94,7 @@ class TelegramChannel(Channel):
         try:
             chat_id = int(msg.chat_id)
         except (ValueError, TypeError):
-            logger.error("无效的 Telegram chat_id：%s", msg.chat_id)
+            logger.error("无效的 Telegram chat_id")
             return
 
         kwargs: dict[str, Any] = {"chat_id": chat_id, "text": msg.text}
@@ -116,15 +116,19 @@ class TelegramChannel(Channel):
                 if attempt < _max_retries - 1:
                     delay = 2**attempt  # 1 秒、2 秒
                     logger.warning(
-                        "[Telegram] send failed (attempt %d/%d), retrying in %ds: %s",
+                        "[Telegram] send failed (attempt %d/%d), retrying in %ds (%s)",
                         attempt + 1,
                         _max_retries,
                         delay,
-                        exc,
+                        type(exc).__name__,
                     )
                     await asyncio.sleep(delay)
 
-        logger.error("[Telegram] send failed after %d attempts: %s", _max_retries, last_exc)
+        logger.error(
+            "[Telegram] send failed after %d attempts (%s)",
+            _max_retries,
+            type(last_exc).__name__,
+        )
         raise last_exc  # type: ignore[misc]
 
     async def send_file(self, msg: OutboundMessage, attachment: ResolvedAttachment) -> bool:
@@ -134,12 +138,12 @@ class TelegramChannel(Channel):
         try:
             chat_id = int(msg.chat_id)
         except (ValueError, TypeError):
-            logger.error("[Telegram] 无效的 chat_id：%s", msg.chat_id)
+            logger.error("[Telegram] 无效的 chat_id")
             return False
 
         # 电报平台（Telegram）限制：图片 10MB，文档 50MB
         if attachment.size > 50 * 1024 * 1024:
-            logger.warning("[Telegram] file too large (%d bytes), skipping: %s", attachment.size, attachment.filename)
+            logger.warning("[Telegram] file too large (%d bytes), skipping", attachment.size)
             return False
 
         bot = self._application.bot
@@ -163,10 +167,13 @@ class TelegramChannel(Channel):
                     sent = await bot.send_document(**kwargs)
 
             self._last_bot_message[msg.chat_id] = sent.message_id
-            logger.info("[Telegram] file sent: %s to chat=%s", attachment.filename, msg.chat_id)
+            logger.info("[Telegram] file sent")
             return True
-        except Exception:
-            logger.exception("[Telegram] failed to send file: %s", attachment.filename)
+        except Exception as exc:
+            logger.error(
+                "[Telegram] failed to send file (%s)",
+                type(exc).__name__,
+            )
             return False
 
     # -- 辅助方法 -----------------------------------------------------------
@@ -182,9 +189,12 @@ class TelegramChannel(Channel):
                 text="正在处理中...",
                 reply_to_message_id=reply_to_message_id,
             )
-            logger.info("[Telegram] 已在 chat=%s 发送“处理中”回复", chat_id)
-        except Exception:
-            logger.exception("[Telegram] 在 chat=%s 发送处理中回复失败", chat_id)
+            logger.info("[Telegram] 已发送处理中回复")
+        except Exception as exc:
+            logger.error(
+                "[Telegram] 发送处理中回复失败（%s）",
+                type(exc).__name__,
+            )
 
     # -- 内部 ---------------------------------------------------------------
 
@@ -199,9 +209,9 @@ class TelegramChannel(Channel):
             self._tg_loop.run_until_complete(self._application.start())
             self._tg_loop.run_until_complete(self._application.updater.start_polling())
             self._tg_loop.run_forever()
-        except Exception:
+        except Exception as exc:
             if self._running:
-                logger.exception("Telegram 轮询出错")
+                logger.error("Telegram 轮询出错（%s）", type(exc).__name__)
         finally:
             # 优雅关闭
             try:
@@ -209,8 +219,11 @@ class TelegramChannel(Channel):
                     self._tg_loop.run_until_complete(self._application.updater.stop())
                 self._tg_loop.run_until_complete(self._application.stop())
                 self._tg_loop.run_until_complete(self._application.shutdown())
-            except Exception:
-                logger.exception("关闭 Telegram 通道时出错")
+            except Exception as exc:
+                logger.error(
+                    "关闭 Telegram 通道时出错（%s）",
+                    type(exc).__name__,
+                )
 
     def _check_user(self, user_id: int) -> bool:
         if not self._allowed_users:

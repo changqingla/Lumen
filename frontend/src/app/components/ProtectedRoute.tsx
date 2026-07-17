@@ -5,14 +5,16 @@
 import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 
+import { canAccessProtectedRoute } from '@/app/lib/route-access';
 import { readAuthToken, subscribeAuthSessionReset } from '@/shared/lib/auth-runtime';
 import { useGuestMode } from '@/shared/hooks/useGuestMode';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
+  allowGuest?: boolean;
 }
 
-export default function ProtectedRoute({ children }: ProtectedRouteProps) {
+export default function ProtectedRoute({ children, allowGuest = false }: ProtectedRouteProps) {
   const [token, setToken] = useState(() => readAuthToken());
   const { isGuestMode } = useGuestMode();
 
@@ -20,7 +22,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     setToken(readAuthToken());
   }), []);
 
-  if (!token && !isGuestMode) {
+  if (!canAccessProtectedRoute({ authToken: token, isGuestMode, allowGuest })) {
     // 未登录，重定向到登录页
     return <Navigate to="/auth" replace />;
   }

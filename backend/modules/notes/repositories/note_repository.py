@@ -86,11 +86,9 @@ class NoteRepository:
     async def update(self, note: Note, **kwargs) -> Note:
         """Update note fields."""
         for key, value in kwargs.items():
-            if hasattr(note, key) and value is not None:
+            # folder_id=None is an explicit move to the unfiled collection.
+            if hasattr(note, key) and (value is not None or key == "folder_id"):
                 setattr(note, key, value)
-        
-        # 在 commit 之前访问 folder 以避免 MissingGreenlet
-        folder_name = note.folder.name if note.folder else None
         
         await self.db.commit()
         await self.db.refresh(note)

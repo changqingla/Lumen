@@ -42,7 +42,7 @@ def load_agent_config(name: str | None) -> AgentConfig | None:
     if name is None:
         return None
 
-    if not AGENT_NAME_PATTERN.match(name):
+    if AGENT_NAME_PATTERN.fullmatch(name) is None:
         raise ValueError(f"Invalid agent name '{name}'. Must match pattern: {AGENT_NAME_PATTERN.pattern}")
     agent_dir = get_paths().agent_dir(name)
     config_file = agent_dir / "config.yaml"
@@ -117,7 +117,10 @@ def list_custom_agents() -> list[AgentConfig]:
         try:
             agent_cfg = load_agent_config(entry.name)
             agents.append(agent_cfg)
-        except Exception as e:
-            logger.warning(f"Skipping agent '{entry.name}': {e}")
+        except Exception as exc:
+            logger.warning(
+                "Skipping invalid agent definition (%s)",
+                type(exc).__name__,
+            )
 
     return agents

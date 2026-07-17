@@ -14,8 +14,12 @@ class Paths:
 
     目录结构（宿主机侧）：
         {base_dir}/
-        ├── memory.json
-        ├── USER.md          <-- 全局用户画像（注入到所有 Agent）
+        ├── memory.json      <-- legacy quarantine; never auto-injected
+        ├── memories/
+        │   └── {memory_scope}/
+        │       ├── memory.json
+        │       └── agents/{agent_name}/memory.json
+        ├── USER.md          <-- legacy/operator state; not prompt-injected
         ├── agents/
         │   └── {agent_name}/
         │       ├── config.yaml
@@ -26,6 +30,7 @@ class Paths:
                 └── user-data/         <-- 在沙箱中挂载为 /mnt/user-data/
                     ├── workspace/     <-- /mnt/user-data/workspace/
                     ├── uploads/       <-- /mnt/user-data/uploads/
+                    ├── knowledge/     <-- /mnt/user-data/knowledge/ (read-only)
                     └── outputs/       <-- /mnt/user-data/outputs/
 
     BaseDir 解析顺序（按优先级）：
@@ -69,12 +74,12 @@ class Paths:
 
     @property
     def memory_file(self) -> Path:
-        """持久化记忆文件路径：`{base_dir}/memory.json`。"""
+        """Return the quarantined legacy global path (not used for injection)."""
         return self.base_dir / "memory.json"
 
     @property
     def user_md_file(self) -> Path:
-        """全局用户画像文件路径：`{base_dir}/USER.md`。"""
+        """Return the legacy/operator profile path (not prompt-injected)."""
         return self.base_dir / "USER.md"
 
     @property
@@ -87,7 +92,7 @@ class Paths:
         return self.agents_dir / name.lower()
 
     def agent_memory_file(self, name: str) -> Path:
-        """代理（Agent）级记忆文件：`{base_dir}/agents/{name}/memory.json`。"""
+        """Return a quarantined legacy agent path (not used for injection)."""
         return self.agent_dir(name) / "memory.json"
 
     def thread_dir(self, thread_id: str) -> Path:
@@ -100,7 +105,7 @@ class Paths:
             ValueError: 当 `thread_id` 包含不安全字符（路径分隔符或 `..`）时抛出，
                         以防目录遍历。
         """
-        if not _SAFE_THREAD_ID_RE.match(thread_id):
+        if _SAFE_THREAD_ID_RE.fullmatch(thread_id) is None:
             raise ValueError(f"Invalid thread_id {thread_id!r}: only alphanumeric characters, hyphens, and underscores are allowed.")
         return self.base_dir / "threads" / thread_id
 
@@ -119,6 +124,10 @@ class Paths:
         沙箱：`/mnt/user-data/uploads/`
         """
         return self.thread_dir(thread_id) / "user-data" / "uploads"
+
+    def sandbox_knowledge_dir(self, thread_id: str) -> Path:
+        """Return the Backend-managed, sandbox-read-only knowledge directory."""
+        return self.thread_dir(thread_id) / "user-data" / "knowledge"
 
     def sandbox_outputs_dir(self, thread_id: str) -> Path:
         """
@@ -147,6 +156,7 @@ class Paths:
         for d in [
             self.sandbox_work_dir(thread_id),
             self.sandbox_uploads_dir(thread_id),
+            self.sandbox_knowledge_dir(thread_id),
             self.sandbox_outputs_dir(thread_id),
         ]:
             d.mkdir(parents=True, exist_ok=True)
@@ -198,15 +208,3 @@ def get_paths() -> Paths:
     if _paths is None:
         _paths = Paths()
     return _paths
-
-
-def resolve_path(path: str) -> Path:
-    """将 *path* 解析为绝对 ``Path``。
-
-    相对路径会相对于应用基础目录解析；
-    绝对路径会在标准化后直接返回。
-    """
-    p = Path(path)
-    if not p.is_absolute():
-        p = get_paths().base_dir / path
-    return p.resolve()

@@ -10,6 +10,8 @@ import { api, noteAPI } from '@/shared/api/client';
 import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { useChatSessions } from '@/features/chat/hooks/useChatSessions';
+import { useNoteAutosave } from '@/features/notes/hooks/useNoteAutosave';
+import { mergeSavedDraft, type NoteDraft } from '@/features/notes/lib/noteAutosave';
 import ConfirmModal from '@/shared/components/ConfirmModal/ConfirmModal';
 import { getErrorMessage } from '@/shared/utils/errorMessage';
 import {
@@ -30,7 +32,7 @@ interface Note {
   id: string;
   title: string;
   content: string;
-  folderId?: string;
+  folderId?: string | null;
   tags: string[];
   updatedAt: string;
   createdAt: string;
@@ -64,7 +66,6 @@ export default function NotesPage() {
   // Editor State
   const [noteTitle, setNoteTitle] = useState('');
   const [noteContent, setNoteContent] = useState('');
-  const [saving, setSaving] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   
   // Folder Edit State
@@ -130,62 +131,63 @@ export default function NotesPage() {
     void loadNotes();
   }, [isGuestMode, loadNotes]);
 
-  // 自动保存
-  useEffect(() => {
-    if (isGuestMode) return;
-    if (!selectedNote) return;
-    
-    const hasChanges = noteTitle !== selectedNote.title || noteContent !== selectedNote.content;
-    if (!hasChanges) return;
+  const saveNoteDraft = useCallback((draft: NoteDraft, options: { keepalive: boolean }) => (
+    noteAPI.updateNote(
+      draft.noteId,
+      { title: draft.title, content: draft.content },
+      options,
+    )
+  ), []);
 
-    setSaving(true);
-    const timer = setTimeout(async () => {
-      try {
-        const response = await noteAPI.updateNote(selectedNote.id, {
-          title: noteTitle,
-          content: noteContent
-        });
-        
-        const updatedAt = response?.updatedAt || new Date().toISOString();
-        
-        // 更新本地状态
-        setNotes(prevNotes => prevNotes.map(n => 
-          n.id === selectedNote.id 
-            ? { ...n, title: noteTitle, content: noteContent, updatedAt }
-            : n
-        ));
-        
-        setSelectedNote(prev => prev ? { ...prev, title: noteTitle, content: noteContent, updatedAt } : null);
-      } catch (error: unknown) {
-        toast.error(getErrorMessage(error, '保存失败'));
-      } finally {
-        setSaving(false);
-      }
-    }, 1000);
+  const handleNoteSaved = useCallback((draft: NoteDraft, updatedAt: string) => {
+    setNotes((previousNotes) => previousNotes.map((note) => (
+      mergeSavedDraft(note, draft, updatedAt)
+    )));
+    setSelectedNote((previous) => (
+      previous ? mergeSavedDraft(previous, draft, updatedAt) : null
+    ));
+  }, []);
 
-    return () => clearTimeout(timer);
-  }, [isGuestMode, noteTitle, noteContent, selectedNote, toast]);
+  const handleNoteSaveError = useCallback((error: unknown) => {
+    toast.error(getErrorMessage(error, '保存失败，内容仍保留在编辑器中'));
+  }, [toast]);
 
-  // 同步当前笔记状态到列表
-  const syncCurrentNoteToList = useCallback(() => {
-    if (selectedNote && (noteTitle !== selectedNote.title || noteContent !== selectedNote.content)) {
-      setNotes(prevNotes => prevNotes.map(n => 
-        n.id === selectedNote.id 
-          ? { ...n, title: noteTitle, content: noteContent, updatedAt: new Date().toISOString() }
-          : n
-      ));
-    }
-  }, [selectedNote, noteTitle, noteContent]);
+  const {
+    saveState,
+    flushPendingSave,
+    forgetNote,
+  } = useNoteAutosave({
+    enabled: !isGuestMode,
+    selectedNote,
+    title: noteTitle,
+    content: noteContent,
+    saveNote: saveNoteDraft,
+    onSaved: handleNoteSaved,
+    onError: handleNoteSaveError,
+  });
 
-  const handleNoteClick = (note: Note) => {
-    // 切换前同步当前笔记状态
-    syncCurrentNoteToList();
-
+  const openNote = useCallback((note: Note) => {
     setSelectedNote(note);
     setNoteTitle(note.title);
     setNoteContent(note.content);
-    // 默认以预览模式打开笔记
     setIsPreviewMode(true);
+  }, []);
+
+  const handleNoteClick = async (note: Note) => {
+    if (selectedNote?.id === note.id) {
+      return;
+    }
+    if (!await flushPendingSave()) {
+      return;
+    }
+    openNote(note);
+  };
+
+  const handleFolderSelect = async (folderId: string) => {
+    if (folderId === selectedFolder || !await flushPendingSave()) {
+      return;
+    }
+    setSelectedFolder(folderId);
   };
 
   const handleNewNote = async () => {
@@ -199,8 +201,9 @@ export default function NotesPage() {
     }
 
     try {
-      // 切换前同步当前笔记状态
-      syncCurrentNoteToList();
+      if (!await flushPendingSave()) {
+        return;
+      }
       
       const folderId = selectedFolder === 'all' ? undefined : selectedFolder;
       const response = await noteAPI.createNote({
@@ -213,21 +216,17 @@ export default function NotesPage() {
       await loadNotes();
       await loadFolders();
       
-      // 创建完整的 Note 对象
+      const now = new Date().toISOString();
       const newNote: Note = {
         id: response.id,
-        title: response.title,
-        content: response.content || '',
-        folderId: response.folderId,
-        tags: response.tags || [],
-        updatedAt: response.updatedAt || new Date().toISOString(),
-        createdAt: response.createdAt || new Date().toISOString()
+        title: '新笔记',
+        content: '',
+        folderId,
+        tags: [],
+        updatedAt: now,
+        createdAt: now,
       };
-      
-      setSelectedNote(newNote);
-      setNoteTitle(newNote.title);
-      setNoteContent(newNote.content);
-      // 新笔记默认以编辑模式打开
+      openNote(newNote);
       setIsPreviewMode(false);
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, '创建笔记失败'));
@@ -247,7 +246,12 @@ export default function NotesPage() {
     if (!selectedNote) return;
     
     try {
+      if (!await flushPendingSave()) {
+        return;
+      }
+      const deletedNoteId = selectedNote.id;
       await noteAPI.deleteNote(selectedNote.id);
+      forgetNote(deletedNoteId);
       await loadNotes();
       await loadFolders();
       
@@ -397,7 +401,7 @@ export default function NotesPage() {
   };
 
   // 聊天处理函数
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
     if (isGuestMode) {
       promptLogin({
         title: '登录后可新建对话',
@@ -406,11 +410,15 @@ export default function NotesPage() {
       });
       return;
     }
-    navigate('/');
+    if (await flushPendingSave()) {
+      navigate('/');
+    }
   };
 
-  const handleSelectChat = (chatId: string) => {
-    navigate(`/?chatId=${chatId}`);
+  const handleSelectChat = async (chatId: string) => {
+    if (await flushPendingSave()) {
+      navigate(`/?chatId=${chatId}`);
+    }
   };
 
   const handleDeleteChat = async (chatId: string) => {
@@ -524,6 +532,7 @@ export default function NotesPage() {
 
       {isMobile && !isSidebarOpen && (
         <button
+          type="button"
           className={styles.mobileMenuButton}
           onClick={() => setIsSidebarOpen(true)}
           aria-label="打开侧边栏"
@@ -553,9 +562,11 @@ export default function NotesPage() {
             <div className={styles.sidebarHeader}>
               <h2 className={styles.sidebarTitle}>我的笔记</h2>
               <button 
+                type="button"
                 className={styles.addFolderBtn}
                 onClick={() => setCreatingFolder(true)}
                 title="新建文件夹"
+                aria-label="新建文件夹"
               >
                 <Plus size={16} />
               </button>
@@ -563,8 +574,9 @@ export default function NotesPage() {
 
             <div className={styles.folderList}>
               <button
+                type="button"
                 className={`${styles.folderItem} ${selectedFolder === 'all' ? styles.folderActive : ''} ${dragOverFolderId === 'all' ? styles.folderDragOver : ''}`}
-                onClick={() => setSelectedFolder('all')}
+                onClick={() => { void handleFolderSelect('all'); }}
                 onDragOver={(e) => handleDragOver(e, 'all')}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, null)}
@@ -590,17 +602,24 @@ export default function NotesPage() {
                         }}
                         onBlur={handleSaveRename}
                         className={styles.folderInput}
+                        aria-label="文件夹名称"
                         autoFocus
                       />
-                      <button onClick={handleSaveRename} className={styles.saveBtn}>
+                      <button
+                        type="button"
+                        onClick={handleSaveRename}
+                        className={styles.saveBtn}
+                        aria-label="保存文件夹名称"
+                      >
                         <Check size={14} />
                       </button>
                     </div>
                   ) : (
                     <>
                       <button
+                        type="button"
                         className={`${styles.folderItem} ${selectedFolder === folder.id ? styles.folderActive : ''} ${dragOverFolderId === folder.id ? styles.folderDragOver : ''}`}
-                        onClick={() => setSelectedFolder(folder.id)}
+                        onClick={() => { void handleFolderSelect(folder.id); }}
                         onDragOver={(e) => handleDragOver(e, folder.id)}
                         onDragLeave={handleDragLeave}
                         onDrop={(e) => handleDrop(e, folder.id)}
@@ -611,14 +630,18 @@ export default function NotesPage() {
                       </button>
                       <div className={styles.folderMenu}>
                         <button
+                          type="button"
                           className={styles.menuBtn}
                           onClick={() => setOpenMenuId(openMenuId === folder.id ? null : folder.id)}
+                          aria-label={`打开「${folder.name}」文件夹菜单`}
+                          aria-expanded={openMenuId === folder.id}
                         >
                           <MoreVertical size={14} />
                         </button>
                         {openMenuId === folder.id && (
                           <div className={styles.menuDropdown}>
                             <button
+                              type="button"
                               className={styles.menuItem}
                               onClick={() => handleRenameFolder(folder)}
                             >
@@ -626,6 +649,7 @@ export default function NotesPage() {
                               重命名
                             </button>
                             <button
+                              type="button"
                               className={`${styles.menuItem} ${styles.menuItemDanger}`}
                               onClick={() => handleDeleteFolder(folder)}
                             >
@@ -662,9 +686,15 @@ export default function NotesPage() {
                     }}
                     className={styles.folderInput}
                     placeholder="未命名的文件夹"
+                    aria-label="新文件夹名称"
                     autoFocus
                   />
-                  <button onClick={handleCreateFolder} className={styles.saveBtn}>
+                  <button
+                    type="button"
+                    onClick={handleCreateFolder}
+                    className={styles.saveBtn}
+                    aria-label="创建文件夹"
+                  >
                     <Check size={14} />
                   </button>
                 </div>
@@ -675,7 +705,7 @@ export default function NotesPage() {
           {/* 中间：笔记列表 */}
           <section className={styles.notesList}>
             <div className={styles.notesHeader}>
-              <button className={styles.newNoteBtn} onClick={handleNewNote}>
+              <button type="button" className={styles.newNoteBtn} onClick={handleNewNote}>
                 <Plus size={16} />
                 新笔记
               </button>
@@ -692,7 +722,16 @@ export default function NotesPage() {
                   <div
                     key={note.id}
                     className={`${styles.noteItem} ${selectedNote?.id === note.id ? styles.noteActive : ''} ${draggedNote?.id === note.id ? styles.noteDragging : ''}`}
-                    onClick={() => handleNoteClick(note)}
+                    onClick={() => { void handleNoteClick(note); }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        void handleNoteClick(note);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-current={selectedNote?.id === note.id ? 'true' : undefined}
                     draggable
                     onDragStart={(e) => handleDragStart(e, note)}
                     onDragEnd={handleDragEnd}
@@ -724,12 +763,19 @@ export default function NotesPage() {
                     type="text"
                     value={noteTitle}
                     onChange={(e) => setNoteTitle(e.target.value)}
+                    onBlur={() => { void flushPendingSave(); }}
                     className={styles.editorTitle}
                     placeholder="笔记标题"
+                    aria-label="笔记标题"
                   />
                   <div className={styles.editorActions}>
-                    {saving && <span className={styles.savingText}>保存中...</span>}
-                    {!saving && selectedNote && (
+                    {(saveState === 'pending' || saveState === 'saving') && (
+                      <span className={styles.savingText} role="status">保存中...</span>
+                    )}
+                    {saveState === 'error' && (
+                      <span className={styles.savingText} role="status">保存失败</span>
+                    )}
+                    {saveState === 'saved' && selectedNote && (
                       <span className={styles.savedText}>
                         {new Date(selectedNote.updatedAt).toLocaleString('zh-CN', {
                           month: 'numeric',
@@ -740,16 +786,20 @@ export default function NotesPage() {
                       </span>
                     )}
                     <button
+                      type="button"
                       className={styles.previewBtn}
                       onClick={() => setIsPreviewMode(!isPreviewMode)}
                       title={isPreviewMode ? "编辑" : "预览"}
+                      aria-label={isPreviewMode ? "编辑笔记" : "预览笔记"}
                     >
                       {isPreviewMode ? <PenTool size={16} /> : <Eye size={16} />}
                     </button>
                     <button
+                      type="button"
                       className={styles.deleteBtn}
                       onClick={handleDeleteNote}
                       title="删除笔记"
+                      aria-label="删除笔记"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -763,8 +813,10 @@ export default function NotesPage() {
                   <textarea
                     value={noteContent}
                     onChange={(e) => setNoteContent(e.target.value)}
+                    onBlur={() => { void flushPendingSave(); }}
                     className={styles.editorContent}
                     placeholder="开始写笔记..."
+                    aria-label="笔记内容"
                   />
                 )}
               </>

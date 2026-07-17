@@ -60,6 +60,6 @@ async def get_mcp_tools() -> list[BaseTool]:
 
         return tools
 
-    except Exception as e:
-        logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
+    except Exception as exc:
+        logger.error("Failed to load MCP tools (%s)", type(exc).__name__)
         return []

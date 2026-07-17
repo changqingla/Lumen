@@ -23,7 +23,6 @@ from PIL import Image
 from core.nlp import tokenize, is_english
 from core.nlp import rag_tokenizer
 from deepdoc.parser import PptParser
-from PyPDF2 import PdfReader as pdf2_read
 
 
 class Ppt(PptParser):
@@ -118,11 +117,6 @@ def extract_pages_to_images(file_path, output_dir="output_images", from_page=0, 
         os.makedirs(target_dir)
     
     exported_files = []
-    
-    def progress_wrapper(progress, msg=""):
-        """内部进度回调包装"""
-        if callback:
-            callback(progress, msg)
     
     # 判断文件类型并处理
     if re.search(r"\.pptx?$", file_path, re.IGNORECASE):

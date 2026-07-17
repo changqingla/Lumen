@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from src.channels.base import Channel
 from src.channels.message_bus import MessageBus, OutboundMessage, ResolvedAttachment
+from src.config.paths import Paths
 
 
 def _run(coro):
@@ -111,11 +112,9 @@ class TestResolveAttachments:
         test_file = outputs_dir / "report.pdf"
         test_file.write_bytes(b"%PDF-1.4 fake content")
 
-        mock_paths = MagicMock()
-        mock_paths.resolve_virtual_path.return_value = test_file
-        mock_paths.sandbox_outputs_dir.return_value = outputs_dir
+        paths = Paths(tmp_path)
 
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=paths):
             result = _resolve_attachments(thread_id, ["/mnt/user-data/outputs/report.pdf"])
 
         assert len(result) == 1
@@ -123,6 +122,8 @@ class TestResolveAttachments:
         assert result[0].mime_type == "application/pdf"
         assert result[0].is_image is False
         assert result[0].size == len(b"%PDF-1.4 fake content")
+        assert result[0].actual_path.read_bytes() == b"%PDF-1.4 fake content"
+        result[0].cleanup()
 
     def test_resolves_image_file(self, tmp_path):
         """Images are detected by MIME type."""
@@ -134,68 +135,54 @@ class TestResolveAttachments:
         img = outputs_dir / "chart.png"
         img.write_bytes(b"\x89PNG fake image")
 
-        mock_paths = MagicMock()
-        mock_paths.resolve_virtual_path.return_value = img
-        mock_paths.sandbox_outputs_dir.return_value = outputs_dir
+        paths = Paths(tmp_path)
 
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=paths):
             result = _resolve_attachments(thread_id, ["/mnt/user-data/outputs/chart.png"])
 
         assert len(result) == 1
         assert result[0].is_image is True
         assert result[0].mime_type == "image/png"
+        result[0].cleanup()
 
     def test_skips_missing_file(self, tmp_path):
         """Missing files are skipped with a warning."""
         from src.channels.manager import _resolve_attachments
 
-        outputs_dir = tmp_path / "outputs"
-        outputs_dir.mkdir()
+        paths = Paths(tmp_path)
+        paths.sandbox_outputs_dir("t1").mkdir(parents=True)
 
-        mock_paths = MagicMock()
-        mock_paths.resolve_virtual_path.return_value = outputs_dir / "nonexistent.txt"
-        mock_paths.sandbox_outputs_dir.return_value = outputs_dir
-
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=paths):
             result = _resolve_attachments("t1", ["/mnt/user-data/outputs/nonexistent.txt"])
 
         assert result == []
 
-    def test_skips_invalid_path(self):
+    def test_skips_invalid_path(self, tmp_path):
         """Invalid paths (ValueError from resolve) are skipped."""
         from src.channels.manager import _resolve_attachments
 
-        mock_paths = MagicMock()
-        mock_paths.resolve_virtual_path.side_effect = ValueError("bad path")
-
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=Paths(tmp_path)):
             result = _resolve_attachments("t1", ["/invalid/path"])
 
         assert result == []
 
-    def test_rejects_uploads_path(self):
+    def test_rejects_uploads_path(self, tmp_path):
         """Paths under /mnt/user-data/uploads/ are rejected (security)."""
         from src.channels.manager import _resolve_attachments
 
-        mock_paths = MagicMock()
-
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=Paths(tmp_path)):
             result = _resolve_attachments("t1", ["/mnt/user-data/uploads/secret.pdf"])
 
         assert result == []
-        mock_paths.resolve_virtual_path.assert_not_called()
 
-    def test_rejects_workspace_path(self):
+    def test_rejects_workspace_path(self, tmp_path):
         """Paths under /mnt/user-data/workspace/ are rejected (security)."""
         from src.channels.manager import _resolve_attachments
 
-        mock_paths = MagicMock()
-
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=Paths(tmp_path)):
             result = _resolve_attachments("t1", ["/mnt/user-data/workspace/config.py"])
 
         assert result == []
-        mock_paths.resolve_virtual_path.assert_not_called()
 
     def test_rejects_path_traversal_escape(self, tmp_path):
         """Paths that escape the outputs directory after resolution are rejected."""
@@ -209,11 +196,7 @@ class TestResolveAttachments:
         escaped_file.parent.mkdir(parents=True, exist_ok=True)
         escaped_file.write_text("sensitive")
 
-        mock_paths = MagicMock()
-        mock_paths.resolve_virtual_path.return_value = escaped_file
-        mock_paths.sandbox_outputs_dir.return_value = outputs_dir
-
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=Paths(tmp_path)):
             result = _resolve_attachments(thread_id, ["/mnt/user-data/outputs/../uploads/stolen.txt"])
 
         assert result == []
@@ -223,22 +206,13 @@ class TestResolveAttachments:
         from src.channels.manager import _resolve_attachments
 
         thread_id = "t1"
-        outputs_dir = tmp_path / "outputs"
-        outputs_dir.mkdir()
+        paths = Paths(tmp_path)
+        outputs_dir = paths.sandbox_outputs_dir(thread_id)
+        outputs_dir.mkdir(parents=True)
         good_file = outputs_dir / "data.csv"
         good_file.write_text("a,b,c")
 
-        mock_paths = MagicMock()
-        mock_paths.sandbox_outputs_dir.return_value = outputs_dir
-
-        def resolve_side_effect(tid, vpath):
-            if "data.csv" in vpath:
-                return good_file
-            return tmp_path / "missing.txt"
-
-        mock_paths.resolve_virtual_path.side_effect = resolve_side_effect
-
-        with patch("src.config.paths.get_paths", return_value=mock_paths):
+        with patch("src.config.paths.get_paths", return_value=paths):
             result = _resolve_attachments(
                 thread_id,
                 ["/mnt/user-data/outputs/data.csv", "/mnt/user-data/outputs/missing.txt"],
@@ -246,6 +220,7 @@ class TestResolveAttachments:
 
         assert len(result) == 1
         assert result[0].filename == "data.csv"
+        result[0].cleanup()
 
 
 # ---------------------------------------------------------------------------

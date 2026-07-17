@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from src.models import resolver as resolver_module
 
 
 def test_dynamic_resolution_requires_thread_id(monkeypatch):
-    monkeypatch.setenv("RAG_INTERNAL_API_TOKEN", "internal-token")
+    monkeypatch.setenv(
+        "MODEL_RESOLVER_INTERNAL_TOKEN",
+        "model-resolver-test-token-0123456789abcdef",
+    )
 
     with pytest.raises(ValueError, match="thread_id is required"):
         resolver_module.resolve_chat_model_spec(
@@ -18,8 +19,10 @@ def test_dynamic_resolution_requires_thread_id(monkeypatch):
             thread_id=None,
         )
 
+
 def test_dynamic_resolution_sends_thread_id_on_every_request(monkeypatch):
-    monkeypatch.setenv("RAG_INTERNAL_API_TOKEN", "internal-token")
+    internal_token = "model-resolver-test-token-0123456789abcdef"
+    monkeypatch.setenv("MODEL_RESOLVER_INTERNAL_TOKEN", internal_token)
 
     calls: list[dict] = []
 
@@ -39,20 +42,33 @@ def test_dynamic_resolution_sends_thread_id_on_every_request(monkeypatch):
                 "supports_reasoning_effort": False,
             }
 
-    def _fake_post(url, json, headers, timeout):
-        calls.append(
-            {
-                "url": url,
-                "json": dict(json),
-                "headers": dict(headers),
-                "timeout": timeout,
+    class FakeClient:
+        def __init__(self, **kwargs):
+            assert kwargs == {
+                "timeout": 30.0,
+                "trust_env": False,
+                "follow_redirects": False,
             }
-        )
-        return FakeResponse()
 
-    monkeypatch.setattr(resolver_module.httpx, "post", _fake_post)
+        def __enter__(self):
+            return self
 
-    resolver_module.resolve_chat_model_spec(
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, json, headers):
+            calls.append(
+                {
+                    "url": url,
+                    "json": dict(json),
+                    "headers": dict(headers),
+                }
+            )
+            return FakeResponse()
+
+    monkeypatch.setattr(resolver_module.httpx, "Client", FakeClient)
+
+    first = resolver_module.resolve_chat_model_spec(
         dynamic_model_token="dynamic-token",
         thread_id="thread-a",
     )
@@ -69,3 +85,24 @@ def test_dynamic_resolution_sends_thread_id_on_every_request(monkeypatch):
     assert calls[0]["json"] == {"token": "dynamic-token", "thread_id": "thread-a"}
     assert calls[1]["json"] == {"token": "dynamic-token", "thread_id": "thread-a"}
     assert calls[2]["json"] == {"token": "dynamic-token", "thread_id": "thread-b"}
+    assert calls[0]["headers"] == {"X-Internal-Token": internal_token}
+    assert first.enforce_outbound_endpoint_policy is True
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "",
+        "short",
+        "replace-with-a-random-model-resolver-token",
+        "non-ascii-model-resolver-token-012345-密钥",
+    ],
+)
+def test_dynamic_resolution_rejects_weak_internal_token(monkeypatch, token):
+    monkeypatch.setenv("MODEL_RESOLVER_INTERNAL_TOKEN", token)
+
+    with pytest.raises(ValueError, match="MODEL_RESOLVER_INTERNAL_TOKEN"):
+        resolver_module.resolve_chat_model_spec(
+            dynamic_model_token="dynamic-token",
+            thread_id="thread-a",
+        )

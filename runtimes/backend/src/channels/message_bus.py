@@ -76,6 +76,13 @@ class ResolvedAttachment:
     mime_type: str
     size: int
     is_image: bool
+    temporary: bool = False
+
+    def cleanup(self) -> None:
+        """Remove a private attachment snapshot after all listeners finish."""
+
+        if self.temporary:
+            self.actual_path.unlink(missing_ok=True)
 
 
 @dataclass
@@ -130,9 +137,8 @@ class MessageBus:
         """将通道入站消息放入队列。"""
         await self._inbound_queue.put(msg)
         logger.info(
-            "[Bus] inbound enqueued: channel=%s, chat_id=%s, type=%s, queue_size=%d",
+            "[Bus] inbound enqueued: channel=%s, type=%s, queue_size=%d",
             msg.channel_name,
-            msg.chat_id,
             msg.msg_type.value,
             self._inbound_queue.qsize(),
         )
@@ -158,14 +164,17 @@ class MessageBus:
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """将出站消息分发给所有已注册监听器。"""
         logger.info(
-            "[Bus] outbound dispatching: channel=%s, chat_id=%s, listeners=%d, text_len=%d",
+            "[Bus] outbound dispatching: channel=%s, listeners=%d, text_len=%d",
             msg.channel_name,
-            msg.chat_id,
             len(self._outbound_listeners),
             len(msg.text),
         )
         for callback in self._outbound_listeners:
             try:
                 await callback(msg)
-            except Exception:
-                logger.exception("Error in outbound callback for channel=%s", msg.channel_name)
+            except Exception as exc:
+                logger.error(
+                    "Error in outbound callback for channel=%s (%s)",
+                    msg.channel_name,
+                    type(exc).__name__,
+                )

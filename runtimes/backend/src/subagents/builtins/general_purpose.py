@@ -36,6 +36,7 @@ When you complete the task, provide:
 <working_directory>
 You have access to the same sandbox environment as the parent agent:
 - User uploads: `/mnt/user-data/uploads`
+- Managed knowledge: `/mnt/user-data/knowledge` (read-only)
 - User workspace: `/mnt/user-data/workspace`
 - Output files: `/mnt/user-data/outputs`
 </working_directory>

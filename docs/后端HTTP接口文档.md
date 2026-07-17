@@ -2,52 +2,71 @@
 
 ## 1. 文档目标
 
-本文用于整理 lumen 项目当前实际对外提供的后端 HTTP API 接口，帮助前端开发、后端联调、第三方系统接入和日常排障。
+本文用于整理 lumen 项目的公网业务 API 与 Runtime 内部 HTTP 协议，帮助前端开发、后端联调和日常排障。两类接口的信任边界不同，不能把 Runtime 路由当作公网 API。
 
 需要先说明一个关键前提：
 
-- 这个项目的后端不是单一服务，而是由两个 HTTP 服务共同组成：
-- `Gateway`：项目自定义业务接口层，默认端口 `8001`
-- `LangGraph Server`：Agent 运行时接口层，默认端口 `2024`
+- `backend/` 业务后端是公网请求的授权点，容器端口为 `13000`。
+- Runtime `Gateway` 是配置与线程资源内部服务，端口为 `8001`。
+- `LangGraph Server` 是 Agent 执行内部服务，端口为 `2024`。
 
-因此，本文也分为两部分：
+因此，本文同时保留：
 
-- `Gateway` 自定义 REST API
-- 项目当前实际依赖的 `LangGraph` 运行时 API
+- 浏览器可访问的业务后端合同
+- 仅供服务间调用的 Gateway 与 LangGraph 协议说明
 
 本文依据的主要实现来源包括：
 
-- `backend/src/gateway/app.py`
-- `backend/src/gateway/routers/*.py`
-- `backend/langgraph.json`
+- `runtimes/backend/src/gateway/app.py`
+- `runtimes/backend/src/gateway/routers/*.py`
+- `runtimes/backend/langgraph.json`
+- `backend/modules/chat/runtime_controller.py`
+- `backend/modules/chat/runtime_run_controller.py`
+- `backend/modules/auth/controller.py`
+- `docker/nginx/lumen.conf.template`
 - `frontend/src/shared/api/client.ts`
 
 ## 2. 服务与基础地址
 
-在默认 Docker 开发环境中，两个服务的地址为：
+在默认 Docker 部署中：
 
-- `Gateway`: `http://localhost:8001`
-- `LangGraph`: `http://localhost:2024`
+- 浏览器通过 Nginx 同域访问 `/api/*`，Nginx 将其转发给业务后端。
+- Gateway 的 `http://localhost:8001` 与 LangGraph 的 `http://localhost:2024` 只是本机调试或容器内部地址，默认绑定本机地址。
+- Nginx 对 `/threads/*` 和 `/api/threads/*` 显式返回 `404`，不会转发到 LangGraph 或 Gateway。
 
-前端通常通过反向代理或同域转发来访问它们，所以在浏览器代码里你会看到这样的路径形式：
+浏览器使用的 Agent Runtime 公网入口是 session-scoped 业务代理：
 
-- `Gateway` 路径通常以 `/api/...` 开头
-- `LangGraph` 路径通常以 `/threads/...` 开头
+- `/api/chat-runtime/sessions/{session_id}/...`
+- `/api/chat/sessions/{session_id}/artifacts/download`
 
-### 2.1 Gateway 文档入口
+### 2.1 Gateway 内部文档入口
 
-Gateway 已启用 FastAPI 自带文档：
+Gateway 已启用 FastAPI 自带文档，以下地址只用于内部联调：
 
 - Swagger UI: `GET /docs`
 - ReDoc: `GET /redoc`
 - OpenAPI JSON: `GET /openapi.json`
 
-### 2.2 认证状态
+### 2.2 认证与服务边界
 
-基于当前代码，Gateway 层没有额外实现统一的鉴权中间件或 Token 校验逻辑。也就是说：
+业务后端的聊天与 Runtime 代理接口先验证当前身份，再查询该身份拥有的 `session_id`，并从 session 服务端状态推导 Runtime `thread_id`。客户端声明的任意 `thread_id` 不能作为授权依据。
 
-- 当前接口默认处于“未加鉴权”的开发态
-- 生产环境若需鉴权，应在网关层、反向代理层或 API Gateway 层补充
+Runtime Gateway 本身不承担最终用户鉴权，因此必须保持为内部服务，不能因为它有 FastAPI 路由就直接暴露到公网。除匿名 `GET /health` 外，Gateway 的所有 `/api` 路由都要求内部服务请求头：
+
+```http
+X-Gateway-Internal-Token: <GATEWAY_INTERNAL_API_TOKEN>
+```
+
+Gateway 在 token 缺失时拒绝启动，并使用恒定时间比较校验请求。Compose 从
+`docker/.env` 读取一个必填值并注入 Backend、Gateway 与 LangGraph；该 token
+不得由浏览器提交、写入 URL、响应或日志。直接在本机联调 Gateway 时，应在
+`backend/.env` 与 `runtimes/config/.env` 配置完全相同的随机值。
+
+游客模式使用服务端签发的不可伪造令牌：
+
+- `POST /api/auth/guest-session` 签发或复用游客会话令牌。
+- 后续聊天请求通过 `X-Guest-Token` 携带该令牌。
+- 不接受客户端自行生成的 `X-Guest-Id` 作为身份。
 
 ### 2.3 通用错误格式
 
@@ -69,9 +88,9 @@ Gateway 已启用 FastAPI 自带文档：
 - `500`：服务端内部异常
 - `503`：依赖服务未启动，例如渠道服务未运行
 
-## 3. Gateway API 总览
+## 3. Gateway 内部 API 总览
 
-Gateway 目前注册的接口模块包括：
+以下 Gateway 接口是 Runtime 内部协议，不经 Nginx 向浏览器暴露。Gateway 目前注册的接口模块包括：
 
 - `models`
 - `mcp`
@@ -153,7 +172,7 @@ Gateway 目前注册的接口模块包括：
 
 ## 6. MCP 接口
 
-MCP 接口用于管理 `config/extensions_config.json` 中的 Model Context Protocol 服务配置。
+MCP 接口用于管理 `runtimes/config/extensions/extensions_config.json` 中的 Model Context Protocol 服务配置。Gateway 负责写入该文件，LangGraph 在组装 MCP 工具时读取同一份配置。
 
 ### 6.1 获取 MCP 配置
 
@@ -198,11 +217,15 @@ MCP 接口用于管理 `config/extensions_config.json` 中的 Model Context Prot
 - `refresh_skew_seconds`
 - `extra_token_params`
 
+安全约定：`env`、`headers`、`oauth.client_secret`、
+`oauth.refresh_token` 与 `oauth.extra_token_params` 的值不会原样返回，
+存在值时统一显示为 `********`。服务名、字段名和非秘密元数据仍可读取。
+
 ### 6.2 更新 MCP 配置
 
 - 方法：`PUT`
 - 路径：`/api/mcp/config`
-- 说明：将新的 MCP 配置写回 `config/extensions_config.json`，然后重载配置缓存
+- 说明：将新的 MCP 配置写回 `runtimes/config/extensions/extensions_config.json`，然后重载配置缓存
 
 请求体示例：
 
@@ -229,6 +252,9 @@ MCP 接口用于管理 `config/extensions_config.json` 中的 Model Context Prot
 说明：
 
 - 写入时会保留现有 `skills` 配置，不会被 MCP 更新覆盖
+- 将 GET 返回的 `********` 原样放入 PUT 时表示保留该字段在配置文件中的原始值；
+  新增秘密建议使用 `$ENV_VAR` 引用
+- 更新过程读取未解析的 JSON 原文并原子替换文件，不会把环境变量解析后的秘密写回磁盘
 - Gateway 不会直接初始化 MCP 工具，LangGraph 进程会在后续按需重载
 
 失败场景：
@@ -237,13 +263,21 @@ MCP 接口用于管理 `config/extensions_config.json` 中的 Model Context Prot
 
 ## 7. Memory 接口
 
-Memory 接口用于读取和刷新全局记忆文件。
+Memory 接口用于读取和刷新一个明确的长期记忆分区。长期记忆不是全局文件：业务 Backend 会根据已认证用户派生 opaque `memory_scope`，Runtime 再在该 scope 内按可选 `agent_name` 分区。生产环境中的 Gateway `/api` 仅供携带独立内部 token 的服务访问，不应由浏览器直接调用。
+
+所有读取数据的 Memory 接口都不会从缺失或非法 scope 回退：
+
+- `memory_scope`：必填，恰好 64 个小写十六进制字符，由 Backend 签发
+- `agent_name`：可选，1 到 64 个字母、数字或连字符；用于 scope 内的 Agent 子分区
+- guest 没有 `memory_scope`，不读、不写、不注入持久记忆
+- 客户端在 run payload 中伪造的 scope 会被 Backend 删除或覆盖
 
 ### 7.1 获取当前记忆数据
 
 - 方法：`GET`
 - 路径：`/api/memory`
-- 说明：返回当前全局记忆数据
+- Query：`memory_scope`（必填）、`agent_name`（可选）
+- 说明：返回指定用户/Agent 分区的当前记忆数据
 
 响应结构：
 
@@ -296,12 +330,10 @@ Memory 接口用于读取和刷新全局记忆文件。
 
 - 方法：`POST`
 - 路径：`/api/memory/reload`
-- 说明：从记忆存储文件重新读取并刷新进程内缓存
+- Query：`memory_scope`（必填）、`agent_name`（可选）
+- 说明：从对应 scoped 存储文件重新读取并刷新进程内缓存
 
-适用场景：
-
-- 手工修改了记忆文件
-- 需要强制让 Gateway 读取最新内容
+该接口主要供受控运维或内部调试使用。正常原子写入会通过文件签名使缓存自动失效；外部工具若修改文件，必须先确认目标 scope 的真实所有者。
 
 响应结构与 `GET /api/memory` 相同。
 
@@ -325,7 +357,8 @@ Memory 接口用于读取和刷新全局记忆文件。
 
 - 方法：`GET`
 - 路径：`/api/memory/status`
-- 说明：一次返回“记忆配置 + 当前记忆数据”
+- Query：`memory_scope`（必填）、`agent_name`（可选）
+- 说明：一次返回“记忆配置 + 指定分区的当前数据”
 
 响应结构：
 
@@ -333,9 +366,9 @@ Memory 接口用于读取和刷新全局记忆文件。
 {
   "config": {
     "enabled": true,
-    "storage_path": "state/memory.json",
-    "debounce_seconds": 5,
-    "max_facts": 200,
+    "storage_path": "",
+    "debounce_seconds": 30,
+    "max_facts": 100,
     "fact_confidence_threshold": 0.7,
     "injection_enabled": true,
     "max_injection_tokens": 2000
@@ -349,6 +382,8 @@ Memory 接口用于读取和刷新全局记忆文件。
   }
 }
 ```
+
+默认存储目录是 `{LUMEN_HOME}/memories/{memory_scope}/`。若 `storage_path` 使用历史 JSON 文件名（例如 `memory.json`），实际 scoped 数据写到相邻的 `memory.json.scoped/` 目录。旧 `{LUMEN_HOME}/memory.json` 永不自动读取或迁移，避免跨用户数据泄漏。
 
 ## 8. Skills 接口
 
@@ -390,7 +425,7 @@ Skills 接口用于查看技能、启停技能，以及从 `.skill` 压缩包安
 
 - 方法：`PUT`
 - 路径：`/api/skills/{skill_name}`
-- 说明：通过修改 `config/extensions_config.json` 更新技能启用状态
+- 说明：通过修改 `runtimes/config/extensions/extensions_config.json` 更新技能启用状态
 
 请求体：
 
@@ -594,7 +629,7 @@ curl -X POST \
 
 ## 11. Agents 接口
 
-Agents 接口用于管理自定义 Agent 及全局 `USER.md`。
+Agents 接口用于管理 Runtime 的全局自定义 Agent 定义，以及 legacy/operator `USER.md`。这些是内部控制面状态，不是按 Backend 用户隔离的公网资源。
 
 ### 11.1 命名规则
 
@@ -735,7 +770,7 @@ Agents 接口用于管理自定义 Agent 及全局 `USER.md`。
 
 - 方法：`DELETE`
 - 路径：`/api/agents/{name}`
-- 说明：删除整个 Agent 目录，包括配置与相关文件
+- 说明：删除整个 Agent 定义目录，包括 `config.yaml`、`SOUL.md` 与目录内相关文件；不会遍历或删除各用户 scope 下的同名 Agent 记忆
 
 成功状态码：
 
@@ -746,11 +781,11 @@ Agents 接口用于管理自定义 Agent 及全局 `USER.md`。
 - `404`：Agent 不存在
 - `422`：名称非法
 
-### 11.8 获取全局用户画像
+### 11.8 获取 legacy/operator USER.md
 
 - 方法：`GET`
 - 路径：`/api/user-profile`
-- 说明：读取全局 `USER.md` 文件
+- 说明：读取全局 `USER.md` 文件。当前提示词运行路径不会注入它，它也不是 Backend 认证用户的长期画像
 
 响应示例：
 
@@ -768,11 +803,11 @@ Agents 接口用于管理自定义 Agent 及全局 `USER.md`。
 }
 ```
 
-### 11.9 更新全局用户画像
+### 11.9 更新 legacy/operator USER.md
 
 - 方法：`PUT`
 - 路径：`/api/user-profile`
-- 说明：写入全局 `USER.md`
+- 说明：写入全局 `USER.md`。该接口仅用于兼容/运维状态，不会影响当前 scoped memory 注入
 
 请求体：
 
@@ -805,7 +840,7 @@ Suggestions 接口用于根据最近对话生成用户可能继续追问的问�
     },
     {
       "role": "assistant",
-      "content": "Gateway 负责业务接口层，LangGraph 负责运行时执行层。"
+      "content": "业务后端负责授权与代理，Gateway 负责 Runtime 资源，LangGraph 负责运行时执行。"
     }
   ],
   "n": 3,
@@ -824,9 +859,9 @@ Suggestions 接口用于根据最近对话生成用户可能继续追问的问�
 ```json
 {
   "suggestions": [
-    "那前端请求分别走哪一边？",
-    "它们之间是怎么通信的？",
-    "为什么文件上传放在 Gateway？"
+    "业务后端如何代理 Runtime 请求？",
+    "为什么原始 thread 路由只能内部访问？",
+    "文件上传如何绑定业务 session？"
   ]
 }
 ```
@@ -897,14 +932,15 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 
 ## 14. LangGraph 运行时 API
 
-这一部分不是 Gateway 自定义接口，而是由 `langgraph dev` 启动的 LangGraph Server 提供。
+这一部分不是 Gateway 自定义接口，而是由 `langgraph dev` 启动的 LangGraph Server 提供。它们是 Runtime 内部接口，浏览器不能经 Nginx 访问。
 
-基于当前项目代码与前端调用，项目实际依赖的 LangGraph HTTP API 主要包括以下几组。
+业务后端验证当前身份拥有 `session_id` 后，从 session 推导 `thread_id`，再调用其中的 thread/run 子集。其他 Runtime 内部客户端也会使用这些协议。
 
 需要注意：
 
-- 这里记录的是“当前项目实际使用的接口子集”
+- 这里记录的是“当前项目内部使用的接口子集”
 - 不是 LangGraph 官方全部通用接口的完整手册
+- 不应指导前端绕过 `/api/chat-runtime/sessions/...` 代理
 
 ## 15. 线程管理接口
 
@@ -914,11 +950,12 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 - 路径：`/threads`
 - 说明：创建一个新线程
 
-前端请求体示例：
+业务后端准备 Runtime thread 时的内部请求体示例：
 
 ```json
 {
-  "metadata": {}
+  "thread_id": "thread-123",
+  "if_exists": "do_nothing"
 }
 ```
 
@@ -937,7 +974,7 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 - 路径：`/threads/search`
 - 说明：按更新时间等条件搜索线程列表
 
-前端请求体示例：
+内部请求体示例：
 
 ```json
 {
@@ -1000,7 +1037,7 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 - 路径：`/threads/{thread_id}`
 - 说明：删除指定线程
 
-成功时通常返回空响应或标准删除结果，前端当前只检查 HTTP 状态码。
+成功时通常返回空响应或标准删除结果。公网客户端不直接使用该路由。
 
 ## 16. 运行与流式接口
 
@@ -1011,12 +1048,14 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 - 请求头：`Accept: text/event-stream`
 - 说明：以 SSE 形式启动一次 Agent 运行并持续返回事件流
 
-当前前端发起运行时的请求体示例：
+业务后端完成 session 所有权、模型选择与配额保留后，发给 LangGraph 的内部请求体示例：
 
 ```json
 {
   "assistant_id": "lead_agent",
-  "on_disconnect": "cancel",
+  "on_disconnect": "continue",
+  "multitask_strategy": "reject",
+  "stream_mode": ["messages-tuple", "values", "custom"],
   "context": {
     "thread_id": "thread-123",
     "model_name": "gpt-5",
@@ -1040,7 +1079,8 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 字段说明：
 
 - `assistant_id`：当前项目默认使用 `lead_agent`
-- `on_disconnect`：前端断开连接时的处理策略，当前使用 `cancel`
+- `on_disconnect`：业务后端与 Runtime 的连接断开策略，默认为 `continue`，便于客户端断线后 join
+- `multitask_strategy`：同一 thread 已有活动 run 时使用 `reject`，避免无意排队
 - `context`：运行时上下文，例如线程 ID、模型名、thinking 开关、plan 模式开关
 - `config`：图运行配置，当前常用 `recursion_limit`
 - `input.messages`：本次输入消息
@@ -1049,7 +1089,7 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 
 - SSE 事件流
 
-前端会持续解析事件名和数据块，并据此更新：
+业务后端不缓冲地代理 SSE，前端持续解析事件名和数据块，并据此更新：
 
 - 流式文本内容
 - 工具调用状态
@@ -1068,36 +1108,51 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 
 - `POST /threads/thread-123/runs/run-456/cancel?action=interrupt&wait=0`
 
-前端当前只检查状态码，不依赖特定响应体字段。
+公网前端使用 session-scoped cancel 代理，由业务后端验证 run 所属 thread 后调用此内部路由。
 
-## 17. 前端当前实际使用的接口集合
+## 17. 前端可访问的 Runtime 业务代理
 
-如果只从“当前前端会调用哪些接口”这个角度来看，可以简化为以下列表：
+前端不直接调用 Gateway 或 LangGraph，而是调用以下业务后端路由：
 
-### 17.1 Gateway
+### 17.1 身份
 
-- `GET /api/models`
-- `GET /api/threads/{thread_id}/uploads/list`
-- `POST /api/threads/{thread_id}/uploads`
-- `DELETE /api/threads/{thread_id}/uploads/{filename}`
-- `POST /api/threads/{thread_id}/suggestions`
-- `GET /api/threads/{thread_id}/artifacts/{path:path}`
+- 已登录用户使用 `Authorization: Bearer <access-token>`
+- 游客通过 `POST /api/auth/guest-session` 获得令牌，后续使用 `X-Guest-Token`
+- 客户端自行生成的 `X-Guest-Id` 不被接受
 
-### 17.2 LangGraph
+### 17.2 线程准备与上传
 
-- `POST /threads`
-- `POST /threads/search`
-- `GET /threads/{thread_id}/state`
-- `DELETE /threads/{thread_id}`
-- `POST /threads/{thread_id}/runs/stream`
-- `POST /threads/{thread_id}/runs/{run_id}/cancel?action=interrupt&wait=0`
+- `POST /api/chat-runtime/sessions/{session_id}/thread/prepare`
+- `POST /api/chat-runtime/sessions/{session_id}/thread/uploads`
+- `DELETE /api/chat-runtime/sessions/{session_id}/thread/uploads/{filename}`
+
+知识文档由 `thread/prepare` 物化到 Runtime 的保留命名空间，普通上传和删除接口都拒绝 `kb__` 文件名。prepare 只有在当前 KB 权限、稳定 Markdown revision、对象读取和完整性复核全部成功后才提交带 SHA-256 与大小的内部 manifest；这条文件链路不要求分块、embedding 或 Elasticsearch 索引完成，部分失败也不会静默缩小知识范围。
+
+### 17.3 Run 生命周期
+
+- `POST /api/chat-runtime/sessions/{session_id}/runs/stream`
+- `GET /api/chat-runtime/sessions/{session_id}/runs?status=running|pending`
+- `GET /api/chat-runtime/sessions/{session_id}/runs/{run_id}/stream`
+- `POST /api/chat-runtime/sessions/{session_id}/runs/{run_id}/cancel`
+
+启动、查询、断线 join 和 cancel 每次都根据当前身份重新验证 session 所有权。
+
+启动 Run 还会在额度预留之前重新校验当前知识 scope、文档 revision、manifest 与 Runtime 实际文件哈希。客户端提交的 `kb_id/doc_ids` 会被服务端验证结果覆盖；缺少或过期的 prepare 返回冲突，权限撤销返回禁止访问，内部存储或校验服务不可用时返回服务不可用。
+
+### 17.4 产物下载
+
+- `GET /api/chat/sessions/{session_id}/artifacts/download?object_path=...`
+
+业务后端同时校验 session 所有权和产物路径是否属于该会话，然后才向内部 Gateway 获取文件流。
 
 ## 18. 接口分层建议
 
-如果后续你们还要继续扩展接口，建议维持当前分层原则：
+如果后续继续扩展接口，应维持当前分层原则：
 
-- 与 Agent 执行过程、线程状态、runs、SSE 相关的接口，优先放在 LangGraph 一侧
-- 与项目业务管理、配置管理、资源读写、文件访问相关的接口，优先放在 Gateway 一侧
+- LangGraph 拥有 Agent 执行、thread/run 状态与原始 SSE 协议
+- Gateway 拥有 Runtime 配置、线程文件和资源读写
+- 业务后端拥有身份、租户、session 所有权与公网代理合同
+- 浏览器不能越过业务后端直接使用 Runtime `thread_id`
 
 这样做的好处是：
 
@@ -1109,25 +1164,24 @@ Channels 接口用于管理外部 IM 渠道集成，目前代码中支持：
 
 本文主要对应以下源码位置：
 
-- Gateway 应用入口：`backend/src/gateway/app.py`
-- Gateway 启动入口：`backend/src/gateway/run.py`
-- Models 路由：`backend/src/gateway/routers/models.py`
-- MCP 路由：`backend/src/gateway/routers/mcp.py`
-- Memory 路由：`backend/src/gateway/routers/memory.py`
-- Skills 路由：`backend/src/gateway/routers/skills.py`
-- Artifacts 路由：`backend/src/gateway/routers/artifacts.py`
-- Uploads 路由：`backend/src/gateway/routers/uploads.py`
-- Agents 路由：`backend/src/gateway/routers/agents.py`
-- Suggestions 路由：`backend/src/gateway/routers/suggestions.py`
-- Channels 路由：`backend/src/gateway/routers/channels.py`
-- LangGraph 配置入口：`backend/langgraph.json`
+- Gateway 应用入口：`runtimes/backend/src/gateway/app.py`
+- Gateway 启动入口：`runtimes/backend/src/gateway/run.py`
+- Models 路由：`runtimes/backend/src/gateway/routers/models.py`
+- MCP 路由：`runtimes/backend/src/gateway/routers/mcp.py`
+- Memory 路由：`runtimes/backend/src/gateway/routers/memory.py`
+- Skills 路由：`runtimes/backend/src/gateway/routers/skills.py`
+- Artifacts 路由：`runtimes/backend/src/gateway/routers/artifacts.py`
+- Uploads 路由：`runtimes/backend/src/gateway/routers/uploads.py`
+- Agents 路由：`runtimes/backend/src/gateway/routers/agents.py`
+- Suggestions 路由：`runtimes/backend/src/gateway/routers/suggestions.py`
+- Channels 路由：`runtimes/backend/src/gateway/routers/channels.py`
+- LangGraph 配置入口：`runtimes/backend/langgraph.json`
+- 业务后端 Runtime thread 代理：`backend/modules/chat/runtime_controller.py`
+- 业务后端 Runtime run 代理：`backend/modules/chat/runtime_run_controller.py`
+- 业务后端游客令牌签发：`backend/modules/auth/controller.py`
+- Nginx 公网路由边界：`docker/nginx/lumen.conf.template`
 - 前端 API 封装：`frontend/src/shared/api/client.ts`
 
 ## 20. 一句话总结
 
-lumen 的后端 HTTP API 不是一套接口，而是两套接口协作：
-
-- `Gateway` 负责项目自定义的业务与资源接口
-- `LangGraph` 负责线程、运行和流式执行接口
-
-理解这条边界，是读懂这个项目后端 API 设计的关键。
+lumen 的公网 HTTP 合同由业务后端提供；Gateway 和 LangGraph 提供的原始路由是 Runtime 内部协议。业务后端在代理任何 thread、run、上传或产物操作前，都必须以当前身份验证 session 所有权。

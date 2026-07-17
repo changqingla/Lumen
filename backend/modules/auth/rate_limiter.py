@@ -92,7 +92,20 @@ async def enforce_auth_rate_limit(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.warning("Auth rate limiting failed open for %s: %s", policy.scope, exc)
+        logger.error(
+            "Auth rate limiting unavailable for %s (error_type=%s)",
+            policy.scope,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": {
+                    "code": "RATE_LIMIT_UNAVAILABLE",
+                    "message": "认证服务暂时不可用，请稍后重试",
+                }
+            },
+        ) from exc
 
 
 async def _increment_and_enforce(
@@ -134,4 +147,9 @@ RESET_PASSWORD_RATE_LIMIT = AuthRateLimit(
     max_attempts=settings.AUTH_RATE_LIMIT_RESET_PASSWORD_MAX,
     window_seconds=settings.AUTH_RATE_LIMIT_WINDOW_SECONDS,
     ip_max_attempts=settings.AUTH_RATE_LIMIT_RESET_PASSWORD_IP_MAX,
+)
+GUEST_SESSION_RATE_LIMIT = AuthRateLimit(
+    scope="guest-session",
+    max_attempts=settings.AUTH_RATE_LIMIT_GUEST_SESSION_MAX,
+    window_seconds=settings.AUTH_RATE_LIMIT_GUEST_SESSION_WINDOW_SECONDS,
 )

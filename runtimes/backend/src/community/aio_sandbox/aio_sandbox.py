@@ -51,9 +51,12 @@ class AioSandbox(Sandbox):
             result = self._client.shell.exec_command(command=command)
             output = result.data.output if result.data else ""
             return output if output else "(no output)"
-        except Exception as e:
-            logger.error(f"Failed to execute command in sandbox: {e}")
-            return f"Error: {e}"
+        except Exception as exc:
+            logger.error(
+                "Failed to execute command in sandbox (%s)",
+                type(exc).__name__,
+            )
+            return "Error: sandbox command failed"
 
     def read_file(self, path: str) -> str:
         """
@@ -66,9 +69,12 @@ class AioSandbox(Sandbox):
         try:
             result = self._client.file.read_file(file=path)
             return result.data.content if result.data else ""
-        except Exception as e:
-            logger.error(f"Failed to read file in sandbox: {e}")
-            return f"Error: {e}"
+        except Exception as exc:
+            logger.error(
+                "Failed to read file in sandbox (%s)",
+                type(exc).__name__,
+            )
+            return "Error: sandbox file read failed"
 
     def list_dir(self, path: str, max_depth: int = 2) -> list[str]:
         """
@@ -79,16 +85,27 @@ class AioSandbox(Sandbox):
         返回：
             目录内容列表。
         """
+        normalized_path = str(path or "")
+        if not normalized_path or "\x00" in normalized_path:
+            raise ValueError("Directory path must be a non-empty string without NUL bytes")
+        if isinstance(max_depth, bool) or not isinstance(max_depth, int) or not 0 <= max_depth <= 10:
+            raise ValueError("max_depth must be an integer between 0 and 10")
+
         try:
             # 通过 shell 命令按深度限制列目录
             # `find` 的 `-maxdepth` 参数用于限制遍历层级
-            result = self._client.shell.exec_command(command=f"find {path} -maxdepth {max_depth} -type f -o -type d 2>/dev/null | head -500")
+            quoted_path = shlex.quote(normalized_path)
+            command = f"find {quoted_path} -maxdepth {max_depth} \\( -type f -o -type d \\) 2>/dev/null | head -500"
+            result = self._client.shell.exec_command(command=command)
             output = result.data.output if result.data else ""
             if output:
                 return [line.strip() for line in output.strip().split("\n") if line.strip()]
             return []
-        except Exception as e:
-            logger.error(f"Failed to list directory in sandbox: {e}")
+        except Exception as exc:
+            logger.error(
+                "Failed to list directory in sandbox (%s)",
+                type(exc).__name__,
+            )
             return []
 
     def write_file(self, path: str, content: str, append: bool = False) -> None:
@@ -106,9 +123,12 @@ class AioSandbox(Sandbox):
                 if not existing.startswith("Error:"):
                     content = existing + content
             self._client.file.write_file(file=path, content=content)
-        except Exception as e:
-            logger.error(f"Failed to write file in sandbox: {e}")
-            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to write file in sandbox (%s)",
+                type(exc).__name__,
+            )
+            raise RuntimeError("Sandbox file write failed") from exc
 
     def update_file(self, path: str, content: bytes) -> None:
         """
@@ -120,9 +140,12 @@ class AioSandbox(Sandbox):
         try:
             base64_content = base64.b64encode(content).decode("utf-8")
             self._client.file.write_file(file=path, content=base64_content, encoding="base64")
-        except Exception as e:
-            logger.error(f"Failed to update file in sandbox: {e}")
-            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to update file in sandbox (%s)",
+                type(exc).__name__,
+            )
+            raise RuntimeError("Sandbox file update failed") from exc
 
     def delete_file(self, path: str) -> None:
         """
@@ -133,6 +156,9 @@ class AioSandbox(Sandbox):
         try:
             # 使用 rm -f 语义：删除不存在文件也视为成功（无操作）
             self._client.shell.exec_command(command=f"rm -f -- {shlex.quote(path)}")
-        except Exception as e:
-            logger.error(f"Failed to delete file in sandbox: {e}")
-            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to delete file in sandbox (%s)",
+                type(exc).__name__,
+            )
+            raise RuntimeError("Sandbox file deletion failed") from exc

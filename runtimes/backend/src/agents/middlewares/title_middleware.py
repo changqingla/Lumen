@@ -1,13 +1,18 @@
 """自动生成线程标题的中间件。"""
 
+import logging
 from typing import NotRequired, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import HumanMessage
 from langgraph.runtime import Runtime
 
 from src.config.title_config import get_title_config
 from src.models import create_chat_model
+from src.usage import report_model_response_async
+
+logger = logging.getLogger(__name__)
 
 
 class TitleMiddlewareState(AgentState):
@@ -43,7 +48,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         # 在首轮完整往返后生成标题
         return len(user_messages) == 1 and len(assistant_messages) >= 1
 
-    async def _generate_title(self, state: TitleMiddlewareState) -> str:
+    async def _generate_title(self, state: TitleMiddlewareState, runtime_context=None) -> str:
         """根据对话内容生成简洁标题。"""
         config = get_title_config()
         messages = state.get("messages", [])
@@ -67,25 +72,30 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
 
         try:
             response = await model.ainvoke(prompt)
-            # 确保响应内容为字符串
-            title_content = str(response.content) if response.content else ""
-            title = title_content.strip().strip('"').strip("'")
-            # 限制最大字符长度
-            return title[: config.max_chars] if len(title) > config.max_chars else title
-        except Exception as e:
-            print(f"Failed to generate title: {e}")
+        except Exception:
+            logger.warning("Failed to generate thread title; using local fallback")
             # 回退方案：截取用户消息前缀（按字符数）
             fallback_chars = min(config.max_chars, 50)  # 取 max_chars 与 50 的较小值
             if len(user_msg) > fallback_chars:
                 return user_msg[:fallback_chars].rstrip() + "..."
             return user_msg if user_msg else "New Conversation"
 
+        await report_model_response_async(
+            context=runtime_context,
+            response=response,
+            model=model,
+            request_type="title",
+            request_messages=[HumanMessage(content=prompt)],
+        )
+        title_content = str(response.content) if response.content else ""
+        title = title_content.strip().strip('"').strip("'")
+        return title[: config.max_chars] if len(title) > config.max_chars else title
+
     @override
     async def aafter_model(self, state: TitleMiddlewareState, runtime: Runtime) -> dict | None:
         """在首轮 agent 响应后生成并写入线程标题。"""
         if self._should_generate_title(state):
-            title = await self._generate_title(state)
-            print(f"Generated thread title: {title}")
+            title = await self._generate_title(state, runtime.context)
 
             # 将标题写入状态（若配置了 checkpointer 将被持久化）
             return {"title": title}

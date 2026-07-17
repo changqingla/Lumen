@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -103,12 +104,12 @@ async def generate_suggestions(thread_id: str, request: SuggestionsRequest) -> S
 
     try:
         model = create_chat_model(name=request.model_name, thinking_enabled=False)
-        response = model.invoke(prompt)
+        response = await asyncio.to_thread(model.invoke, prompt)
         raw = str(response.content or "")
         suggestions = _parse_json_string_list(raw) or []
         cleaned = [s.replace("\n", " ").strip() for s in suggestions if s.strip()]
         cleaned = cleaned[:n]
         return SuggestionsResponse(suggestions=cleaned)
     except Exception as exc:
-        logger.exception("Failed to generate suggestions: thread_id=%s err=%s", thread_id, exc)
+        logger.error("Failed to generate suggestions (%s)", type(exc).__name__)
         return SuggestionsResponse(suggestions=[])

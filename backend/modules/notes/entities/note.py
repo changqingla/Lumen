@@ -45,8 +45,8 @@ class Note(Base):
             "title": self.title,
             "content": self.content,
             "folder": self.folder.name if self.folder else "未分类",
+            "folderId": str(self.folder_id) if self.folder_id else None,
             "tags": self.tags or [],
             "updatedAt": self.updated_at.isoformat(),
             "createdAt": self.created_at.isoformat(),
         }
-

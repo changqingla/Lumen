@@ -10,6 +10,24 @@ import httpx
 
 from src.config import get_app_config
 
+_MODEL_RESOLVER_TOKEN_ENV = "MODEL_RESOLVER_INTERNAL_TOKEN"
+
+
+def _model_resolver_internal_token() -> str:
+    token = str(os.getenv(_MODEL_RESOLVER_TOKEN_ENV, ""))
+    if (
+        not token
+        or token != token.strip()
+        or not token.isascii()
+        or not token.isprintable()
+        or len(token) < 32
+        or token.lower().startswith(
+            ("change-me", "replace-with-", "example", "template", "your-")
+        )
+    ):
+        raise ValueError(f"{_MODEL_RESOLVER_TOKEN_ENV} is not configured correctly")
+    return token
+
 
 @dataclass(frozen=True)
 class ResolvedChatModelSpec:
@@ -25,47 +43,8 @@ class ResolvedChatModelSpec:
     supports_reasoning_effort: bool
     when_thinking_enabled: dict[str, Any] | None = None
     thinking: dict[str, Any] | None = None
+    enforce_outbound_endpoint_policy: bool = False
 
-
-def dump_resolved_chat_model_spec(spec: ResolvedChatModelSpec) -> dict[str, Any]:
-    return {
-        "name": spec.name,
-        "display_name": spec.display_name,
-        "description": spec.description,
-        "use": spec.use,
-        "config": dict(spec.config),
-        "supports_vision": spec.supports_vision,
-        "supports_thinking": spec.supports_thinking,
-        "supports_reasoning_effort": spec.supports_reasoning_effort,
-        "when_thinking_enabled": dict(spec.when_thinking_enabled) if spec.when_thinking_enabled else None,
-        "thinking": dict(spec.thinking) if spec.thinking else None,
-    }
-
-
-def load_resolved_chat_model_spec(payload: Any) -> ResolvedChatModelSpec | None:
-    if not isinstance(payload, dict):
-        return None
-
-    name = str(payload.get("name") or "").strip()
-    use = str(payload.get("use") or "").strip()
-    if not name or not use:
-        return None
-
-    config = payload.get("config")
-    when_thinking_enabled = payload.get("when_thinking_enabled")
-    thinking = payload.get("thinking")
-    return ResolvedChatModelSpec(
-        name=name,
-        display_name=str(payload.get("display_name") or "").strip() or None,
-        description=str(payload.get("description") or "").strip() or None,
-        use=use,
-        config=dict(config) if isinstance(config, dict) else {},
-        supports_vision=bool(payload.get("supports_vision", False)),
-        supports_thinking=bool(payload.get("supports_thinking", False)),
-        supports_reasoning_effort=bool(payload.get("supports_reasoning_effort", False)),
-        when_thinking_enabled=dict(when_thinking_enabled) if isinstance(when_thinking_enabled, dict) else None,
-        thinking=dict(thinking) if isinstance(thinking, dict) else None,
-    )
 
 def _build_static_spec(name: str | None = None) -> ResolvedChatModelSpec:
     app_config = get_app_config()
@@ -118,16 +97,18 @@ def _resolve_dynamic_model_spec(
         raise ValueError("thread_id is required for dynamic model resolution")
 
     base_url = os.getenv("LUMEN_API_INTERNAL_URL", "http://lumen_api:13000").rstrip("/")
-    internal_token = str(os.getenv("RAG_INTERNAL_API_TOKEN", "")).strip()
-    if not internal_token:
-        raise ValueError("RAG_INTERNAL_API_TOKEN is not configured for dynamic model resolution")
+    internal_token = _model_resolver_internal_token()
 
-    response = httpx.post(
-        f"{base_url}/api/internal/runtime-model-bindings/resolve",
-        json={"token": normalized_token, "thread_id": normalized_thread_id},
-        headers={"X-Internal-Token": internal_token},
+    with httpx.Client(
         timeout=30.0,
-    )
+        trust_env=False,
+        follow_redirects=False,
+    ) as client:
+        response = client.post(
+            f"{base_url}/api/internal/runtime-model-bindings/resolve",
+            json={"token": normalized_token, "thread_id": normalized_thread_id},
+            headers={"X-Internal-Token": internal_token},
+        )
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict):
@@ -144,6 +125,7 @@ def _resolve_dynamic_model_spec(
         supports_reasoning_effort=bool(payload.get("supports_reasoning_effort", False)),
         when_thinking_enabled=None,
         thinking=None,
+        enforce_outbound_endpoint_policy=True,
     )
     if not spec.name or not spec.use:
         raise ValueError("Dynamic model resolution payload is missing required fields")

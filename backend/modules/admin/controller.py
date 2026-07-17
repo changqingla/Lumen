@@ -190,28 +190,28 @@ async def get_statistics(
     result = await db.execute(
         select(func.count(UserModel.id))
         .where(UserModel.user_level == 'basic')
-        .where(UserModel.is_admin == False)
+        .where(UserModel.is_admin.is_(False))
     )
     explorers = result.scalar() or 0
     
     result = await db.execute(
         select(func.count(UserModel.id))
         .where(UserModel.user_level == 'member')
-        .where(UserModel.is_admin == False)
+        .where(UserModel.is_admin.is_(False))
     )
     members = result.scalar() or 0
     
     result = await db.execute(
         select(func.count(UserModel.id))
         .where(UserModel.user_level == 'premium')
-        .where(UserModel.is_admin == False)
+        .where(UserModel.is_admin.is_(False))
     )
     advanced_members = result.scalar() or 0
     
     # 管理员数量
     result = await db.execute(
         select(func.count(UserModel.id))
-        .where(UserModel.is_admin == True)
+        .where(UserModel.is_admin.is_(True))
     )
     admins = result.scalar() or 0
     
@@ -221,7 +221,7 @@ async def get_statistics(
         select(func.count(OrganizationMember.id))
         .select_from(Organization)
         .outerjoin(OrganizationMember, OrganizationMember.org_id == Organization.id)
-        .where(Organization.is_deleted == False)
+        .where(Organization.is_deleted.is_(False))
     )
     total_org_members = result.scalar() or 0
     average_members = round(total_org_members / total_orgs, 1) if total_orgs else 0
@@ -272,8 +272,8 @@ async def list_users(
     """List all users (Admin only)."""
     _ensure_admin(current_user, "仅管理员可以查看用户列表")
     
-    from datetime import datetime, timedelta, timezone
     from sqlalchemy import select, func
+    from config.quota_config import get_billing_window, get_user_model_quota_limit
     from models.user import User as UserModel
     from modules.chat.entities.chat_session import ChatSession, ChatMessage
     from models.token_usage import TokenUsageRecord
@@ -293,13 +293,13 @@ async def list_users(
         .subquery()
     )
 
-    token_window_start = datetime.now(timezone.utc) - timedelta(days=7)
-    weekly_token_subquery = (
+    billing_window = get_billing_window()
+    billing_token_subquery = (
         select(
             TokenUsageRecord.user_id.label("user_id"),
-            func.sum(TokenUsageRecord.total_tokens).label("weekly_token_total"),
+            func.sum(TokenUsageRecord.total_tokens).label("billing_cycle_token_total"),
         )
-        .where(TokenUsageRecord.created_at >= token_window_start)
+        .where(TokenUsageRecord.billing_window_start == billing_window.start)
         .group_by(TokenUsageRecord.user_id)
         .subquery()
     )
@@ -310,10 +310,10 @@ async def list_users(
         select(
             UserModel,
             last_active_subquery.c.last_active_at,
-            func.coalesce(weekly_token_subquery.c.weekly_token_total, 0).label("weekly_token_total"),
+            func.coalesce(billing_token_subquery.c.billing_cycle_token_total, 0).label("billing_cycle_token_total"),
         )
         .outerjoin(last_active_subquery, last_active_subquery.c.user_id == UserModel.id)
-        .outerjoin(weekly_token_subquery, weekly_token_subquery.c.user_id == UserModel.id)
+        .outerjoin(billing_token_subquery, billing_token_subquery.c.user_id == UserModel.id)
         .order_by(UserModel.created_at.desc())
         .offset(offset)
         .limit(page_size)
@@ -322,7 +322,8 @@ async def list_users(
     
     # Format user data
     items = []
-    for user, last_active_at, weekly_token_total in user_rows:
+    for user, last_active_at, billing_cycle_token_total in user_rows:
+        token_total = int(billing_cycle_token_total or 0)
         items.append({
             "id": str(user.id),
             "name": user.name,
@@ -332,7 +333,9 @@ async def list_users(
             "is_admin": user.is_admin,
             "created_at": user.created_at.isoformat() if user.created_at else None,
             "last_active_at": last_active_at.isoformat() if last_active_at else None,
-            "weekly_token_total": int(weekly_token_total or 0),
+            "billing_cycle_token_total": token_total,
+            "model_quota_limit": get_user_model_quota_limit(user),
+            "quota_reset_date": billing_window.end.isoformat(),
         })
     
     return {

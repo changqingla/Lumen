@@ -62,12 +62,6 @@ def get_summarization_config() -> SummarizationConfig:
     return _summarization_config
 
 
-def set_summarization_config(config: SummarizationConfig) -> None:
-    """设置摘要配置。"""
-    global _summarization_config
-    _summarization_config = config
-
-
 def load_summarization_config_from_dict(config_dict: dict) -> None:
     """从字典加载摘要配置。"""
     global _summarization_config

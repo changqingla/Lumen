@@ -1,3 +1,4 @@
+import logging
 from typing import NotRequired, override
 
 from langchain.agents import AgentState
@@ -6,6 +7,8 @@ from langgraph.runtime import Runtime
 
 from src.agents.thread_state import ThreadDataState
 from src.config.paths import Paths, get_paths
+
+logger = logging.getLogger(__name__)
 
 
 class ThreadDataMiddlewareState(AgentState):
@@ -20,6 +23,7 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
     目录结构如下：
     - `{base_dir}/threads/{thread_id}/user-data/workspace`
     - `{base_dir}/threads/{thread_id}/user-data/uploads`
+    - `{base_dir}/threads/{thread_id}/user-data/knowledge`
     - `{base_dir}/threads/{thread_id}/user-data/outputs`
 
     生命周期策略：
@@ -53,6 +57,7 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
         return {
             "workspace_path": str(self._paths.sandbox_work_dir(thread_id)),
             "uploads_path": str(self._paths.sandbox_uploads_dir(thread_id)),
+            "knowledge_path": str(self._paths.sandbox_knowledge_dir(thread_id)),
             "outputs_path": str(self._paths.sandbox_outputs_dir(thread_id)),
         }
 
@@ -80,7 +85,7 @@ class ThreadDataMiddleware(AgentMiddleware[ThreadDataMiddlewareState]):
         else:
             # 立即初始化：直接创建目录
             paths = self._create_thread_directories(thread_id)
-            print(f"Created thread data directories for thread {thread_id}")
+            logger.debug("Initialized Runtime thread data directories")
 
         return {
             "thread_data": {

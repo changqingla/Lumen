@@ -75,6 +75,37 @@ _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent
 _execution_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-exec-")
 
 
+def _publish_background_result(
+    task_id: str,
+    result: SubagentResult,
+) -> bool:
+    """Publish a terminal snapshot unless the polling owner already removed it."""
+
+    with _background_tasks_lock:
+        current = _background_tasks.get(task_id)
+        if current is None:
+            return False
+        current.status = result.status
+        current.result = result.result
+        current.error = result.error
+        current.completed_at = result.completed_at or datetime.now()
+        current.ai_messages = result.ai_messages
+        return True
+
+
+def _publish_background_failure(task_id: str, error: str) -> bool:
+    """Mark a scheduler failure without resurrecting a cleaned-up task."""
+
+    with _background_tasks_lock:
+        current = _background_tasks.get(task_id)
+        if current is None:
+            return False
+        current.status = SubagentStatus.FAILED
+        current.error = error
+        current.completed_at = datetime.now()
+        return True
+
+
 def _filter_tools(
     all_tools: list[BaseTool],
     allowed: list[str] | None,
@@ -136,11 +167,11 @@ class SubagentExecutor:
         tools: list[BaseTool],
         parent_model: str | None = None,
         parent_dynamic_model_token: str | None = None,
-        parent_model_spec: dict[str, Any] | None = None,
         sandbox_state: SandboxState | None = None,
         thread_data: ThreadDataState | None = None,
         thread_id: str | None = None,
         trace_id: str | None = None,
+        usage_context: str | None = None,
     ):
         """初始化执行器。
 
@@ -149,7 +180,6 @@ class SubagentExecutor:
             tools: 全部可用工具（内部会再过滤）。
             parent_model: 父代理模型名（用于继承）。
             parent_dynamic_model_token: 父代理动态模型绑定令牌（用于继承自定义模型）。
-            parent_model_spec: 父代理已解析模型规格（用于继承时避免重复解析）。
             sandbox_state: 父代理沙箱状态。
             thread_data: 父代理线程数据。
             thread_id: 供沙箱操作使用的线程 ID。
@@ -158,10 +188,10 @@ class SubagentExecutor:
         self.config = config
         self.parent_model = parent_model
         self.parent_dynamic_model_token = parent_dynamic_model_token
-        self.parent_model_spec = parent_model_spec if isinstance(parent_model_spec, dict) else None
         self.sandbox_state = sandbox_state
         self.thread_data = thread_data
         self.thread_id = thread_id
+        self.usage_context = usage_context
         # 若未提供 trace_id，则自动生成（用于顶层调用）
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
 
@@ -183,18 +213,19 @@ class SubagentExecutor:
             thinking_enabled=False,
             dynamic_model_token=dynamic_model_token,
             thread_id=self.thread_id,
-            resolved_spec_payload=self.parent_model_spec if self.config.model == "inherit" else None,
         )
 
         # 子代理只需最小中间件集合，确保工具可访问 sandbox 与 thread_data
         # 这些中间件会复用父代理的 sandbox/thread_data
-        from src.config.app_config import get_app_config
         from src.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
         from src.agents.middlewares.tool_call_loop_guard_middleware import ToolCallLoopGuardMiddleware
+        from src.agents.middlewares.usage_accounting_middleware import UsageAccountingMiddleware
+        from src.config.app_config import get_app_config
         from src.sandbox.middleware import SandboxMiddleware
 
         app_config = get_app_config()
         middlewares = [
+            UsageAccountingMiddleware(request_type="subagent"),
             ThreadDataMiddleware(lazy_init=True),  # 计算线程路径
             SandboxMiddleware(lazy_init=True),  # 复用父级沙箱（不重复获取）
             ToolCallLoopGuardMiddleware(max_identical_calls=app_config.agent_loop.max_identical_tool_calls),
@@ -228,6 +259,15 @@ class SubagentExecutor:
             state["thread_data"] = self.thread_data
 
         return state
+
+    def _retain_usage_reservation(self) -> None:
+        """Prevent finalization after an uncertain or still-running model call."""
+
+        if not self.usage_context:
+            return
+        from src.usage import retain_run_reservation
+
+        retain_run_reservation({"usage_context": self.usage_context})
 
     async def _aexecute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
         """异步执行任务。
@@ -264,6 +304,8 @@ class SubagentExecutor:
             if self.thread_id:
                 run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
+            if self.usage_context:
+                context["usage_context"] = self.usage_context
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
 
@@ -339,10 +381,16 @@ class SubagentExecutor:
             result.status = SubagentStatus.COMPLETED
             result.completed_at = datetime.now()
 
-        except Exception as e:
-            logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
+        except Exception as exc:
+            self._retain_usage_reservation()
+            logger.error(
+                "[trace=%s] Subagent %s async execution failed (%s)",
+                self.trace_id,
+                self.config.name,
+                type(exc).__name__,
+            )
             result.status = SubagentStatus.FAILED
-            result.error = str(e)
+            result.error = "Subagent execution failed"
             result.completed_at = datetime.now()
 
         return result
@@ -371,8 +419,14 @@ class SubagentExecutor:
         # 子代理执行错误会在 _aexecute() 内部转为 FAILED 状态返回。
         try:
             return asyncio.run(self._aexecute(task, result_holder))
-        except Exception as e:
-            logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} execution failed")
+        except Exception as exc:
+            self._retain_usage_reservation()
+            logger.error(
+                "[trace=%s] Subagent %s execution failed (%s)",
+                self.trace_id,
+                self.config.name,
+                type(exc).__name__,
+            )
             # 若无现成 result 对象，则创建一个错误结果
             if result_holder is not None:
                 result = result_holder
@@ -383,7 +437,7 @@ class SubagentExecutor:
                     status=SubagentStatus.FAILED,
                 )
             result.status = SubagentStatus.FAILED
-            result.error = str(e)
+            result.error = "Subagent execution failed"
             result.completed_at = datetime.now()
             return result
 
@@ -427,26 +481,28 @@ class SubagentExecutor:
                 try:
                     # 带超时等待执行结果
                     exec_result = execution_future.result(timeout=self.config.timeout_seconds)
-                    with _background_tasks_lock:
-                        _background_tasks[task_id].status = exec_result.status
-                        _background_tasks[task_id].result = exec_result.result
-                        _background_tasks[task_id].error = exec_result.error
-                        _background_tasks[task_id].completed_at = datetime.now()
-                        _background_tasks[task_id].ai_messages = exec_result.ai_messages
+                    _publish_background_result(task_id, exec_result)
                 except FuturesTimeoutError:
                     logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} execution timed out after {self.config.timeout_seconds}s")
+                    self._retain_usage_reservation()
                     with _background_tasks_lock:
                         _background_tasks[task_id].status = SubagentStatus.TIMED_OUT
                         _background_tasks[task_id].error = f"Execution timed out after {self.config.timeout_seconds} seconds"
                         _background_tasks[task_id].completed_at = datetime.now()
                     # 取消 future（尽力而为，未必能中止实际执行）
                     execution_future.cancel()
-            except Exception as e:
-                logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
-                with _background_tasks_lock:
-                    _background_tasks[task_id].status = SubagentStatus.FAILED
-                    _background_tasks[task_id].error = str(e)
-                    _background_tasks[task_id].completed_at = datetime.now()
+            except Exception as exc:
+                self._retain_usage_reservation()
+                logger.error(
+                    "[trace=%s] Subagent %s scheduler failed (%s)",
+                    self.trace_id,
+                    self.config.name,
+                    type(exc).__name__,
+                )
+                _publish_background_failure(
+                    task_id,
+                    "Subagent execution failed",
+                )
 
         _scheduler_pool.submit(run_task)
         return task_id

@@ -15,7 +15,6 @@
 #
 
 import logging
-import json
 import re
 from core.utils.doc_store_conn import MatchTextExpr
 from core.nlp import rag_tokenizer, term_weight, synonym
@@ -304,7 +303,10 @@ class FulltextQueryer:
             if synonyms and len(keywords) < 32:
                 keywords.extend(synonyms)
 
-            logging.debug(json.dumps(term_weights, ensure_ascii=False))
+            logging.debug(
+                "Chinese query term weights computed: count=%s",
+                len(term_weights),
+            )
 
             # 构建词汇查询片段（这里会处理每个子词汇的同义词和关键词添加）
             term_query = self._build_chinese_term_query(term_weights, keywords)
@@ -449,9 +451,9 @@ class FulltextQueryer:
             return ""
 
         synonym_queries = []
-        for synonym in synonyms:
+        for synonym_term in synonyms:
             # 转义特殊字符并进行细粒度分词
-            syn_clean = FulltextQueryer.subSpecialChar(synonym)
+            syn_clean = FulltextQueryer.subSpecialChar(synonym_term)
             syn_tokenized = rag_tokenizer.fine_grained_tokenize(syn_clean)
             # 包含空格的同义词用引号包围
             if syn_tokenized.find(" ") > 0:
@@ -673,7 +675,7 @@ class FulltextQueryer:
             idx.append(i)
             pieces_.append(t)
         
-        logging.debug("答案分割结果: {} => {}".format(answer, pieces_))
+        logging.debug("Answer split completed: piece_count=%s", len(pieces_))
         
         # 如果没有有效片段，返回原答案
         if not pieces_:
@@ -719,7 +721,11 @@ class FulltextQueryer:
                 
                 # 设置动态阈值（略低于最大相似度）
                 mx = np.max(sim) * 0.99
-                logging.debug("片段 '{}' 的最大相似度: {}".format(pieces_[i], mx))
+                logging.debug(
+                    "Citation similarity computed: piece_index=%s max_similarity=%s",
+                    i,
+                    mx,
+                )
                 
                 if mx < thr:  # 相似度不够高，跳过
                     continue
@@ -758,4 +764,3 @@ class FulltextQueryer:
                 seted.add(c)        # 记录已使用的引用
 
         return res, seted
-

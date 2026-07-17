@@ -95,14 +95,22 @@ class Channel(ABC):
         if msg.channel_name == self.name:
             try:
                 await self.send(msg)
-            except Exception:
-                logger.exception("Failed to send outbound message on channel %s", self.name)
+            except Exception as exc:
+                logger.error(
+                    "Failed to send outbound message on channel %s (%s)",
+                    self.name,
+                    type(exc).__name__,
+                )
                 return  # 文本发送失败时不再尝试上传文件
 
             for attachment in msg.attachments:
                 try:
                     success = await self.send_file(msg, attachment)
                     if not success:
-                        logger.warning("[%s] file upload skipped for %s", self.name, attachment.filename)
-                except Exception:
-                    logger.exception("[%s] failed to upload file %s", self.name, attachment.filename)
+                        logger.warning("[%s] file upload skipped", self.name)
+                except Exception as exc:
+                    logger.error(
+                        "[%s] failed to upload file (%s)",
+                        self.name,
+                        type(exc).__name__,
+                    )

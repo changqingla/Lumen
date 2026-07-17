@@ -7,7 +7,7 @@
 Lumen brings knowledge bases, long-context chat, document parsing, note capture, and runtime orchestration into one deployable system.  
 It is not a chat wrapper demo. It is built as a real workspace for product-grade AI experiences, team collaboration, and long-term system evolution.
 
-[中文](./README.md) · [Live Demo](https://ireader.online/) · [Backend Guide](./backend/README.md) · [Repository Guide](./docs/repo-structure-guideline.md)
+[中文](./README.md) · [Live Demo](https://ireader.online/) · [Backend Guide](./backend/README.md) · [Repository Guide](./docs/repository-structure.md)
 
 <p>
   <img alt="license" src="https://img.shields.io/badge/License-Apache_2.0-111827?style=for-the-badge">
@@ -96,12 +96,11 @@ backend/                 FastAPI business backend
 services/rag/            Document parsing, chunking, retrieval, indexing
 runtimes/                Runtime layer and operational assets
 docker/                  Local deployment entrypoint
-infra/                   Infrastructure assets outside Compose
 shared/                  Shared config and libraries
 docs/                    Architecture notes, migration docs, design material
 ```
 
-For more detail, see [docs/repo-structure-guideline.md](./docs/repo-structure-guideline.md).
+For more detail, see [Repository Structure and Ownership](./docs/repository-structure.md).
 
 ## Quick Start
 
@@ -122,9 +121,15 @@ cd Lumen
 
 ```bash
 cp backend/.env.template backend/.env
+./docker/init-env.sh
+cp runtimes/config/.env.example runtimes/config/.env
+cp runtimes/config/config.example.yaml runtimes/config/config.yaml
 ```
 
-Then fill in the required credentials and service configuration in `backend/.env`. Runtime-related configuration lives under `runtimes/config/`.
+Fill in the required application, deployment, runtime, and model settings in all
+four files. `init-env.sh` creates or upgrades `docker/.env` using Docker Compose's
+dotenv semantics. It never prints generated values and does not rotate existing
+PostgreSQL or MinIO credentials. Do not commit these local configuration files.
 
 ### 3. Build the frontend
 
@@ -136,17 +141,24 @@ npm run build
 ### 4. Start the services
 
 ```bash
-cd docker
-docker compose up -d
+docker build -f docker/backend-paper-translation.Dockerfile -t lumen-backend:paper-translation .
+docker compose --env-file docker/.env -f docker/docker-compose.yml up -d
 ```
 
 ### 5. Open the endpoints
 
-- Web: `http://localhost`
+- Web (default): `https://<LUMEN_SERVER_NAME from docker/.env>`
+- Web (also available when certificates are configured and `LUMEN_HTTP_MODE=serve`): `http://localhost`
 - Backend API: `http://localhost:13000`
 - API Docs: `http://localhost:13000/api/docs`
-- Gateway Docs: `http://localhost:8001/docs`
-- LangGraph Docs: `http://localhost:2024`
+
+By default, Nginx serves only ACME challenges on port 80 and redirects every other
+request to HTTPS with status `308`. Serve mode still loads the TLS certificate;
+use `npm run web:dev` for certificate-free local frontend development. Gateway,
+LangGraph, and the Backend diagnostic
+port bind to `127.0.0.1` by default. Browser run requests go through the business
+API's session-scoped authorization proxy. See [Docker startup](./docker/README.md)
+for the complete TLS and local HTTP mode behavior.
 
 ## Development Commands
 
@@ -156,6 +168,7 @@ docker compose up -d
 npm install
 npm run web:dev
 npm run web:check
+npm run web:test
 npm run web:build
 ```
 

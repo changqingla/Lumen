@@ -3,8 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
 from typing import Optional, List, Tuple
 from modules.knowledge.entities.knowledge_base import KnowledgeBaseSubscription, KnowledgeBase
-from sqlalchemy.orm import selectinload
+from modules.knowledge.repositories.kb_repository import knowledge_base_access_condition
 from datetime import datetime
+import uuid
 
 
 class KBSubscriptionRepository:
@@ -78,25 +79,32 @@ class KBSubscriptionRepository:
         self,
         user_id: str,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        user_org_ids: Optional[List[uuid.UUID]] = None,
+        is_admin: bool = False,
     ) -> Tuple[List[KnowledgeBase], int]:
-        """List all knowledge bases subscribed by a user."""
-        # Count total
-        count_stmt = select(func.count()).select_from(
-            select(KnowledgeBaseSubscription)
-            .where(KnowledgeBaseSubscription.user_id == user_id)
-            .subquery()
-        )
-        total = (await self.db.execute(count_stmt)).scalar()
-        
-        # Get subscribed KBs
+        """List subscribed knowledge bases that remain accessible to the user."""
         stmt = (
             select(KnowledgeBase)
             .join(
                 KnowledgeBaseSubscription,
-                KnowledgeBase.id == KnowledgeBaseSubscription.kb_id
+                KnowledgeBase.id == KnowledgeBaseSubscription.kb_id,
             )
-            .where(KnowledgeBaseSubscription.user_id == user_id)
+            .where(
+                KnowledgeBaseSubscription.user_id == user_id,
+                knowledge_base_access_condition(
+                    user_id,
+                    user_org_ids,
+                    is_admin=is_admin,
+                ),
+            )
+        )
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.db.execute(count_stmt)).scalar()
+
+        stmt = (
+            stmt
             .order_by(KnowledgeBaseSubscription.subscribed_at.desc())
             .limit(page_size)
             .offset((page - 1) * page_size)

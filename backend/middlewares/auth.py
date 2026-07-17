@@ -1,7 +1,6 @@
 """Authentication middleware and dependencies."""
-import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -13,7 +12,6 @@ if TYPE_CHECKING:
 
 security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
-GUEST_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
 
 
 @dataclass(slots=True)
@@ -58,13 +56,8 @@ async def get_current_user(
     
     return user
 
-
-def is_guest_user(user: Any) -> bool:
-    return str(getattr(user, "email", "") or "").lower().endswith("@guest.lumen.local")
-
-
 async def get_current_chat_identity(
-    guest_id: Optional[str] = Header(default=None, alias="X-Guest-Id"),
+    guest_token: Optional[str] = Header(default=None, alias="X-Guest-Token"),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
     db: AsyncSession = Depends(get_db),
 ) -> AuthenticatedIdentity:
@@ -73,12 +66,15 @@ async def get_current_chat_identity(
         user = await get_current_user(credentials, db)
         return AuthenticatedIdentity(user=user, is_guest=False, guest_id=None)
 
-    normalized_guest_id = str(guest_id or "").strip()
-    if not normalized_guest_id or not GUEST_ID_PATTERN.match(normalized_guest_id):
+    from utils.security import decode_guest_token
+
+    payload = decode_guest_token(str(guest_token or "").strip())
+    if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": {"code": "UNAUTHORIZED", "message": "Missing authentication"}},
         )
+    normalized_guest_id = payload["guest_id"]
 
     from repositories.user_repository import UserRepository
 

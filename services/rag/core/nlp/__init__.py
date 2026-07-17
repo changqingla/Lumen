@@ -16,15 +16,11 @@
 
 import logging
 import random
-from collections import Counter
 
 from core.utils import num_tokens_from_string
 from . import rag_tokenizer
 import re
 import copy
-import roman_numbers as r
-from word2number import w2n
-from cn2an import cn2an
 from PIL import Image
 
 import chardet
@@ -69,100 +65,6 @@ def find_codec(blob):
             pass
 
     return "utf-8"
-
-
-QUESTION_PATTERN = [
-    r"第([零一二三四五六七八九十百0-9]+)问",
-    r"第([零一二三四五六七八九十百0-9]+)条",
-    r"[\(（]([零一二三四五六七八九十百]+)[\)）]",
-    r"第([0-9]+)问",
-    r"第([0-9]+)条",
-    r"([0-9]{1,2})[\. 、]",
-    r"([零一二三四五六七八九十百]+)[ 、]",
-    r"[\(（]([0-9]{1,2})[\)）]",
-    r"QUESTION (ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)",
-    r"QUESTION (I+V?|VI*|XI|IX|X)",
-    r"QUESTION ([0-9]+)",
-]
-
-
-def has_qbullet(reg, box, last_box, last_index, last_bull, bull_x0_list):
-    section, last_section = box['text'], last_box['text']
-    q_reg = r'(\w|\W)*?(?:？|\?|\n|$)+'
-    full_reg = reg + q_reg
-    has_bull = re.match(full_reg, section)
-    index_str = None
-    if has_bull:
-        if 'x0' not in last_box:
-            last_box['x0'] = box['x0']
-        if 'top' not in last_box:
-            last_box['top'] = box['top']
-        if last_bull and box['x0'] - last_box['x0'] > 10:
-            return None, last_index
-        if not last_bull and box['x0'] >= last_box['x0'] and box['top'] - last_box['top'] < 20:
-            return None, last_index
-        avg_bull_x0 = 0
-        if bull_x0_list:
-            avg_bull_x0 = sum(bull_x0_list) / len(bull_x0_list)
-        else:
-            avg_bull_x0 = box['x0']
-        if box['x0'] - avg_bull_x0 > 10:
-            return None, last_index
-        index_str = has_bull.group(1)
-        index = index_int(index_str)
-        if last_section[-1] == ':' or last_section[-1] == '：':
-            return None, last_index
-        if not last_index or index >= last_index:
-            bull_x0_list.append(box['x0'])
-            return has_bull, index
-        if section[-1] == '?' or section[-1] == '？':
-            bull_x0_list.append(box['x0'])
-            return has_bull, index
-        if box['layout_type'] == 'title':
-            bull_x0_list.append(box['x0'])
-            return has_bull, index
-        pure_section = section.lstrip(re.match(reg, section).group()).lower()
-        ask_reg = r'(what|when|where|how|why|which|who|whose|为什么|为啥|哪)'
-        if re.match(ask_reg, pure_section):
-            bull_x0_list.append(box['x0'])
-            return has_bull, index
-    return None, last_index
-
-
-def index_int(index_str):
-    res = -1
-    try:
-        res = int(index_str)
-    except ValueError:
-        try:
-            res = w2n.word_to_num(index_str)
-        except ValueError:
-            try:
-                res = cn2an(index_str)
-            except ValueError:
-                try:
-                    res = r.number(index_str)
-                except ValueError:
-                    return -1
-    return res
-
-
-def qbullets_category(sections):
-    global QUESTION_PATTERN
-    hits = [0] * len(QUESTION_PATTERN)
-    for i, pro in enumerate(QUESTION_PATTERN):
-        for sec in sections:
-            if re.match(pro, sec) and not not_bullet(sec):
-                hits[i] += 1
-                break
-    maxium = 0
-    res = -1
-    for i, h in enumerate(hits):
-        if h <= maxium:
-            continue
-        res = i
-        maxium = h
-    return res, QUESTION_PATTERN[res]
 
 
 BULLET_PATTERN = [[
@@ -262,7 +164,6 @@ def tokenize_chunks(chunks, doc, eng):
     for ii, ck in enumerate(chunks):
         if len(ck.strip()) == 0:
             continue
-        logging.debug("-- {}".format(ck))
         d = copy.deepcopy(doc)
         add_positions(d, [[ii]*5])
         tokenize(d, ck, eng)
@@ -273,14 +174,12 @@ def tokenize_chunks(chunks, doc, eng):
 def tokenize_chunks_docx(chunks, doc, eng, images):
     import base64
     import io
-    from PIL import Image
 
     res = []
     # wrap up as es documents
     for ck, image in zip(chunks, images):
         if len(ck.strip()) == 0:
             continue
-        logging.debug("-- {}".format(ck))
         d = copy.deepcopy(doc)
 
         # 处理PIL.Image对象，转换为可序列化的格式
@@ -301,10 +200,16 @@ def tokenize_chunks_docx(chunks, doc, eng, images):
                     "encoding": "base64"
                 }
                 logging.debug(f"PIL.Image转换为base64成功，尺寸: {image.size}")
-            except Exception as e:
-                logging.warning(f"PIL.Image转换失败: {e}，将设置image为None")
+            except Exception as error:
+                logging.warning(
+                    "PIL image conversion failed: error_type=%s",
+                    type(error).__name__,
+                )
                 d["image"] = None
-                d["image_info"] = {"error": str(e)}
+                d["image_info"] = {
+                    "error": "image_conversion_failed",
+                    "error_type": type(error).__name__,
+                }
         else:
             d["image"] = image
 
@@ -409,28 +314,6 @@ def make_colon_as_title(sections):
         i += 1
 
 
-def title_frequency(bull, sections):
-    bullets_size = len(BULLET_PATTERN[bull])
-    levels = [bullets_size + 1 for _ in range(len(sections))]
-    if not sections or bull < 0:
-        return bullets_size + 1, levels
-
-    for i, (txt, layout) in enumerate(sections):
-        for j, p in enumerate(BULLET_PATTERN[bull]):
-            if re.match(p, txt.strip()) and not not_bullet(txt):
-                levels[i] = j
-                break
-        else:
-            if re.search(r"(title|head)", layout) and not not_title(txt.split("@")[0]):
-                levels[i] = bullets_size
-    most_level = bullets_size + 1
-    for level, c in sorted(Counter(levels).items(), key=lambda x: x[1] * -1):
-        if level <= bullets_size:
-            most_level = level
-            break
-    return most_level, levels
-
-
 def not_title(txt):
     if re.match(r"第[零一二三四五六七八九十百0-9]+条", txt):
         return False
@@ -509,7 +392,6 @@ def hierarchical_merge(bull, sections, depth):
 
     for i in range(len(cks)):
         cks[i] = [sections[j] for j in cks[i][::-1]]
-        logging.debug("\n* ".join(cks[i]))
 
     res = [[]]
     num = [0]
@@ -631,8 +513,3 @@ def naive_merge_docx(sections, chunk_token_num=128, delimiter="\n。；！？"):
 
     logging.info(f"naive_merge_docx 完成，生成了 {len(cks)} 个分块")
     return cks, images
-
-
-def extract_between(text: str, start_tag: str, end_tag: str) -> list[str]:
-    pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
-    return re.findall(pattern, text, flags=re.DOTALL)

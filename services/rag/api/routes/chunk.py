@@ -10,6 +10,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
+from error_boundary import log_rag_failure, public_error_message
+from runtime_state import RagStateDependency
 from schemas import ChunkEditRequest, ChunkBatchEditRequest, UnifiedResponse
 
 logger = logging.getLogger(__name__)
@@ -18,15 +20,15 @@ router = APIRouter()
 
 
 @router.post("/api/edit-chunk", response_model=UnifiedResponse)
-async def edit_chunk(request: ChunkEditRequest):
+async def edit_chunk(request: ChunkEditRequest, state: RagStateDependency):
     """
     编辑单个文档块
 
     支持修改块内容和启用/禁用状态，自动重新分词和向量化
     """
-    from app import unified_service, stats
-
     start_time = time.time()
+    unified_service = state.unified_service
+    stats = state.stats
     stats["total_requests"] += 1
 
     try:
@@ -47,40 +49,41 @@ async def edit_chunk(request: ChunkEditRequest):
             timeout=request.timeout,
         )
 
-        processing_time = time.time() - start_time
-
-        if result["success"]:
-            stats["successful_requests"] += 1
-            return UnifiedResponse(
-                success=True,
-                message=result["message"],
-                data=result.get("data"),
-                processing_time=processing_time,
-                timestamp=datetime.now().isoformat(),
-            )
-        else:
-            stats["failed_requests"] += 1
-            raise HTTPException(status_code=400, detail=result["message"])
-
-    except HTTPException:
+    except Exception as error:
         stats["failed_requests"] += 1
-        raise
-    except Exception as e:
+        log_rag_failure(logger, stage="chunk_edit", error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=public_error_message("chunk_edit"),
+        ) from None
+
+    if not result.get("success"):
         stats["failed_requests"] += 1
-        logger.error(f"编辑块失败: {e}")
-        raise HTTPException(status_code=500, detail=f"编辑块失败: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=public_error_message("chunk_edit"),
+        )
+
+    stats["successful_requests"] += 1
+    return UnifiedResponse(
+        success=True,
+        message=result["message"],
+        data=result.get("data"),
+        processing_time=time.time() - start_time,
+        timestamp=datetime.now().isoformat(),
+    )
 
 
 @router.post("/api/batch-edit-chunks", response_model=UnifiedResponse)
-async def batch_edit_chunks(request: ChunkBatchEditRequest):
+async def batch_edit_chunks(request: ChunkBatchEditRequest, state: RagStateDependency):
     """
     批量编辑文档块
 
     支持批量修改块内容和启用/禁用状态，自动重新分词和向量化
     """
-    from app import unified_service, stats
-
     start_time = time.time()
+    unified_service = state.unified_service
+    stats = state.stats
     stats["total_requests"] += 1
 
     try:
@@ -99,30 +102,45 @@ async def batch_edit_chunks(request: ChunkBatchEditRequest):
             timeout=request.timeout,
         )
 
-        processing_time = time.time() - start_time
-
-        if result["success"]:
-            stats["successful_requests"] += 1
-        else:
-            stats["failed_requests"] += 1
-
-        return UnifiedResponse(
-            success=result["success"],
-            message=result["message"],
-            data={
-                "total_chunks": result.get("total_chunks", 0),
-                "successful_chunks": result.get("successful_chunks", 0),
-                "failed_chunks": result.get("failed_chunks", 0),
-                "errors": result.get("errors", []),
-            },
-            processing_time=processing_time,
-            timestamp=datetime.now().isoformat(),
-        )
-
-    except HTTPException:
+    except Exception as error:
         stats["failed_requests"] += 1
-        raise
-    except Exception as e:
+        log_rag_failure(logger, stage="chunk_edit", error=error)
+        raise HTTPException(
+            status_code=500,
+            detail=public_error_message("chunk_edit"),
+        ) from None
+
+    succeeded = bool(result.get("success"))
+    if succeeded:
+        stats["successful_requests"] += 1
+    else:
         stats["failed_requests"] += 1
-        logger.error(f"批量编辑块失败: {e}")
-        raise HTTPException(status_code=500, detail=f"批量编辑块失败: {str(e)}")
+
+    successful_chunks = result.get("successful_chunks", 0)
+    failed_chunks = result.get("failed_chunks", 0)
+    raw_errors = result.get("errors")
+    public_errors = (
+        [
+            {"error": public_error_message("chunk_edit")}
+            for _ in range(min(len(raw_errors), 10))
+        ]
+        if isinstance(raw_errors, list)
+        else []
+    )
+
+    return UnifiedResponse(
+        success=succeeded,
+        message=(
+            f"批量编辑完成: 成功 {successful_chunks} 个，失败 {failed_chunks} 个"
+            if succeeded
+            else public_error_message("chunk_edit")
+        ),
+        data={
+            "total_chunks": result.get("total_chunks", 0),
+            "successful_chunks": successful_chunks,
+            "failed_chunks": failed_chunks,
+            "errors": public_errors,
+        },
+        processing_time=time.time() - start_time,
+        timestamp=datetime.now().isoformat(),
+    )

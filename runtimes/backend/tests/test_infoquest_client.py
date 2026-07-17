@@ -1,6 +1,7 @@
 """Tests for InfoQuest client and tools."""
 
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 from src.community.infoquest import tools
@@ -24,7 +25,7 @@ class TestInfoQuestClient:
         assert client.fetch_navigation_timeout == 60
         assert client.search_time_range == 24
 
-    @patch("src.community.infoquest.infoquest_client.requests.post")
+    @patch("src.community.infoquest.infoquest_client.provider_post")
     def test_fetch_success(self, mock_post):
         """Test successful fetch operation."""
         mock_response = MagicMock()
@@ -41,8 +42,9 @@ class TestInfoQuestClient:
         assert args[0] == "https://reader.infoquest.bytepluses.com"
         assert kwargs["json"]["url"] == "https://example.com"
         assert kwargs["json"]["format"] == "HTML"
+        assert kwargs["timeout"] == 30.0
 
-    @patch("src.community.infoquest.infoquest_client.requests.post")
+    @patch("src.community.infoquest.infoquest_client.provider_post")
     def test_fetch_non_200_status(self, mock_post):
         """Test fetch operation with non-200 status code."""
         mock_response = MagicMock()
@@ -53,9 +55,10 @@ class TestInfoQuestClient:
         client = InfoQuestClient()
         result = client.fetch("https://example.com")
 
-        assert result == "Error: fetch API returned status 404: Not Found"
+        assert result == "Error: fetch API returned status 404"
+        assert "Not Found" not in result
 
-    @patch("src.community.infoquest.infoquest_client.requests.post")
+    @patch("src.community.infoquest.infoquest_client.provider_post")
     def test_fetch_empty_response(self, mock_post):
         """Test fetch operation with empty response."""
         mock_response = MagicMock()
@@ -68,24 +71,47 @@ class TestInfoQuestClient:
 
         assert result == "Error: no result found"
 
-    @patch("src.community.infoquest.infoquest_client.requests.post")
-    def test_web_search_raw_results_success(self, mock_post):
+    @patch("src.community.infoquest.infoquest_client.provider_post")
+    def test_web_search_raw_results_success(self, mock_post, caplog):
         """Test successful web_search_raw_results operation."""
+        private_response_marker = "private-provider-response"
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"search_result": {"results": [{"content": {"results": {"organic": [{"title": "Test Result", "desc": "Test description", "url": "https://example.com"}]}}}], "images_results": []}}
+        mock_response.json.return_value = {
+            "search_result": {
+                "results": [
+                    {
+                        "content": {
+                            "results": {
+                                "organic": [
+                                    {
+                                        "title": private_response_marker,
+                                        "desc": "Test description",
+                                        "url": "https://example.com",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ],
+                "images_results": [],
+            }
+        }
         mock_post.return_value = mock_response
 
         client = InfoQuestClient()
-        result = client.web_search_raw_results("test query", "")
+        with caplog.at_level(logging.DEBUG):
+            result = client.web_search_raw_results("test query", "")
 
         assert "search_result" in result
+        assert private_response_marker not in caplog.text
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
         assert args[0] == "https://search.infoquest.bytepluses.com"
         assert kwargs["json"]["query"] == "test query"
+        assert kwargs["timeout"] == 30.0
 
-    @patch("src.community.infoquest.infoquest_client.requests.post")
+    @patch("src.community.infoquest.infoquest_client.provider_post")
     def test_web_search_success(self, mock_post):
         """Test successful web_search operation."""
         mock_response = MagicMock()
@@ -173,12 +199,27 @@ class TestInfoQuestClient:
         assert client.fetch_timeout == 30
         assert client.fetch_navigation_timeout == 60
 
-    @patch("src.community.infoquest.infoquest_client.requests.post")
+    @patch("src.community.infoquest.infoquest_client.provider_post")
     def test_web_search_api_error(self, mock_post):
         """Test web_search operation with API error."""
-        mock_post.side_effect = Exception("Connection error")
+        marker = "private-infoquest-provider-error"
+        mock_post.side_effect = Exception(marker)
 
         client = InfoQuestClient()
         result = client.web_search("test query")
 
         assert "Error" in result
+        assert marker not in result
+
+    @patch("src.community.infoquest.infoquest_client.provider_post")
+    def test_fetch_exception_body_is_not_returned_or_logged(self, mock_post, caplog):
+        marker = "private-infoquest-fetch-error"
+        mock_post.side_effect = RuntimeError(marker)
+
+        with caplog.at_level(logging.ERROR):
+            result = InfoQuestClient().fetch("https://example.com")
+
+        assert result == "Error: fetch API failed"
+        assert marker not in result
+        assert marker not in caplog.text
+        assert "RuntimeError" in caplog.text

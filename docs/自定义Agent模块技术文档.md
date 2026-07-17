@@ -16,11 +16,11 @@
 ### 1.1 先给出六个直接答案
 
 - 自定义 Agent 和默认 Agent 的关系是什么：它不是另一套独立后端，而是在同一套 lead agent 运行时上叠加一层按名称切换的角色配置。
-- 一个自定义 Agent 在磁盘上由哪些文件构成：核心就是它自己的目录，里面通常包含 `config.yaml`、`SOUL.md` 和 `memory.json`。
-- `config.yaml`、`SOUL.md`、独立记忆如何一起参与运行时：结构化配置负责模型和工具组，SOUL 负责身份与行为边界，独立记忆负责长期上下文，三者在运行时共同影响主 Agent 的装配结果。
+- 一个自定义 Agent 在磁盘上由哪些文件构成：全局定义目录包含 `config.yaml` 和 `SOUL.md`；用户长期记忆不在该目录，而在每个 Backend 签发的 scope 下分区。
+- `config.yaml`、`SOUL.md`、独立记忆如何一起参与运行时：结构化配置负责模型和工具组，SOUL 负责身份与行为边界，scope/agent 记忆负责当前用户的长期上下文，三者在运行时共同影响主 Agent 的装配结果。
 - 自定义 Agent 如何影响模型、工具白名单和系统提示词：`model` 会覆盖模型选择，`tool_groups` 会裁剪工具暴露范围，而 `SOUL` 与 Agent 级记忆会进入提示词编排。
-- 为什么删除 Agent 要连配置、SOUL 和记忆一起删除：因为在当前实现里，一个 Agent 的本体就是这组文件；如果只删其中一部分，就会留下孤儿状态并污染后续运行时。
-- `USER.md` 当前处于什么状态：从路径和 Gateway 接口上看它是全局用户画像入口，但从当前运行路径看，它更像预留能力，还没有像 SOUL 和记忆那样真正注入提示词。
+- 删除 Agent 会删除什么：当前只删除全局 Agent 定义目录，也就是配置、SOUL 及该目录内的其他定义文件；各用户 scope 下的记忆会保留，重建同名 Agent 后仍可能重新使用。
+- `USER.md` 当前处于什么状态：它是 legacy/operator 管理状态，当前不参与提示词注入，不能当作多租户用户画像。
 
 ## 2. 模块定位
 
@@ -42,39 +42,42 @@ lumen 的自定义 Agent 模块，不是“多开几个主图实例”，而是�
 
 自定义 Agent 不是存储在数据库里，也不是写在主配置文件里，而是存在于应用数据目录下的独立文件夹中。
 
-一个 Agent 目录通常包含：
+一个 Agent 定义目录通常包含：
 
 - `config.yaml`
 - `SOUL.md`
-- `memory.json`
 
 其路径结构由 `Paths` 统一定义，大致位于：
 
 - `{base_dir}/agents/{agent_name}/`
 
-这说明在这个项目里，自定义 Agent 的本质是一组文件，而不是一条数据库记录。这样设计有几个直接好处：
+用户长期记忆位于另一棵目录树：
+
+- `{base_dir}/memories/{memory_scope}/agents/{agent_name}/memory.json`
+
+这说明自定义 Agent 的全局定义是一组文件，而用户画像是按认证 scope 隔离的派生状态。这样设计有几个直接好处：
 
 - 调试直观，Agent 内容可以直接查看和手工修改
 - 部署迁移简单，复制目录即可迁移 Agent
-- 配置、人格和长期记忆天然放在同一命名空间下
+- 配置和人格便于部署；长期记忆不会因多个用户使用同一个 Agent 名称而共享
 
 ## 4. 代码分层与关键入口
 
 与自定义 Agent 最相关的实现主要分布在以下位置：
 
-- `backend/src/config/agents_config.py`
+- `runtimes/backend/src/config/agents_config.py`
   负责 Agent 配置、SOUL 读取与 Agent 列表扫描。
 
-- `backend/src/gateway/routers/agents.py`
+- `runtimes/backend/src/gateway/routers/agents.py`
   负责对外提供 CRUD 接口，以及 USER.md 的读写接口。
 
-- `backend/src/config/paths.py`
-  定义 Agent 目录、Agent 记忆文件和全局 USER.md 的物理路径。
+- `runtimes/backend/src/config/paths.py`
+  定义 Agent 目录、scoped 记忆根和 legacy `USER.md` 的物理路径。
 
-- `backend/src/agents/lead_agent/agent.py`
+- `runtimes/backend/src/agents/lead_agent/agent.py`
   负责在运行时读取 `agent_name`，并用其影响模型解析、中间件构建与工具组筛选。
 
-- `backend/src/agents/lead_agent/prompt.py`
+- `runtimes/backend/src/agents/lead_agent/prompt.py`
   负责把 SOUL 和 Agent 级记忆注入系统提示词。
 
 这说明自定义 Agent 不是靠某一个模块单独完成，而是：
@@ -198,28 +201,24 @@ SOUL 不是简单介绍文案，而是运行时会真正注入系统提示词的
 
 ### 9.1 中间件层传入 `agent_name`
 
-`_build_middlewares()` 在构造记忆中间件时，会把 `agent_name` 传给 `MemoryMiddleware`。这意味着后续记忆更新队列和记忆文件路径解析，都会按 Agent 维度走隔离逻辑。
+`_build_middlewares()` 在构造记忆中间件时，会把 `agent_name` 传给 `MemoryMiddleware`。Runtime context 还必须包含 Backend 签发的 `memory_scope`。后续队列和文件路径以 `(memory_scope, agent_name)` 共同分区。
 
 ### 9.2 提示词注入也会按 Agent 隔离
 
-`apply_prompt_template()` 在构造系统提示词时，会调用：
+静态 `apply_prompt_template()` 只装配不含用户画像的基础 prompt。`ScopedMemoryPromptMiddleware` 会在每次 model call 时从可信 Runtime context 读取 scope，并调用：
 
 - `get_agent_soul(agent_name)`
-- `_get_memory_context(agent_name)`
+- `_get_memory_context(memory_scope, agent_name)`
 
 前者负责读 Agent 专属 SOUL，后者负责读 Agent 专属长期记忆。
 
 这说明自定义 Agent 的个性化不只是静态 SOUL，还包括持续演化的 Agent 级长期记忆。
 
-### 9.3 删除 Agent 时为什么要连记忆一起删
+### 9.3 删除 Agent 的数据生命周期
 
-网关删除接口会直接删除整个 Agent 目录。由于 Agent 级记忆文件也位于该目录下，因此删除动作天然包含：
+网关删除接口直接删除 `{base_dir}/agents/{agent_name}/`，因此会删除 `config.yaml`、`SOUL.md` 和该定义目录内的其他文件。scoped 记忆不在这棵目录树中，不会被该接口清理。
 
-- config
-- SOUL
-- memory
-
-这符合这个模块的整体设计逻辑：Agent 目录就是这个 Agent 的完整物理实体。
+这是当前合同中需要明确的保留语义：删除定义不会等价于删除所有用户派生数据。若产品需要隐私删除，应新增显式的、可审计的 scoped purge 协议，并处理正在运行的记忆任务；不能用未加锁的全目录扫描替代。
 
 ## 10. `SOUL.md` 是如何参与提示词编排的
 
@@ -239,18 +238,17 @@ SOUL 不是简单介绍文案，而是运行时会真正注入系统提示词的
 
 这是一个值得单独指出的实现细节。
 
-从路径设计和网关接口描述上看，项目预留了一个全局 `USER.md`：
+项目仍保留一个全局 `USER.md`：
 
 - `Paths.user_md_file` 明确给出了这个文件路径
 - 网关也提供了 `/user-profile` 的读写接口
-- 接口描述中写的是“会注入到所有自定义 Agent”
-
-但从当前代码实际运行路径来看，并没有在提示词编排函数中看到对 `USER.md` 的读取和注入逻辑。
+- 当前 Runtime 提示词编排没有读取或注入它
 
 这意味着：
 
-- 从设计意图上，`USER.md` 被当成全局用户画像
-- 但在当前实现里，它更像“已暴露管理接口、尚未真正接入提示词”的预留能力
+- 它只是 Gateway 内部的 legacy/operator 管理状态
+- 它不是 Backend 认证用户的画像，也不能在多租户运行路径中直接注入
+- 真正参与注入的是 Backend 派生 scope 下的结构化长期记忆
 
 如果写技术文档，这个差异必须说清楚。否则读者会误以为它已经和 SOUL、记忆一样进入运行时。
 
@@ -286,7 +284,7 @@ SOUL 不是简单介绍文案，而是运行时会真正注入系统提示词的
 
 ### 12.4 删除流程
 
-删除时直接清理整个 Agent 目录，而不是逐文件删除。这种做法和模块的文件系统模型完全一致，也更不容易遗漏 Agent 级记忆文件。
+删除时直接清理整个 Agent 定义目录，而不是逐文件删除。它不会遍历或删除各用户 scope 下的 Agent 记忆。
 
 ## 13. 这个模块里的几个关键 tricks
 
@@ -304,9 +302,9 @@ SOUL 不是简单介绍文案，而是运行时会真正注入系统提示词的
 
 避免复制整套 graph 或分裂成多个主运行时。
 
-### 13.4 Agent 级记忆天然隔离
+### 13.4 用户 scope 与 Agent 双层隔离
 
-这让多个自定义 Agent 不会互相污染长期画像。
+这让不同用户、不同自定义 Agent 都不会互相污染长期画像。
 
 ### 13.5 创建失败时回滚整个目录
 
@@ -318,7 +316,8 @@ SOUL 不是简单介绍文案，而是运行时会真正注入系统提示词的
 
 - 自定义 Agent 并不是新的 graph 类型，而是同一 lead agent 的变体
 - 配置字段比较克制，主要只支持模型和工具组差异
-- `USER.md` 当前更像预留能力，还没有看到真正提示词注入逻辑
+- `USER.md` 是未注入的 legacy/operator 状态，不是多租户画像接口
+- 删除 Agent 定义不会清除各 scope 下的同名 Agent 记忆；隐私删除需要显式 purge 设计
 - Agent 的运行隔离主要体现在提示词、工具组和长期记忆上，而不是独立代码执行栈
 
 这些边界不是缺陷，而是说明该模块更像“角色层”而不是“独立平台”。

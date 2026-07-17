@@ -45,6 +45,10 @@ env/
 !**/.env.template
 !**/.env.example
 runtimes/config/config.yaml
+runtimes/config/extensions/*
+!runtimes/config/extensions/extensions_config.example.json
+runtimes/skills/custom/*
+!runtimes/skills/custom/README.md
 
 # -----------------------------
 # Logs / Runtime

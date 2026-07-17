@@ -6,6 +6,23 @@ from pydantic import BaseModel, Field, field_validator
 class UploadsConfig(BaseModel):
     """文件上传相关配置。"""
 
+    max_file_size_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        gt=0,
+        description="单个上传文件允许的最大字节数。",
+    )
+    max_request_size_bytes: int = Field(
+        default=200 * 1024 * 1024,
+        gt=0,
+        description="一次上传请求中所有文件允许的最大累计字节数。",
+    )
+    stream_chunk_size_bytes: int = Field(
+        default=1024 * 1024,
+        gt=0,
+        le=8 * 1024 * 1024,
+        description="从 multipart 临时文件流式写盘时使用的块大小。",
+    )
+
     markdown_extensions: set[str] = Field(
         default_factory=lambda: {
             ".pdf",

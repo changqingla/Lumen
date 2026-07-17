@@ -214,15 +214,3 @@ def reset_app_config() -> None:
     """
     global _app_config
     _app_config = None
-
-
-def set_app_config(config: AppConfig) -> None:
-    """设置自定义配置实例。
-
-    可用于在测试场景中注入自定义或 mock 配置。
-
-    参数：
-        config: 要使用的 AppConfig 实例。
-    """
-    global _app_config
-    _app_config = config

@@ -1,5 +1,8 @@
-"""Token quota configuration for different membership levels."""
-from typing import Dict
+"""Token quota configuration and the canonical billing-window policy."""
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict
 
 
 # User levels (matching User model)
@@ -18,10 +21,6 @@ QUOTA_LIMITS: Dict[str, int] = {
     UserLevel.PREMIUM: 10_000_000,   # 1000万 tokens - 白金会员
     UserLevel.ADMIN: 100_000_000,    # 1亿 tokens - 管理员
 }
-
-# Billing cycle duration for members (days)
-# 会员计费周期为 31 天，普通用户使用自然月
-MEMBER_BILLING_CYCLE_DAYS = 31
 
 # Error messages for quota exceeded
 QUOTA_EXCEEDED_MESSAGES: Dict[str, str] = {
@@ -59,3 +58,58 @@ def get_exceeded_message(user_level: str) -> str:
         user_level, 
         QUOTA_EXCEEDED_MESSAGES[UserLevel.BASIC]
     )
+
+
+@dataclass(frozen=True, slots=True)
+class BillingWindow:
+    """A half-open UTC calendar-month billing window."""
+
+    start: datetime
+    end: datetime
+
+
+def get_billing_window(now: datetime | None = None) -> BillingWindow:
+    """Return the single billing-cycle definition used by quota and reporting."""
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1)
+    else:
+        end = start.replace(month=start.month + 1)
+    return BillingWindow(start=start, end=end)
+
+
+def get_effective_user_level(user: Any, now: datetime | None = None) -> str:
+    """Resolve admin and expired-membership state before selecting a quota."""
+
+    if bool(getattr(user, "is_admin", False)):
+        return UserLevel.ADMIN
+
+    level = str(getattr(user, "user_level", "") or UserLevel.BASIC).strip().lower()
+    if level not in {UserLevel.BASIC, UserLevel.MEMBER, UserLevel.PREMIUM}:
+        return UserLevel.BASIC
+    if level == UserLevel.BASIC:
+        return level
+
+    expires_at = getattr(user, "membership_expires_at", None)
+    if expires_at is None:
+        return level
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return level if expires_at > current.astimezone(timezone.utc) else UserLevel.BASIC
+
+
+def get_user_model_quota_limit(user: Any, now: datetime | None = None) -> int:
+    """Resolve a per-user override or the effective membership-level default."""
+
+    override = getattr(user, "model_quota_limit", None)
+    if override is not None:
+        return max(int(override), 0)
+    return get_quota_limit(get_effective_user_level(user, now))

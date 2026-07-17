@@ -14,18 +14,13 @@
 #  limitations under the License.
 #
 import json
-import os
-import re
-import threading
 from abc import ABC
-from collections.abc import Iterable
 from urllib.parse import urljoin
 
-import httpx
 import numpy as np
-import requests
 from yarl import URL
 
+from core.provider_http import ProviderHTTPError, provider_post
 from core.utils import log_exception
 from core.utils import num_tokens_from_string, truncate
 
@@ -59,7 +54,7 @@ class JinaRerank(Base):
     def similarity(self, query: str, texts: list):
         texts = [truncate(t, 8196) for t in texts]
         data = {"model": self.model_name, "query": query, "documents": texts, "top_n": len(texts)}
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = provider_post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -91,7 +86,7 @@ class XInferenceRerank(Base):
         for _, t in pairs:
             token_count += num_tokens_from_string(t)
         data = {"model": self.model_name, "query": query, "return_documents": "true", "return_len": "true", "documents": texts}
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = provider_post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -124,7 +119,7 @@ class LocalAIRerank(Base):
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = provider_post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -175,7 +170,7 @@ class NvidiaRerank(Base):
             "truncate": "END",
             "top_n": len(texts),
         }
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = provider_post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["rankings"]:
@@ -218,7 +213,7 @@ class OpenAI_APIRerank(Base):
         token_count = 0
         for t in texts:
             token_count += num_tokens_from_string(t)
-        res = requests.post(self.base_url, headers=self.headers, json=data).json()
+        res = provider_post(self.base_url, headers=self.headers, json=data).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in res["results"]:
@@ -301,7 +296,7 @@ class SILICONFLOWRerank(Base):
             "max_chunks_per_doc": 1024,
             "overlap_tokens": 80,
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers).json()
+        response = provider_post(self.base_url, json=payload, headers=self.headers).json()
         rank = np.zeros(len(texts), dtype=float)
         try:
             for d in response["results"]:
@@ -388,7 +383,10 @@ class QWenRerank(Base):
                 log_exception(_e, resp)
             return rank, resp.usage.total_tokens
         else:
-            raise ValueError(f"Error calling QWenRerank model {self.model_name}: {resp.status_code} - {resp.text}")
+            status = resp.status_code if isinstance(resp.status_code, int) else "unknown"
+            raise ValueError(
+                f"QWen rerank request failed: status={status}"
+            ) from None
 
 
 class GPUStackRerank(Base):
@@ -415,8 +413,7 @@ class GPUStackRerank(Base):
         }
 
         try:
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
-            response.raise_for_status()
+            response = provider_post(self.base_url, json=payload, headers=self.headers)
             response_json = response.json()
 
             rank = np.zeros(len(texts), dtype=float)
@@ -435,8 +432,11 @@ class GPUStackRerank(Base):
                 token_count,
             )
 
-        except httpx.HTTPStatusError as e:
-            raise ValueError(f"Error calling GPUStackRerank model {self.model_name}: {e.response.status_code} - {e.response.text}")
+        except ProviderHTTPError as error:
+            status = error.status_code if error.status_code is not None else "unknown"
+            raise ValueError(
+                f"GPUStack rerank request failed: status={status}"
+            ) from None
 
 
 class NovitaRerank(JinaRerank):
@@ -505,8 +505,7 @@ class VLLMRerank(Base):
         }
 
         try:
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
-            response.raise_for_status()
+            response = provider_post(self.base_url, json=payload, headers=self.headers)
             result = response.json()
 
             rank = np.zeros(len(texts), dtype=float)
@@ -522,5 +521,5 @@ class VLLMRerank(Base):
             return rank, token_count
 
         except Exception as _e:
-            log_exception(_e, f"VLLM rerank request failed: {_e}")
+            log_exception(_e)
             return np.zeros(len(texts), dtype=float), token_count

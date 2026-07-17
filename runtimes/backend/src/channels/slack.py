@@ -106,15 +106,19 @@ class SlackChannel(Channel):
                 if attempt < _max_retries - 1:
                     delay = 2**attempt  # 1 秒、2 秒
                     logger.warning(
-                        "[Slack] send failed (attempt %d/%d), retrying in %ds: %s",
+                        "[Slack] send failed (attempt %d/%d), retrying in %ds (%s)",
                         attempt + 1,
                         _max_retries,
                         delay,
-                        exc,
+                        type(exc).__name__,
                     )
                     await asyncio.sleep(delay)
 
-        logger.error("[Slack] send failed after %d attempts: %s", _max_retries, last_exc)
+        logger.error(
+            "[Slack] send failed after %d attempts (%s)",
+            _max_retries,
+            type(last_exc).__name__,
+        )
         # 发送失败时添加失败反应
         if msg.thread_ts:
             try:
@@ -143,10 +147,13 @@ class SlackChannel(Channel):
                 kwargs["thread_ts"] = msg.thread_ts
 
             await asyncio.to_thread(self._web_client.files_upload_v2, **kwargs)
-            logger.info("[Slack] file uploaded: %s to channel=%s", attachment.filename, msg.chat_id)
+            logger.info("[Slack] file uploaded")
             return True
-        except Exception:
-            logger.exception("[Slack] failed to upload file: %s", attachment.filename)
+        except Exception as exc:
+            logger.error(
+                "[Slack] failed to upload file (%s)",
+                type(exc).__name__,
+            )
             return False
 
     # -- 内部 ---------------------------------------------------------------
@@ -163,7 +170,10 @@ class SlackChannel(Channel):
             )
         except Exception as exc:
             if "already_reacted" not in str(exc):
-                logger.warning("[Slack] failed to add reaction %s: %s", emoji, exc)
+                logger.warning(
+                    "[Slack] failed to add reaction (%s)",
+                    type(exc).__name__,
+                )
 
     def _send_running_reply(self, channel_id: str, thread_ts: str) -> None:
         """在线程中发送“处理中...”回复（从 SDK 线程调用）。"""
@@ -175,9 +185,12 @@ class SlackChannel(Channel):
                 text=":hourglass_flowing_sand: 正在处理中...",
                 thread_ts=thread_ts,
             )
-            logger.info("[Slack] 已在 channel=%s, thread_ts=%s 发送“处理中”回复", channel_id, thread_ts)
-        except Exception:
-            logger.exception("[Slack] 在 channel=%s 发送处理中回复失败", channel_id)
+            logger.info("[Slack] 已发送处理中回复")
+        except Exception as exc:
+            logger.error(
+                "[Slack] 发送处理中回复失败（%s）",
+                type(exc).__name__,
+            )
 
     def _on_socket_event(self, client, req) -> None:
         """由 slack-sdk 在每个 Socket Mode 事件上回调。"""
@@ -197,8 +210,8 @@ class SlackChannel(Channel):
             if etype in ("message", "app_mention"):
                 self._handle_message_event(event)
 
-        except Exception:
-            logger.exception("处理 Slack 事件时出错")
+        except Exception as exc:
+            logger.error("处理 Slack 事件时出错（%s）", type(exc).__name__)
 
     def _handle_message_event(self, event: dict) -> None:
         # 忽略机器人消息
@@ -209,7 +222,7 @@ class SlackChannel(Channel):
 
         # 检查白名单用户
         if self._allowed_users and user_id not in self._allowed_users:
-            logger.debug("Ignoring message from non-allowed user: %s", user_id)
+            logger.debug("Ignoring message from non-allowed user")
             return
 
         text = event.get("text", "").strip()

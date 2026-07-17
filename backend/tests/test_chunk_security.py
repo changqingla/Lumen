@@ -1,7 +1,8 @@
 import os
 
-os.environ.setdefault("DEBUG", "false")
+os.environ["DEBUG"] = "false"
 
+import importlib
 import sys
 from types import SimpleNamespace
 from uuid import uuid4
@@ -12,10 +13,16 @@ from fastapi import HTTPException
 
 sys.modules.setdefault("recall_lib", SimpleNamespace(SimpleESConnection=MagicMock()))
 
-from modules.knowledge import chunk_controller
-from schemas.chunk_schemas import ChunkEditRequest, ChunkListRequest, ChunkSearchRequest, ChunkBatchEditRequest
-from modules.knowledge.services.chunk_service import ChunkService
-from utils.es_utils import get_user_es_index
+chunk_controller = importlib.import_module("modules.knowledge.chunk_controller")
+chunk_schemas = importlib.import_module("schemas.chunk_schemas")
+ChunkEditRequest = chunk_schemas.ChunkEditRequest
+ChunkListRequest = chunk_schemas.ChunkListRequest
+ChunkSearchRequest = chunk_schemas.ChunkSearchRequest
+ChunkBatchEditRequest = chunk_schemas.ChunkBatchEditRequest
+ChunkService = importlib.import_module(
+    "modules.knowledge.services.chunk_service"
+).ChunkService
+get_user_es_index = importlib.import_module("utils.es_utils").get_user_es_index
 
 
 @pytest.mark.asyncio
@@ -33,6 +40,27 @@ async def test_chunk_controller_preserves_forbidden_errors(monkeypatch):
         await chunk_controller.list_chunks(request=request, current_user=user)
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_chunk_controller_redacts_internal_failures(monkeypatch, caplog):
+    marker = "private-elasticsearch-provider-detail"
+    user = SimpleNamespace(id=uuid4())
+    request = ChunkListRequest(index_name=get_user_es_index(str(user.id)))
+    monkeypatch.setattr(
+        chunk_controller,
+        "ChunkService",
+        MagicMock(list_chunks=AsyncMock(side_effect=RuntimeError(marker))),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chunk_controller.list_chunks(request=request, current_user=user)
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Chunk operation failed"
+    assert marker not in str(exc_info.value.detail)
+    assert marker not in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 def test_chunk_service_rejects_foreign_index_access():

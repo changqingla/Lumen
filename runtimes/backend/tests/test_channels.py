@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -400,6 +401,71 @@ def _make_mock_langgraph_client(thread_id="test-thread-123", run_result=None):
 
 
 class TestChannelManager:
+    def test_stop_cancels_and_waits_for_owned_message_tasks(self):
+        from src.channels.manager import ChannelManager
+
+        async def go():
+            bus = MessageBus()
+            store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
+            manager = ChannelManager(bus=bus, store=store)
+            started = asyncio.Event()
+            cancelled = asyncio.Event()
+
+            async def handle_message(_msg):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            manager._handle_message = handle_message
+            await manager.start()
+            await bus.publish_inbound(
+                InboundMessage(
+                    channel_name="test",
+                    chat_id="chat-1",
+                    user_id="user-1",
+                    text="hello",
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1)
+            assert len(manager._message_tasks) == 1
+
+            await asyncio.wait_for(manager.stop(), timeout=1)
+
+            assert cancelled.is_set()
+            assert manager._message_tasks == set()
+
+        _run(go())
+
+    def test_info_logs_record_message_length_without_message_content(self, caplog):
+        from src.channels.manager import ChannelManager
+
+        async def go():
+            bus = MessageBus()
+            store = ChannelStore(path=Path(tempfile.mkdtemp()) / "store.json")
+            manager = ChannelManager(bus=bus, store=store)
+            manager._client = _make_mock_langgraph_client()
+            secret_message = "private-channel-message-do-not-log"
+
+            caplog.set_level(logging.INFO, logger="src.channels.manager")
+            await manager.start()
+            await bus.publish_inbound(
+                InboundMessage(
+                    channel_name="test",
+                    chat_id="chat-private",
+                    user_id="user-private",
+                    text=secret_message,
+                )
+            )
+            await _wait_for(lambda: manager._client.runs.wait.call_count == 1)
+            await manager.stop()
+
+            assert secret_message not in caplog.text
+            assert f"text_len={len(secret_message)}" in caplog.text
+
+        _run(go())
+
     def test_handle_chat_creates_thread(self):
         from src.channels.manager import ChannelManager
 

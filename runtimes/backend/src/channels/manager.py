@@ -6,16 +6,25 @@ import asyncio
 import logging
 import mimetypes
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+from src.agents.memory.scope import normalize_agent_name, normalize_memory_scope
 from src.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 from src.channels.store import ChannelStore
+from src.gateway.internal_auth import build_gateway_internal_auth_headers
+from src.utils.thread_files import (
+    ThreadFileError,
+    resolve_thread_file,
+    snapshot_thread_file,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LANGGRAPH_URL = "http://localhost:2024"
 DEFAULT_GATEWAY_URL = "http://localhost:8001"
 DEFAULT_ASSISTANT_ID = "lead_agent"
+MAX_CHANNEL_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
 DEFAULT_RUN_CONFIG: dict[str, Any] = {"recursion_limit": 100}
 DEFAULT_RUN_CONTEXT: dict[str, Any] = {
@@ -147,37 +156,78 @@ def _resolve_attachments(thread_id: str, artifacts: list[str]) -> list[ResolvedA
 
     attachments: list[ResolvedAttachment] = []
     paths = get_paths()
-    outputs_dir = paths.sandbox_outputs_dir(thread_id).resolve()
     for virtual_path in artifacts:
         # 安全限制：只允许 Agent outputs 目录下的文件
         if not virtual_path.startswith(_OUTPUTS_VIRTUAL_PREFIX):
-            logger.warning("[Manager] rejected non-outputs artifact path: %s", virtual_path)
+            logger.warning("[Manager] rejected non-outputs artifact path")
             continue
         try:
-            actual = paths.resolve_virtual_path(thread_id, virtual_path)
-            # 校验解析后的路径确实在 outputs 目录内
-            # （防止即使通过前缀检查仍发生路径穿越）
-            try:
-                actual.resolve().relative_to(outputs_dir)
-            except ValueError:
-                logger.warning("[Manager] artifact path escapes outputs dir: %s -> %s", virtual_path, actual)
-                continue
-            if not actual.is_file():
-                logger.warning("[Manager] artifact not found on disk: %s -> %s", virtual_path, actual)
-                continue
-            mime, _ = mimetypes.guess_type(str(actual))
+            resolved = resolve_thread_file(
+                paths,
+                thread_id,
+                virtual_path,
+                allowed_subdirs=frozenset({"outputs"}),
+            )
+            filename = resolved.parts[-1]
+            suffix = Path(filename).suffix
+            if len(suffix) > 16:
+                suffix = ""
+            snapshot = snapshot_thread_file(
+                resolved,
+                max_bytes=MAX_CHANNEL_ATTACHMENT_BYTES,
+                suffix=suffix,
+            )
+            mime, _ = mimetypes.guess_type(filename)
             mime = mime or "application/octet-stream"
-            attachments.append(ResolvedAttachment(
-                virtual_path=virtual_path,
-                actual_path=actual,
-                filename=actual.name,
-                mime_type=mime,
-                size=actual.stat().st_size,
-                is_image=mime.startswith("image/"),
-            ))
-        except (ValueError, OSError) as exc:
-            logger.warning("[Manager] failed to resolve artifact %s: %s", virtual_path, exc)
+            attachments.append(
+                ResolvedAttachment(
+                    virtual_path=virtual_path,
+                    actual_path=snapshot.path,
+                    filename=filename,
+                    mime_type=mime,
+                    size=snapshot.size,
+                    is_image=mime.startswith("image/"),
+                    temporary=True,
+                )
+            )
+        except (OSError, ThreadFileError) as exc:
+            logger.warning(
+                "[Manager] failed to snapshot artifact (%s)",
+                type(exc).__name__,
+            )
     return attachments
+
+
+def _cleanup_attachments(attachments: list[ResolvedAttachment]) -> None:
+    for attachment in attachments:
+        try:
+            attachment.cleanup()
+        except OSError as exc:
+            logger.warning(
+                "[Manager] failed to clean up attachment snapshot (%s)",
+                type(exc).__name__,
+            )
+
+
+async def _resolve_attachments_async(
+    thread_id: str,
+    artifacts: list[str],
+) -> list[ResolvedAttachment]:
+    """Resolve snapshots off-loop and reclaim them when the handler is cancelled."""
+
+    task = asyncio.create_task(
+        asyncio.to_thread(_resolve_attachments, thread_id, artifacts)
+    )
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            attachments = await task
+        except Exception:
+            pass
+        else:
+            _cleanup_attachments(attachments)
+        raise
 
 
 class ChannelManager:
@@ -195,6 +245,7 @@ class ChannelManager:
         max_concurrency: int = 5,
         langgraph_url: str = DEFAULT_LANGGRAPH_URL,
         gateway_url: str = DEFAULT_GATEWAY_URL,
+        gateway_internal_api_token: str | None = None,
         assistant_id: str = DEFAULT_ASSISTANT_ID,
         default_session: dict[str, Any] | None = None,
         channel_sessions: dict[str, Any] | None = None,
@@ -204,6 +255,7 @@ class ChannelManager:
         self._max_concurrency = max_concurrency
         self._langgraph_url = langgraph_url
         self._gateway_url = gateway_url
+        self._gateway_internal_api_token = gateway_internal_api_token
         self._assistant_id = assistant_id
         self._default_session = _as_dict(default_session)
         self._channel_sessions = dict(channel_sessions or {})
@@ -211,6 +263,7 @@ class ChannelManager:
         self._semaphore: asyncio.Semaphore | None = None
         self._running = False
         self._task: asyncio.Task | None = None
+        self._message_tasks: set[asyncio.Task[None]] = set()
 
     def _resolve_session_layer(self, msg: InboundMessage) -> tuple[dict[str, Any], dict[str, Any]]:
         channel_layer = _as_dict(self._channel_sessions.get(msg.channel_name))
@@ -221,12 +274,7 @@ class ChannelManager:
     def _resolve_run_params(self, msg: InboundMessage, thread_id: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
         channel_layer, user_layer = self._resolve_session_layer(msg)
 
-        assistant_id = (
-            user_layer.get("assistant_id")
-            or channel_layer.get("assistant_id")
-            or self._default_session.get("assistant_id")
-            or self._assistant_id
-        )
+        assistant_id = user_layer.get("assistant_id") or channel_layer.get("assistant_id") or self._default_session.get("assistant_id") or self._assistant_id
         if not isinstance(assistant_id, str) or not assistant_id.strip():
             assistant_id = self._assistant_id
 
@@ -269,7 +317,7 @@ class ChannelManager:
         logger.info("ChannelManager started (max_concurrency=%d)", self._max_concurrency)
 
     async def stop(self) -> None:
-        """停止分发循环。"""
+        """Stop dispatching and cancel every owned in-flight message task."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -278,6 +326,18 @@ class ChannelManager:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+        current_task = asyncio.current_task()
+        message_tasks = [
+            task
+            for task in self._message_tasks
+            if task is not current_task and not task.done()
+        ]
+        for task in message_tasks:
+            task.cancel()
+        if message_tasks:
+            await asyncio.gather(*message_tasks, return_exceptions=True)
+        self._message_tasks.difference_update(message_tasks)
         logger.info("ChannelManager stopped")
 
     # -- 分发循环 ------------------------------------------------------------
@@ -293,14 +353,19 @@ class ChannelManager:
                 break
 
             logger.info(
-                "[Manager] received inbound: channel=%s, chat_id=%s, type=%s, text=%r",
+                "[Manager] received inbound: channel=%s, type=%s, text_len=%d",
                 msg.channel_name,
-                msg.chat_id,
                 msg.msg_type.value,
-                msg.text[:100] if msg.text else "",
+                len(msg.text or ""),
             )
             task = asyncio.create_task(self._handle_message(msg))
-            task.add_done_callback(self._log_task_error)
+            self._message_tasks.add(task)
+            task.add_done_callback(self._message_task_done)
+
+    def _message_task_done(self, task: asyncio.Task[None]) -> None:
+        """Release ownership and surface unexpected background failures."""
+        self._message_tasks.discard(task)
+        self._log_task_error(task)
 
     @staticmethod
     def _log_task_error(task: asyncio.Task) -> None:
@@ -309,7 +374,10 @@ class ChannelManager:
             return
         exc = task.exception()
         if exc:
-            logger.error("[Manager] unhandled error in message task: %s", exc, exc_info=exc)
+            logger.error(
+                "[Manager] unhandled error in message task (%s)",
+                type(exc).__name__,
+            )
 
     async def _handle_message(self, msg: InboundMessage) -> None:
         async with self._semaphore:
@@ -318,11 +386,11 @@ class ChannelManager:
                     await self._handle_command(msg)
                 else:
                     await self._handle_chat(msg)
-            except Exception:
-                logger.exception(
-                    "Error handling message from %s (chat=%s)",
+            except Exception as exc:
+                logger.error(
+                    "Error handling message from %s (%s)",
                     msg.channel_name,
-                    msg.chat_id,
+                    type(exc).__name__,
                 )
                 await self._send_error(msg, "An internal error occurred. Please try again.")
 
@@ -339,7 +407,7 @@ class ChannelManager:
             topic_id=msg.topic_id,
             user_id=msg.user_id,
         )
-        logger.info("[Manager] new thread created on LangGraph Server: thread_id=%s for chat_id=%s topic_id=%s", thread_id, msg.chat_id, msg.topic_id)
+        logger.info("[Manager] new thread created on LangGraph Server")
         return thread_id
 
     async def _handle_chat(self, msg: InboundMessage) -> None:
@@ -350,14 +418,17 @@ class ChannelManager:
         if msg.topic_id:
             thread_id = self.store.get_thread_id(msg.channel_name, msg.chat_id, topic_id=msg.topic_id)
             if thread_id:
-                logger.info("[Manager] reusing thread: thread_id=%s for topic_id=%s", thread_id, msg.topic_id)
+                logger.info("[Manager] reusing mapped thread")
 
         # 未找到已有线程时创建新线程
         if thread_id is None:
             thread_id = await self._create_thread(client, msg)
 
         assistant_id, run_config, run_context = self._resolve_run_params(msg, thread_id)
-        logger.info("[Manager] invoking runs.wait(thread_id=%s, text=%r)", thread_id, msg.text[:100])
+        logger.info(
+            "[Manager] invoking runs.wait(text_len=%d)",
+            len(msg.text or ""),
+        )
         result = await client.runs.wait(
             thread_id,
             assistant_id,
@@ -370,8 +441,7 @@ class ChannelManager:
         artifacts = _extract_artifacts(result)
 
         logger.info(
-            "[Manager] agent response received: thread_id=%s, response_len=%d, artifacts=%d",
-            thread_id,
+            "[Manager] agent response received: response_len=%d, artifacts=%d",
             len(response_text) if response_text else 0,
             len(artifacts),
         )
@@ -379,7 +449,7 @@ class ChannelManager:
         # 将产物虚拟路径解析为实际文件，供通道上传
         attachments: list[ResolvedAttachment] = []
         if artifacts:
-            attachments = _resolve_attachments(thread_id, artifacts)
+            attachments = await _resolve_attachments_async(thread_id, artifacts)
             resolved_virtuals = {a.virtual_path for a in attachments}
             unresolved = [p for p in artifacts if p not in resolved_virtuals]
             if unresolved:
@@ -406,8 +476,14 @@ class ChannelManager:
             attachments=attachments,
             thread_ts=msg.thread_ts,
         )
-        logger.info("[Manager] publishing outbound message to bus: channel=%s, chat_id=%s", msg.channel_name, msg.chat_id)
-        await self.bus.publish_outbound(outbound)
+        logger.info(
+            "[Manager] publishing outbound message to bus: channel=%s",
+            msg.channel_name,
+        )
+        try:
+            await self.bus.publish_outbound(outbound)
+        finally:
+            _cleanup_attachments(attachments)
 
     # -- 命令处理 ------------------------------------------------------------
 
@@ -435,7 +511,39 @@ class ChannelManager:
         elif command == "models":
             reply = await self._fetch_gateway("/api/models", "models")
         elif command == "memory":
-            reply = await self._fetch_gateway("/api/memory", "memory")
+            thread_id = (
+                self.store.get_thread_id(
+                    msg.channel_name,
+                    msg.chat_id,
+                    topic_id=msg.topic_id,
+                )
+                or ""
+            )
+            _assistant_id, _run_config, run_context = self._resolve_run_params(
+                msg,
+                thread_id,
+            )
+            try:
+                memory_scope = normalize_memory_scope(
+                    run_context.get("memory_scope"),
+                    allow_none=True,
+                )
+                agent_name = normalize_agent_name(run_context.get("agent_name"))
+            except ValueError:
+                logger.error("Invalid scoped memory channel configuration")
+                reply = "Memory is unavailable because its scope is invalid."
+            else:
+                if memory_scope is None:
+                    reply = "Persistent memory is disabled for this channel."
+                else:
+                    params = {"memory_scope": memory_scope}
+                    if agent_name is not None:
+                        params["agent_name"] = agent_name
+                    reply = await self._fetch_gateway(
+                        "/api/memory",
+                        "memory",
+                        params=params,
+                    )
         elif command == "help":
             reply = "Available commands:\n/new — Start a new conversation\n/status — Show current thread info\n/models — List available models\n/memory — Show memory status\n/help — Show this help"
         else:
@@ -450,17 +558,40 @@ class ChannelManager:
         )
         await self.bus.publish_outbound(outbound)
 
-    async def _fetch_gateway(self, path: str, kind: str) -> str:
+    async def _fetch_gateway(
+        self,
+        path: str,
+        kind: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> str:
         """从 Gateway API 拉取命令回复所需数据。"""
         import httpx
 
         try:
-            async with httpx.AsyncClient() as http:
-                resp = await http.get(f"{self._gateway_url}{path}", timeout=10)
+            headers = build_gateway_internal_auth_headers(self._gateway_internal_api_token)
+            async with httpx.AsyncClient(
+                follow_redirects=False,
+                trust_env=False,
+            ) as http:
+                request_kwargs: dict[str, Any] = {
+                    "headers": headers,
+                    "timeout": 10,
+                }
+                if params is not None:
+                    request_kwargs["params"] = params
+                resp = await http.get(
+                    f"{self._gateway_url}{path}",
+                    **request_kwargs,
+                )
                 resp.raise_for_status()
                 data = resp.json()
-        except Exception:
-            logger.exception("Failed to fetch %s from gateway", kind)
+        except Exception as exc:
+            logger.error(
+                "Failed to fetch %s from gateway (%s)",
+                kind,
+                type(exc).__name__,
+            )
             return f"Failed to fetch {kind} information."
 
         if kind == "models":

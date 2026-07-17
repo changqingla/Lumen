@@ -1,196 +1,12 @@
-// API 客户端工具
 import type { ChatUIMode } from '@/shared/contracts/chat-ui-mode';
-import { dispatchAuthSessionReset } from '@/shared/lib/auth-runtime';
-import { getGuestModeGuestId, isGuestModeEnabled } from '@/shared/lib/guest-mode';
-import { safeLocalStorageRemove } from '@/shared/utils/localStorage';
+import { getGuestModeGuestToken } from '@/shared/lib/guest-mode';
+import {
+  request,
+  requestBlob,
+  requestText,
+} from '@/shared/api/transport';
 
-// API 基础配置
-// 开发环境使用相对路径，通过 Vite 代理
-// 生产环境使用环境变量配置的完整 URL
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
-
-const attachGuestHeaders = (headers: Headers, token: string | null) => {
-  if (token || !isGuestModeEnabled() || headers.has('X-Guest-Id')) {
-    return;
-  }
-
-  const guestId = getGuestModeGuestId();
-  if (guestId) {
-    headers.set('X-Guest-Id', guestId);
-  }
-};
-
-// 通用请求函数
-async function request<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const token = localStorage.getItem('auth_token');
-
-  const headers = new Headers(options.headers || undefined);
-  if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  // 添加 Authorization header（如果有 token）
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-  attachGuestHeaders(headers, token);
-
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
-
-  const responseText = await response.text();
-  const contentType = response.headers.get('content-type') || '';
-  const looksLikeJson = (
-    contentType.toLowerCase().includes('application/json')
-    || /^[[{]/u.test(responseText.trim())
-  );
-  const data = (() => {
-    if (!responseText.trim()) {
-      return {};
-    }
-    if (looksLikeJson) {
-      try {
-        return JSON.parse(responseText);
-      } catch {
-        return responseText;
-      }
-    }
-    return responseText;
-  })();
-  
-  if (!response.ok) {
-    // 处理错误响应
-    // 1. 处理 FastAPI Pydantic 验证错误 (422)
-    if (response.status === 422 && typeof data === 'object' && data !== null && Array.isArray((data as { detail?: unknown }).detail)) {
-      const detail = (data as { detail: Array<{ loc: Array<string | number>; msg: string }> }).detail;
-      const firstError = detail[0];
-      const field = firstError.loc[firstError.loc.length - 1];
-      const msg = firstError.msg;
-      throw new Error(`参数错误 (${field}): ${msg}`);
-    }
-
-    if (typeof data === 'string') {
-      throw new Error(data || `请求失败 (${response.status})`);
-    }
-
-    // 2. 处理标准 API 错误格式 { detail: { error: { code, message } } }
-    const error = data.detail?.error || data.error || data;
-    const errorMessage = error.message || (typeof error === 'string' ? error : '请求失败');
-    
-    // 根据错误码提供更友好的提示
-    if (error.code === 'UNAUTHORIZED') {
-      // 检查是否是token过期（已登录状态下的401错误）
-      const isTokenExpired = token && errorMessage.toLowerCase().includes('token');
-      
-      if (isTokenExpired) {
-        // ✅ Token过期，安全地清除本地存储并跳转登录页
-        safeLocalStorageRemove('auth_token');
-        safeLocalStorageRemove('auth_user');
-        safeLocalStorageRemove('userProfile');
-        dispatchAuthSessionReset();
-        
-        // 延迟跳转，先让错误提示显示
-        setTimeout(() => {
-          window.location.href = '/auth';
-        }, 1500);
-        
-        throw new Error('当前登录已过期，请重新登录');
-      } else {
-        // 登录时的认证错误
-        throw new Error(errorMessage || '账号或密码不正确');
-      }
-    } else if (error.code === 'NOT_FOUND') {
-      throw new Error(errorMessage || '账号未注册');
-    } else if (error.code === 'CONFLICT') {
-      throw new Error(errorMessage || '该邮箱已被注册');
-    } else if (error.code === 'VALIDATION_ERROR') {
-      throw new Error(errorMessage);
-    } else {
-      throw new Error(errorMessage);
-    }
-  }
-  
-  return data as T;
-}
-
-async function requestText(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<string> {
-  const token = localStorage.getItem('auth_token');
-  const headers = new Headers(options.headers || undefined);
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-  attachGuestHeaders(headers, token);
-
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
-  const responseText = await response.text();
-
-  if (!response.ok) {
-    let errorMessage = responseText || `请求失败 (${response.status})`;
-    try {
-      const parsed = JSON.parse(responseText);
-      const error = parsed?.detail?.error || parsed?.error || parsed;
-      errorMessage = error?.message || parsed?.detail || errorMessage;
-    } catch {
-      // Keep plain text error.
-    }
-    throw new Error(errorMessage);
-  }
-
-  return responseText;
-}
-
-async function requestBlob(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<{ blob: Blob; fileName?: string | null }> {
-  const token = localStorage.getItem('auth_token');
-  const headers = new Headers(options.headers || undefined);
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-  attachGuestHeaders(headers, token);
-
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
-
-  if (!response.ok) {
-    const responseText = await response.text();
-    let errorMessage = responseText || `请求失败 (${response.status})`;
-    try {
-      const parsed = JSON.parse(responseText);
-      const error = parsed?.detail?.error || parsed?.error || parsed;
-      errorMessage = error?.message || parsed?.detail || errorMessage;
-    } catch {
-      // Ignore JSON parse failure and keep plain text error.
-    }
-    throw new Error(errorMessage);
-  }
-
-  const contentDisposition = response.headers.get('content-disposition') || '';
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-  const plainMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
-  const fileName = utf8Match?.[1]
-    ? decodeURIComponent(utf8Match[1])
-    : (plainMatch?.[1] || null);
-
-  return {
-    blob: await response.blob(),
-    fileName,
-  };
-}
+export { fetchApi } from '@/shared/api/transport';
 
 export interface ChatArtifact {
   object_path: string;
@@ -410,45 +226,19 @@ export interface ChatRuntimePrepareResponse {
   session_id: string;
   thread_id: string;
   runtime: typeof CHAT_RUNTIME_NAME;
-  assistant_id: string;
-  gateway_base_url: string;
-  langgraph_base_url: string;
+  runs_path: string;
   run_stream_path: string;
-  uploads_path: string;
-  uploads_list_path: string;
-  artifacts_base_path: string;
-  suggestions_path: string;
   run_request_template: Record<string, unknown>;
-  session_config: Record<string, unknown>;
-  workspace_summary: string;
-  workspace_assets: Record<string, unknown>[];
-  materialized_files: Record<string, unknown>[];
-  kb_materialized_files: Record<string, unknown>[];
 }
 
 export interface ChatRuntimeThreadUploadFile {
   filename: string;
   size: number;
-  path: string;
   virtual_path: string;
-  artifact_url: string;
   extension?: string | null;
   modified?: number | null;
   markdown_file?: string | null;
-  markdown_path?: string | null;
   markdown_virtual_path?: string | null;
-  markdown_artifact_url?: string | null;
-}
-
-interface ChatRuntimeThreadUploadsResponse {
-  session_id: string;
-  thread_id: string;
-  runtime: typeof CHAT_RUNTIME_NAME;
-  uploads: ChatRuntimeThreadUploadFile[];
-  count: number;
-  workspace_assets: ChatAttachment[];
-  materialized_files: Record<string, unknown>[];
-  kb_materialized_files: Record<string, unknown>[];
 }
 
 interface ChatRuntimeThreadUploadMutationResponse {
@@ -567,7 +357,6 @@ export interface AuthenticatedUser {
   avatar: string | null;
   user_level?: string;
   is_admin?: boolean;
-  membership_expires_at?: string | null;
   is_member?: boolean;
   is_advanced_member?: boolean;
   member_expires_at?: string | null;
@@ -607,7 +396,7 @@ export interface NoteListItem {
   id: string;
   title: string;
   content: string;
-  folderId?: string;
+  folderId: string | null;
   tags: string[];
   updatedAt: string;
   createdAt: string;
@@ -632,7 +421,9 @@ export interface AdminUserSummary {
   is_admin: boolean;
   created_at: string;
   last_active_at: string | null;
-  weekly_token_total: number;
+  billing_cycle_token_total: number;
+  model_quota_limit: number;
+  quota_reset_date: string;
 }
 
 export type CreativeImageSize =
@@ -678,6 +469,16 @@ export interface PaperTranslationTaskResponse {
 
 // 认证相关 API
 export const authAPI = {
+  /** Obtain a server-signed identity for the anonymous chat trial. */
+  async createGuestSession(options?: { signal?: AbortSignal }) {
+    const existingToken = getGuestModeGuestToken();
+    return request<{ guest_token: string; expires_in: number }>('/auth/guest-session', {
+      method: 'POST',
+      headers: existingToken ? { 'X-Guest-Token': existingToken } : undefined,
+      signal: options?.signal,
+    });
+  },
+
   /**
    * 用户登录
    */
@@ -729,7 +530,7 @@ export const authAPI = {
       avatar: string | null;
       user_level: string;
       is_admin: boolean;
-      membership_expires_at: string | null;
+      member_expires_at: string | null;
     }>('/auth/me', {
       method: 'GET',
     });
@@ -746,7 +547,7 @@ export const authAPI = {
       avatar: string | null;
       user_level: string;
       is_admin: boolean;
-      membership_expires_at: string | null;
+      member_expires_at: string | null;
     }>('/auth/profile', {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -760,20 +561,10 @@ export const authAPI = {
     const formData = new FormData();
     formData.append('file', file);
 
-    const token = localStorage.getItem('auth_token');
-    const response = await fetch(`${API_BASE_URL}/auth/upload-avatar`, {
+    const data = await request<{ avatar_url: string }>('/auth/upload-avatar', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
       body: formData,
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const error = data.detail?.error || data.error || data;
-      throw new Error(error.message || '上传失败');
-    }
 
     // 后端返回 avatar_url，转换为前端期望的 url
     return { url: data.avatar_url } as { url: string };
@@ -891,7 +682,7 @@ export const organizationAPI = {
    * 获取组织成员
    */
   async getMembers(id: string) {
-    return request<{ members: OrganizationMember[] }>(`/organizations/${id}/members`, {
+    return request<OrganizationMember[]>(`/organizations/${id}/members`, {
       method: 'GET',
     });
   },
@@ -989,15 +780,6 @@ export const kbAPI = {
   async deleteKnowledgeBase(kbId: string) {
     return request<{ success: boolean }>(`/kb/${kbId}`, {
       method: 'DELETE',
-    });
-  },
-
-  /**
-   * 获取存储配额
-   */
-  async getQuota() {
-    return request<{ usedBytes: number; limitBytes: number }>('/kb/quota', {
-      method: 'GET',
     });
   },
 
@@ -1146,19 +928,6 @@ export const kbAPI = {
   },
 
   /**
-   * 在知识库中检索
-   */
-  async searchInKB(kbId: string, question: string, topN: number = 10) {
-    return request<{ messageId: string; references: unknown[]; answer: string }>(
-      `/kb/${kbId}/chat/messages`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ question, top_n: topN }),
-      }
-    );
-  },
-
-  /**
    * 获取文档预览 URL
    */
   async getDocumentUrl(kbId: string, docId: string) {
@@ -1183,22 +952,10 @@ export const kbAPI = {
     const formData = new FormData();
     formData.append('file', file);
 
-    const token = localStorage.getItem('auth_token');
-    const response = await fetch(`${API_BASE_URL}/kb/${kbId}/avatar`, {
+    return request<{ avatarUrl: string }>(`/kb/${kbId}/avatar`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
       body: formData,
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const error = data.detail?.error || data.error || data;
-      throw new Error(error.message || '上传失败');
-    }
-
-    return data;
   },
 
   // ============ 公开共享 & 订阅功能 ============
@@ -1246,19 +1003,6 @@ export const kbAPI = {
     const params = new URLSearchParams({ page: page.toString(), pageSize: pageSize.toString() });
     return request<PaginatedResponse<KnowledgeBaseListItem>>(
       `/kb/subscriptions/list?${params}`,
-      { method: 'GET' }
-    );
-  },
-
-  /**
-   * 获取公开知识库列表
-   */
-  async listPublicKBs(category?: string, query?: string, page: number = 1, pageSize: number = 20) {
-    const params = new URLSearchParams({ page: page.toString(), pageSize: pageSize.toString() });
-    if (category) params.append('category', category);
-    if (query) params.append('q', query);
-    return request<PaginatedResponse<KnowledgeBaseListItem>>(
-      `/kb/public/list?${params}`,
       { method: 'GET' }
     );
   },
@@ -1407,7 +1151,7 @@ export const noteAPI = {
    * 获取笔记详情
    */
   async getNote(noteId: string) {
-    return request<{ id: string; title: string; content: string; folderId: string | null; createdAt: string; updatedAt: string }>(
+    return request<NoteListItem>(
       `/notes/${noteId}`,
       { method: 'GET' }
     );
@@ -1417,7 +1161,7 @@ export const noteAPI = {
    * 创建笔记
    */
   async createNote(data: { title: string; content?: string; folder?: string; tags?: string[] }) {
-    return request<NoteListItem>(
+    return request<{ id: string }>(
       '/notes',
       {
         method: 'POST',
@@ -1434,10 +1178,15 @@ export const noteAPI = {
   /**
    * 更新笔记
    */
-  async updateNote(noteId: string, data: { title?: string; content?: string; folderId?: string | null }) {
+  async updateNote(
+    noteId: string,
+    data: { title?: string; content?: string; folderId?: string | null },
+    options: { keepalive?: boolean } = {},
+  ) {
     return request<NoteListItem>(`/notes/${noteId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+      keepalive: options.keepalive,
     });
   },
 
@@ -1739,26 +1488,6 @@ const chatAPI = {
     });
   },
 
-  async getChatRuntimeThreadUploads(
-    sessionId: string,
-    options?: {
-      sync_workspace_assets?: boolean;
-      sync_kb_documents?: boolean;
-    },
-  ) {
-    const params = new URLSearchParams();
-    if (typeof options?.sync_workspace_assets === 'boolean') {
-      params.set('sync_workspace_assets', String(options.sync_workspace_assets));
-    }
-    if (typeof options?.sync_kb_documents === 'boolean') {
-      params.set('sync_kb_documents', String(options.sync_kb_documents));
-    }
-    const suffix = params.toString() ? `?${params.toString()}` : '';
-    return request<ChatRuntimeThreadUploadsResponse>(`/chat-runtime/sessions/${sessionId}/thread/uploads${suffix}`, {
-      method: 'GET',
-    });
-  },
-
   async uploadChatRuntimeThreadFiles(sessionId: string, files: File[]) {
     const body = new FormData();
     files.forEach((file) => {
@@ -1770,9 +1499,18 @@ const chatAPI = {
     });
   },
 
-  async deleteChatRuntimeThreadFile(sessionId: string, filename: string) {
+  async deleteChatRuntimeThreadFile(
+    sessionId: string,
+    filename: string,
+    companionFilename?: string | null,
+  ) {
+    const params = new URLSearchParams();
+    if (companionFilename) {
+      params.set('companion_filename', companionFilename);
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
     return request<ChatRuntimeThreadUploadDeleteResponse>(
-      `/chat-runtime/sessions/${sessionId}/thread/uploads/${encodeURIComponent(filename)}`,
+      `/chat-runtime/sessions/${sessionId}/thread/uploads/${encodeURIComponent(filename)}${query}`,
       {
         method: 'DELETE',
       },
@@ -1869,22 +1607,15 @@ const chatAPI = {
   /**
    * 获取会话产物附件的下载 URL
    */
-  async getSessionArtifactUrl(sessionId: string, objectPath: string) {
-    const encodedPath = encodeURIComponent(objectPath);
-    return request<{
-      objectPath: string;
-      name: string;
-      url: string;
-      expiresIn: number;
-    }>(`/chat/sessions/${sessionId}/artifacts/url?object_path=${encodedPath}`, {
-      method: 'GET',
-    });
-  },
-
-  async downloadSessionArtifact(sessionId: string, objectPath: string) {
+  async downloadSessionArtifact(
+    sessionId: string,
+    objectPath: string,
+    options?: { signal?: AbortSignal },
+  ) {
     const encodedPath = encodeURIComponent(objectPath);
     return requestBlob(`/chat/sessions/${sessionId}/artifacts/download?object_path=${encodedPath}`, {
       method: 'GET',
+      signal: options?.signal,
     });
   },
 
@@ -2093,7 +1824,9 @@ export const adminAPI = {
         is_admin: boolean;
         created_at: string;
         last_active_at: string | null;
-        weekly_token_total: number;
+        billing_cycle_token_total: number;
+        model_quota_limit: number;
+        quota_reset_date: string;
       }>;
       total: number;
       page: number;

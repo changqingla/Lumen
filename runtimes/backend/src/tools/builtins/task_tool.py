@@ -14,6 +14,7 @@ from src.agents.lead_agent.prompt import get_skills_prompt_section
 from src.agents.thread_state import ThreadState
 from src.subagents import SubagentExecutor, get_subagent_config
 from src.subagents.executor import SubagentStatus, cleanup_background_task, get_background_task_result
+from src.usage import retain_run_reservation
 
 logger = logging.getLogger(__name__)
 
@@ -80,19 +81,23 @@ def task_tool(
     thread_id = None
     parent_model = None
     parent_dynamic_model_token = None
-    parent_model_spec = None
+    usage_context = None
     trace_id = None
 
     if runtime is not None:
         sandbox_state = runtime.state.get("sandbox")
         thread_data = runtime.state.get("thread_data")
         thread_id = runtime.context.get("thread_id")
+        candidate_usage_context = runtime.context.get("usage_context")
+        if isinstance(candidate_usage_context, str) and candidate_usage_context.strip():
+            usage_context = candidate_usage_context.strip()
 
-        # 尝试从 configurable 中读取父模型
+        # metadata 只携带无密的追踪字段。动态绑定令牌只从本次运行的
+        # configurable 读取，解析后的含密模型规格不再跨代理传递。
         metadata = runtime.config.get("metadata", {})
-        parent_model = metadata.get("model_name")
-        parent_dynamic_model_token = metadata.get("dynamic_model_token")
-        parent_model_spec = metadata.get("resolved_model_spec")
+        configurable = runtime.config.get("configurable", {})
+        parent_model = metadata.get("model_name") or configurable.get("model_name") or configurable.get("model")
+        parent_dynamic_model_token = configurable.get("dynamic_model_token")
 
         # 获取或生成用于分布式追踪的 trace_id
         trace_id = metadata.get("trace_id") or str(uuid.uuid4())[:8]
@@ -106,7 +111,7 @@ def task_tool(
         model_name=parent_model,
         dynamic_model_token=parent_dynamic_model_token,
         thread_id=thread_id,
-        supports_vision_override=bool(parent_model_spec.get("supports_vision", False)) if isinstance(parent_model_spec, dict) else None,
+        supports_vision_override=None,
         subagent_enabled=False,
     )
 
@@ -116,11 +121,11 @@ def task_tool(
         tools=tools,
         parent_model=parent_model,
         parent_dynamic_model_token=parent_dynamic_model_token,
-        parent_model_spec=parent_model_spec,
         sandbox_state=sandbox_state,
         thread_data=thread_data,
         thread_id=thread_id,
         trace_id=trace_id,
+        usage_context=usage_context,
     )
 
     # 启动后台执行（始终异步，避免阻塞）
@@ -200,6 +205,7 @@ def task_tool(
         # 真正清理会在执行器结束并写入终态后完成。
         if poll_count > max_poll_count:
             timeout_minutes = config.timeout_seconds // 60
+            retain_run_reservation(getattr(runtime, "context", None))
             logger.error(f"[trace={trace_id}] Task {task_id} polling timed out after {poll_count} polls (should have been caught by thread pool timeout)")
             writer({"type": "task_timed_out", "task_id": task_id})
             return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"

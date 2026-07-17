@@ -203,7 +203,20 @@
   font-size: 14px;
   font-weight: 700;
   color: var(--admin-text-strong, #0f172a);
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.tokenCell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tokenMeta {
+  color: var(--admin-text-muted, #64748b);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .setAdminBtn,

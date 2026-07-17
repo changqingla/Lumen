@@ -16,20 +16,19 @@ import {
   QuotaExceededModal,
 } from '@/features/chat/components';
 import { initializeEmptySessionRuntime, useRAGChat } from '@/features/chat/hooks/useRAGChat';
+import { useArtifactPreview } from '@/features/chat/hooks/useArtifactPreview';
 import { useChatImageUpload } from '@/features/chat/hooks/useChatImageUpload';
 import { resolvePreferredModelName, useChatModels } from '@/features/chat/hooks/useChatModels';
 import { useGuestMode } from '@/shared/hooks/useGuestMode';
 import { useToast } from '@/shared/hooks/useToast';
 import { useUserProfile } from '@/shared/hooks/useUserProfile';
 import { api, type ChatAttachment, type ChatRuntimeThreadUploadFile } from '@/shared/api/client';
-import type { ChatArtifact } from '@/shared/api/client';
 import { getAssistantRenderableText, hasAssistantActionBar, hasAssistantVisiblePayload } from '@/features/chat/lib/assistant-message';
-import { assertChatUIMode, type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 import {
-  getArtifactPreviewType,
-  resolveArtifactName,
-  type ChatArtifactPreviewTarget,
-} from '@/features/chat/lib/artifact-preview';
+  normalizeChatRouteId,
+  resolveChatSessionForRoute,
+} from '@/features/chat/lib/chat-route';
+import { assertChatUIMode, type ChatUIMode } from '@/shared/contracts/chat-ui-mode';
 import { copyTextToClipboard } from '@/shared/utils/clipboard';
 import { saveConversationToNoteById } from '@/shared/utils/noteUtils';
 import { getFileIcon } from '@/shared/utils/fileIcons';
@@ -78,18 +77,17 @@ const buildRuntimeUploadAttachment = (
       filename: upload.filename,
       original_name: file.name,
       size: upload.size,
-      path: upload.path,
       virtual_path: upload.virtual_path,
-      artifact_url: upload.artifact_url,
       markdown_file: upload.markdown_file,
-      markdown_path: upload.markdown_path,
       markdown_virtual_path: upload.markdown_virtual_path,
-      markdown_artifact_url: upload.markdown_artifact_url,
     },
   },
 });
 
-const getRuntimeUploadFilename = (attachment?: ChatAttachment): string | null => {
+const getRuntimeUploadIdentity = (attachment?: ChatAttachment): {
+  filename: string;
+  markdownFile: string | null;
+} | null => {
   const metadata = attachment?.metadata;
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
     return null;
@@ -99,7 +97,13 @@ const getRuntimeUploadFilename = (attachment?: ChatAttachment): string | null =>
     return null;
   }
   const filename = String((runtimeUpload as Record<string, unknown>).filename || '').trim();
-  return filename || null;
+  if (!filename) {
+    return null;
+  }
+  const markdownFile = String(
+    (runtimeUpload as Record<string, unknown>).markdown_file || '',
+  ).trim();
+  return { filename, markdownFile: markdownFile || null };
 };
 
 interface RestorableSessionDocument {
@@ -346,6 +350,9 @@ export default function Home() {
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [hasRestoredSession, setHasRestoredSession] = useState(false);
   const sessionRestoreSequenceRef = useRef(0);
+  const deepLinkTargetRef = useRef('');
+  const deepLinkRequestRef = useRef('');
+  const handledDeepLinkRef = useRef('');
   
   // 配额超限弹窗状态
   const [quotaExceededModal, setQuotaExceededModal] = useState<{
@@ -361,7 +368,14 @@ export default function Home() {
     quotaLimit: 0,
     resetDate: '',
   });
-  const [activeArtifactPreview, setActiveArtifactPreview] = useState<ChatArtifactPreviewTarget | null>(null);
+  const {
+    preview: activeArtifactPreview,
+    openPreview: handlePreviewArtifact,
+    closePreview: closeArtifactPreview,
+  } = useArtifactPreview({
+    sessionId: currentSessionId,
+    onError: toast.error,
+  });
   
   // 处理文件上传点击
   const handleUploadClick = () => {
@@ -387,13 +401,17 @@ export default function Home() {
       fileInputRef.current.value = '';
     }
 
-    const runtimeFilename = getRuntimeUploadFilename(targetFile.attachment);
-    if (!runtimeFilename || !currentSessionId) {
+    const runtimeUpload = getRuntimeUploadIdentity(targetFile.attachment);
+    if (!runtimeUpload || !currentSessionId) {
       return;
     }
 
     try {
-      await api.deleteChatRuntimeThreadFile(currentSessionId, runtimeFilename);
+      await api.deleteChatRuntimeThreadFile(
+        currentSessionId,
+        runtimeUpload.filename,
+        runtimeUpload.markdownFile,
+      );
       removedAttachedFileIdsRef.current.delete(targetFile.localId);
     } catch (error) {
       removedAttachedFileIdsRef.current.delete(targetFile.localId);
@@ -661,7 +679,11 @@ export default function Home() {
         const wasRemovedDuringUpload = removedAttachedFileIdsRef.current.has(localId);
         if (wasRemovedDuringUpload) {
           try {
-            await api.deleteChatRuntimeThreadFile(sessionId, uploaded.filename);
+            await api.deleteChatRuntimeThreadFile(
+              sessionId,
+              uploaded.filename,
+              uploaded.markdown_file,
+            );
           } catch (cleanupError) {
             console.error('Failed to delete removed in-flight upload:', cleanupError);
             setAttachedFiles((prev) => [
@@ -1070,31 +1092,69 @@ export default function Home() {
     setDocToKbMap(selection.docToKbMap);
   }, []);
 
-  // ✅ 统一的会话恢复逻辑：优先处理 URL 参数，然后处理 localStorage
+  const routeChatId = normalizeChatRouteId(searchParams.get('chatId'));
+  deepLinkTargetRef.current = routeChatId;
+
+  // URL 会话优先于本地最近会话。列表未命中时按 ID 获取，支持首屏之外的深链。
   useEffect(() => {
-    if (chatSessions.length === 0) return;
+    if (routeChatId) {
+      if (routeChatId === currentSessionId) {
+        handledDeepLinkRef.current = routeChatId;
+        setHasRestoredSession(true);
+        return;
+      }
 
-    const chatIdFromUrl = searchParams.get('chatId');
+      if (
+        handledDeepLinkRef.current === routeChatId
+        || deepLinkRequestRef.current === routeChatId
+      ) {
+        return;
+      }
 
-    // ✅ 优先级1：处理 URL 参数中的 chatId（总是处理，不受 hasRestoredSession 限制）
-    if (chatIdFromUrl) {
-      if (chatIdFromUrl !== currentSessionId) {
-        const session = chatSessions.find(s => s.id === chatIdFromUrl);
-
-        if (session) {
-          // 处理会话恢复逻辑（包括智能跳转）
-          handleSessionRestore(session, chatIdFromUrl);
-        } else {
-          console.warn(`URL 参数中的会话 ${chatIdFromUrl} 不存在`);
+      deepLinkRequestRef.current = routeChatId;
+      void resolveChatSessionForRoute(
+        routeChatId,
+        chatSessions,
+        (sessionId) => api.getChatSession(sessionId),
+      ).then((session) => {
+        if (!session || deepLinkTargetRef.current !== routeChatId) {
+          return;
         }
 
-        // ✅ 清除 URL 参数，保持 URL 干净（统一在这里处理）
-        setSearchParams({});
-      }
-      return; // URL 参数处理完毕，不再处理 localStorage
+        handledDeepLinkRef.current = routeChatId;
+        setHasRestoredSession(true);
+        setChatSessions((previousSessions) => (
+          previousSessions.some((item) => item.id === session.id)
+            ? previousSessions
+            : [session, ...previousSessions]
+        ));
+        try {
+          localStorage.setItem('home_last_session_id', routeChatId);
+        } catch (error) {
+          console.error('Failed to save deep-linked session ID:', error);
+        }
+        void handleSessionRestore(session, routeChatId);
+      }).catch((error) => {
+        if (deepLinkTargetRef.current !== routeChatId) {
+          return;
+        }
+        handledDeepLinkRef.current = routeChatId;
+        console.warn('Failed to restore the requested chat session:', error);
+        toast.error('无法打开该对话，请确认链接有效后重试');
+      }).finally(() => {
+        if (deepLinkRequestRef.current === routeChatId) {
+          deepLinkRequestRef.current = '';
+        }
+      });
+      return;
     }
 
-    // ✅ 优先级2：从 localStorage 恢复最后活跃的会话（只在首次加载时执行）
+    handledDeepLinkRef.current = '';
+    if (chatSessions.length === 0) {
+      return;
+    }
+
+    // 没有 URL 会话时，仅在首次加载恢复本地最近会话。
     if (!hasRestoredSession) {
       try {
         const savedSessionId = localStorage.getItem('home_last_session_id');
@@ -1127,11 +1187,14 @@ export default function Home() {
 
       setHasRestoredSession(true);
     }
-  }, [chatSessions, hasRestoredSession, handleSessionRestore, searchParams, setSearchParams, currentSessionId]);
-  // ✅ 修复：URL 参数总是处理，localStorage 只在首次加载时处理
-  // - searchParams: 响应 URL 参数变化，支持从其他页面跳转回来
-  // - currentSessionId: 避免重复恢复同一个会话
-  // - hasRestoredSession: 保护 localStorage 恢复只执行一次
+  }, [
+    chatSessions,
+    currentSessionId,
+    handleSessionRestore,
+    hasRestoredSession,
+    routeChatId,
+    toast,
+  ]);
 
   // 历史消息加载完成后的处理：滚动到底部
   useEffect(() => {
@@ -1205,7 +1268,7 @@ export default function Home() {
 
     if (isGuestMode && hasReachedGuestMessageLimit) {
       promptLogin({
-        title: '登陆解锁更多功能',
+        title: '登录解锁更多功能',
         message: '游客试用仅支持发送 3 条消息，登录后可继续完整体验。',
         confirmText: '去登录',
       });
@@ -1241,11 +1304,11 @@ export default function Home() {
       setAttachedFiles([]);
     }
 
-    await sendMessage(text, {
+    const didPersistGuestMessage = await sendMessage(text, {
       imageDataUrls,
       attachments: readyAttachments,
     });
-    if (isGuestMode) {
+    if (isGuestMode && didPersistGuestMessage) {
       consumeGuestMessage();
     }
     
@@ -1449,41 +1512,6 @@ export default function Home() {
       toast.error('保存失败，请重试');
     }
   };
-
-  useEffect(() => {
-    setActiveArtifactPreview((current) => (
-      current && current.sessionId === currentSessionId ? current : null
-    ));
-  }, [currentSessionId]);
-
-  const handlePreviewArtifact = useCallback(async (artifact: ChatArtifact) => {
-    const objectPath = (artifact.object_path || '').trim();
-    if (!objectPath) {
-      toast.error('文件路径无效，无法预览');
-      return;
-    }
-
-    const targetSessionId = (artifact.session_id || currentSessionId || '').trim();
-    if (!targetSessionId) {
-      toast.error('当前会话不存在，无法预览文件');
-      return;
-    }
-
-    const fileName = resolveArtifactName(artifact);
-    try {
-      const response = await api.getSessionArtifactUrl(targetSessionId, objectPath);
-      setActiveArtifactPreview({
-        sessionId: targetSessionId,
-        objectPath,
-        fileName,
-        url: response.url,
-        previewType: getArtifactPreviewType(fileName),
-      });
-    } catch (error) {
-      console.error('Failed to preview artifact:', error);
-      toast.error(error instanceof Error ? error.message : '打开预览失败，请稍后重试');
-    }
-  }, [currentSessionId, toast]);
 
   const renderComposer = (
     placeholder: string,
@@ -1750,7 +1778,12 @@ export default function Home() {
       <div className={styles.mainContent}>
         {isMobile && (
           <div className={styles.mobileHeader}>
-            <button onClick={() => setIsSidebarOpen(true)} className={styles.menuButton}>
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen(true)}
+              className={styles.menuButton}
+              aria-label="打开侧边栏"
+            >
               <Menu size={20} />
             </button>
             <h1 className={styles.mobileTitle}>Lumen</h1>
@@ -2004,7 +2037,7 @@ export default function Home() {
                   <div className={styles.previewPane}>
                     <ChatArtifactPreviewPane
                       preview={activeArtifactPreview}
-                      onClose={() => setActiveArtifactPreview(null)}
+                      onClose={closeArtifactPreview}
                     />
                   </div>
                 ) : null}

@@ -177,12 +177,3 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000,
 
     callback(0.9, f"Generated {len(res)} chunks from table data.")
     return res
-
-
-if __name__ == "__main__":
-    import sys
-
-    def dummy(prog=None, msg=""):
-        pass
-
-    chunk(sys.argv[1], callback=dummy)

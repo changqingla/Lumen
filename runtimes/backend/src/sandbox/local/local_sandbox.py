@@ -34,9 +34,12 @@ class LocalSandbox(Sandbox):
 
         # 逐个尝试映射（按最长前缀优先，保证更具体匹配先命中）
         for container_path, local_path in sorted(self.path_mappings.items(), key=lambda x: len(x[0]), reverse=True):
-            if path_str.startswith(container_path):
+            normalized_container = container_path.rstrip("/")
+            if path_str == normalized_container or path_str.startswith(
+                normalized_container + "/"
+            ):
                 # 用本地路径替换容器路径前缀
-                relative = path_str[len(container_path) :].lstrip("/")
+                relative = path_str[len(normalized_container) :].lstrip("/")
                 resolved = str(Path(local_path) / relative) if relative else local_path
                 return resolved
 
@@ -58,7 +61,9 @@ class LocalSandbox(Sandbox):
         # 逐个尝试映射（按本地路径最长前缀优先，保证更具体匹配先命中）
         for container_path, local_path in sorted(self.path_mappings.items(), key=lambda x: len(x[1]), reverse=True):
             local_path_resolved = str(Path(local_path).resolve())
-            if path_str.startswith(local_path_resolved):
+            if path_str == local_path_resolved or path_str.startswith(
+                local_path_resolved + "/"
+            ):
                 # 用容器路径替换本地路径前缀
                 relative = path_str[len(local_path_resolved) :].lstrip("/")
                 resolved = f"{container_path}/{relative}" if relative else container_path
@@ -93,7 +98,11 @@ class LocalSandbox(Sandbox):
             # 将本地路径转义后用于正则
             escaped_local = re.escape(local_path_resolved)
             # 匹配本地路径及其可选的后续子路径
-            pattern = re.compile(escaped_local + r"(?:/[^\s\"';&|<>()]*)?")
+            pattern = re.compile(
+                escaped_local
+                + r"(?=$|[/\s\"';&|<>()])"
+                + r"(?:/[^\s\"';&|<>()]*)?"
+            )
 
             def replace_match(match: re.Match) -> str:
                 matched_path = match.group(0)
@@ -124,7 +133,12 @@ class LocalSandbox(Sandbox):
             return command
 
         # 构造可匹配任一容器路径的模式
-        patterns = [re.escape(container_path) + r"(?:/[^\s\"';&|<>()]*)??" for container_path, _ in sorted_mappings]
+        patterns = [
+            re.escape(container_path.rstrip("/"))
+            + r"(?=$|[/\s\"';&|<>()])"
+            + r"(?:/[^\s\"';&|<>()]*)?"
+            for container_path, _ in sorted_mappings
+        ]
         pattern = re.compile("|".join(f"({p})" for p in patterns))
 
         def replace_match(match: re.Match) -> str:
@@ -153,10 +167,10 @@ class LocalSandbox(Sandbox):
         # 执行前先将命令中的容器路径解析为本地路径
         resolved_command = self._resolve_paths_in_command(command)
 
+        # The command language is intentionally a shell language, but the
+        # executable boundary stays explicit through a fixed argv invocation.
         result = subprocess.run(
-            resolved_command,
-            executable=self._get_shell(),
-            shell=True,
+            [self._get_shell(), "-c", resolved_command],
             capture_output=True,
             text=True,
             timeout=600,

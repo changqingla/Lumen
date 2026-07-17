@@ -86,12 +86,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         返回：
             携带格式化澄清消息、可中断执行的 Command。
         """
-        # 提取澄清参数
         args = request.tool_call.get("args", {})
-        question = args.get("question", "")
-
-        print("[ClarificationMiddleware] Intercepted clarification request")
-        print(f"[ClarificationMiddleware] Question: {question}")
 
         # 生成格式化澄清消息
         formatted_message = self._format_clarification_message(args)

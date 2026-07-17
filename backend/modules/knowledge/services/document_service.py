@@ -1,72 +1,130 @@
 """Document service business logic."""
+
+import hashlib
+import re
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from fastapi import HTTPException, status, UploadFile
+from fastapi import HTTPException, status
 from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
 from modules.knowledge.repositories.document_repository import DocumentRepository
 from repositories.user_repository import UserRepository
-from modules.organization.repositories.organization_member_repository import OrganizationMemberRepository
-from utils.minio_client import upload_file, delete_file, download_file, object_exists, get_upload_url
-from utils.document_process_service import DocumentProcessService
+from modules.organization.repositories.organization_member_repository import (
+    OrganizationMemberRepository,
+)
+from utils.minio_client import (
+    delete_file,
+    get_object_metadata,
+    get_upload_url,
+    temporary_download,
+    upload_file,
+    upload_file_from_path,
+)
+from utils.document_process_service import (
+    DOCUMENT_ERROR_MESSAGES,
+    DocumentProcessService,
+    DocumentProcessingError,
+    public_document_error,
+    sanitize_persisted_document_error,
+)
 from utils.mineru_service import MineruService
 from utils.es_utils import get_user_es_index
 from modules.knowledge.entities.document import Document
 from modules.knowledge.entities.knowledge_base import KnowledgeBase
+from modules.knowledge.document_task_queue import (
+    cancel_document_task,
+    enqueue_document_task,
+)
 from config.settings import settings
-from typing import List, Tuple, Optional
+from typing import Iterator, List, Tuple, Optional
+from contextlib import contextmanager
 import os
 import logging
 import asyncio
+from pathlib import Path
+import tempfile
 import uuid
 
 logger = logging.getLogger(__name__)
+_OPAQUE_LOG_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _opaque_log_id(value: object) -> str:
+    candidate = str(value or "").strip()
+    return candidate if _OPAQUE_LOG_ID_RE.fullmatch(candidate) else "invalid"
+
+
+def _log_document_failure(
+    *,
+    stage: str,
+    exc: BaseException,
+    document_id: object | None = None,
+    task_id: object | None = None,
+    level: int = logging.ERROR,
+) -> None:
+    error_type = (
+        exc.error_type
+        if isinstance(exc, DocumentProcessingError)
+        else type(exc).__name__
+    )
+    logger.log(
+        level,
+        "document_processing stage=%s document_id=%s task_id=%s error_type=%s",
+        stage,
+        _opaque_log_id(document_id),
+        _opaque_log_id(task_id),
+        re.sub(r"[^A-Za-z0-9_.-]+", "_", error_type)[:80] or "Error",
+    )
 
 
 class DocumentService:
     """Service for document operations."""
-    
+
     # Supported file extensions (知识库只支持这5种格式)
-    PDF_EXTENSIONS = {'.pdf'}
-    TEXT_EXTENSIONS = {'.md', '.markdown', '.txt'}
-    WORD_EXTENSIONS = {'.doc', '.docx'}
-    
+    PDF_EXTENSIONS = {".pdf"}
+    TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
+    WORD_EXTENSIONS = {".doc", ".docx"}
+    RAG_TERMINAL_TASK_STATUSES = frozenset({"cancelled", "failed", "completed"})
+    TEXT_READ_CHUNK_SIZE = 64 * 1024
+    MARKDOWN_DOWNLOAD_CONCURRENCY = 4
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.kb_repo = KnowledgeBaseRepository(db)
         self.doc_repo = DocumentRepository(db)
         self.user_repo = UserRepository(db)
         self.org_member_repo = OrganizationMemberRepository(db)
-    
+
     async def _verify_kb_write_access(self, kb_id: str, user_id: str) -> KnowledgeBase:
         """
         Verify user has WRITE access to knowledge base.
         Only owner and admin users have write permissions.
-        
+
         Returns:
             Knowledge base object if user has write access
-        
+
         Raises:
             HTTPException: If knowledge base not found or user has no write permission
         """
-        # Check if user is admin
         user = await self.user_repo.get_by_id(uuid.UUID(user_id))
-        is_admin = user and user.is_admin
-        
-        # Try to get as owner
-        kb = await self.kb_repo.get_by_id(kb_id, user_id)
-        
-        # If not owner but is admin, get the KB
-        if not kb and is_admin:
-            kb = await self.kb_repo.get_by_id_any(kb_id)
-        
+        kb = await self.kb_repo.get_writable_by_id(
+            kb_id,
+            user_id,
+            is_admin=bool(user and user.is_admin),
+        )
+
         if not kb:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": {"code": "FORBIDDEN", "message": "Only the knowledge base owner or admin can perform this action"}}
+                detail={
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "Only the knowledge base owner or admin can perform this action",
+                    }
+                },
             )
-        
+
         return kb
-    
+
     async def _verify_kb_access(self, kb_id: str, user_id: str) -> KnowledgeBase:
         """
         Verify user has access to knowledge base.
@@ -74,59 +132,40 @@ class DocumentService:
         - Owners: can access their own knowledge bases
         - Organization members: can access organization-shared knowledge bases
         - Everyone: can access public knowledge bases
-        
+
         Returns:
             Knowledge base object if accessible
-        
+
         Raises:
             HTTPException: If knowledge base not found or not accessible
         """
-        # Check if user is admin
-        user = await self.user_repo.get_by_id(uuid.UUID(user_id))
-        is_admin = user and user.is_admin
-        
-        # Try to get as owner first
-        kb = await self.kb_repo.get_by_id(kb_id, user_id)
-        
-        # If not owner and admin, get any KB
-        if not kb and is_admin:
-            kb = await self.kb_repo.get_by_id_any(kb_id)
-        
-        # If not owner and not admin, check organization-shared or public KB
+        user_uuid = uuid.UUID(user_id)
+        user = await self.user_repo.get_by_id(user_uuid)
+        is_admin = bool(user and user.is_admin)
+        user_org_ids = (
+            []
+            if is_admin
+            else await self.org_member_repo.get_user_org_ids(user_uuid)
+        )
+        kb = await self.kb_repo.get_accessible_by_id(
+            kb_id,
+            user_uuid,
+            user_org_ids,
+            is_admin=is_admin,
+        )
         if not kb:
-            # Get user's organizations
-            user_org_ids = await self.org_member_repo.get_user_org_ids(uuid.UUID(user_id))
-            
-            # Try to get the KB without access check
-            kb = await self.kb_repo.get_by_id_any(kb_id)
-            
-            if kb:
-                # Check if user has access
-                has_access = False
-                
-                # 1. Public KB - everyone can access
-                if kb.visibility == 'public':
-                    has_access = True
-                
-                # 2. Organization-shared KB - check if user is in any shared organization
-                elif kb.visibility == 'organization' and user_org_ids:
-                    # Check if any of user's org IDs is in the shared_to_orgs
-                    shared_org_ids = set(kb.shared_to_orgs or [])
-                    user_orgs_set = set(user_org_ids)
-                    if shared_org_ids.intersection(user_orgs_set):
-                        has_access = True
-                
-                if not has_access:
-                    kb = None
-            
-            if not kb:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": {"code": "NOT_FOUND", "message": "Knowledge base not found or not accessible"}}
-                )
-        
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Knowledge base not found or not accessible",
+                    }
+                },
+            )
+
         return kb
-    
+
     def _get_file_extension(self, filename: str) -> str:
         """Get file extension in lowercase."""
         return os.path.splitext(filename)[1].lower()
@@ -137,11 +176,18 @@ class DocumentService:
         if not safe_name:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_REQUEST", "message": "filename is required"}},
+                detail={
+                    "error": {
+                        "code": "INVALID_REQUEST",
+                        "message": "filename is required",
+                    }
+                },
             )
         return safe_name
 
-    def _build_object_name(self, storage_owner_id: str, kb_id: str, filename: str) -> str:
+    def _build_object_name(
+        self, storage_owner_id: str, kb_id: str, filename: str
+    ) -> str:
         """Build a unique object name to avoid overwrite on duplicate filenames."""
         return f"kb/{storage_owner_id}/{kb_id}/{uuid.uuid4().hex}_{filename}"
 
@@ -149,36 +195,31 @@ class DocumentService:
     def _get_owner_es_index(kb: KnowledgeBase) -> str:
         """Resolve the ES index from the knowledge base owner, not the acting user."""
         return get_user_es_index(str(kb.owner_id))
-    
+
     def _needs_mineru_conversion(self, filename: str) -> bool:
         """Check if file needs Mineru conversion (PDF only)."""
         ext = self._get_file_extension(filename)
         return ext in self.PDF_EXTENSIONS
-    
-    def _is_word_document(self, filename: str) -> bool:
-        """Check if file is a Word document (.doc or .docx)."""
-        ext = self._get_file_extension(filename)
-        return ext in self.WORD_EXTENSIONS
-    
-    def _is_text_file(self, filename: str) -> bool:
-        """Check if file is a plain text file (.txt, .md, .markdown)."""
-        ext = self._get_file_extension(filename)
-        return ext in self.TEXT_EXTENSIONS
-    
-    def _extract_docx_content(self, file_data: bytes) -> str:
-        """
-        Extract text content from .docx file.
-        
-        Args:
-            file_data: Binary content of the docx file
-            
-        Returns:
-            Extracted text content as string
-        """
-        from io import BytesIO
+
+    async def _enqueue_persisted_document(self, document_id: str) -> None:
+        """Best-effort enqueue; the queue reconciler repairs Redis outages."""
+        try:
+            await enqueue_document_task(document_id)
+        except Exception as exc:
+            _log_document_failure(
+                stage="queue_enqueue",
+                document_id=document_id,
+                exc=exc,
+            )
+
+    def _extract_docx_content_from_path(self, file_path: str | os.PathLike[str]) -> str:
+        """Extract DOCX content using python-docx's file-path API."""
         from docx import Document as DocxDocument
-        
-        doc = DocxDocument(BytesIO(file_data))
+
+        return self._extract_docx_text(DocxDocument(str(file_path)))
+
+    @staticmethod
+    def _extract_docx_text(doc) -> str:
         paragraphs = []
 
         for para in doc.paragraphs:
@@ -188,120 +229,71 @@ class DocumentService:
 
         for table in doc.tables:
             for row in table.rows:
-                row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                row_text = " | ".join(
+                    cell.text.strip() for cell in row.cells if cell.text.strip()
+                )
                 if row_text:
                     paragraphs.append(row_text)
 
-        content = '\n\n'.join(paragraphs)
+        content = "\n\n".join(paragraphs)
         if not content:
             raise ValueError("DOCX file contains no extractable text")
         return content
-    
-    def _extract_doc_content(self, file_data: bytes) -> str:
-        """
-        Extract text content from .doc file using Apache Tika.
-        
-        Args:
-            file_data: Binary content of the doc file
-            
-        Returns:
-            Extracted text content as string
-            
-        Raises:
-            Exception: If Tika fails to extract content
-        """
-        from tika import parser
-        from io import BytesIO
-        
-        result = parser.from_buffer(BytesIO(file_data))
-        content = result.get('content', '')
-        
-        if content:
-            # Clean up the content (remove excessive whitespace)
-            lines = [line.strip() for line in content.split('\n') if line.strip()]
-            return '\n\n'.join(lines)
-        
-        # Return empty string, caller should handle this case
-        return ''
-    
-    async def upload_document(
-        self,
-        kb_id: str,
-        user_id: str,
-        file: UploadFile,
-        background_tasks
-    ) -> dict:
-        """
-        Upload document and trigger processing.
-        Only owner and admin users can upload documents.
-        
-        Supported formats: pdf, txt, md, doc, docx
-        
-        Complete flow:
-        1. Upload to MinIO
-        2. Create document record
-        3. If PDF: convert with Mineru
-        4. Process document (chunk + embed + store to ES)
-        5. Background task to poll status
-        """
-        # Verify KB write access (owner or admin only)
-        kb = await self._verify_kb_write_access(kb_id, user_id)
-        
-        safe_filename = self._normalize_filename(file.filename)
 
-        # Validate file format
-        ext = self._get_file_extension(safe_filename)
-        supported_extensions = self.PDF_EXTENSIONS | self.TEXT_EXTENSIONS | self.WORD_EXTENSIONS
-        if ext not in supported_extensions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "UNSUPPORTED_FORMAT", "message": f"Unsupported file format: {ext}. Supported formats: pdf, txt, md, doc, docx"}}
-            )
-        
-        # Read file
-        file_data = await file.read()
-        file_size = len(file_data)
-        
-        # Upload to MinIO（统一按 KB owner 命名，避免管理员代传导致路径漂移）
-        storage_owner_id = str(kb.owner_id)
-        object_name = self._build_object_name(storage_owner_id, kb_id, safe_filename)
+    def _extract_doc_content_from_path(self, file_path: str | os.PathLike[str]) -> str:
+        """Extract legacy DOC content using Tika's file-path API."""
+        from tika import parser
+
+        result = parser.from_file(str(file_path))
+        content = result.get("content", "")
+        if not content:
+            return ""
+        lines = [line.strip() for line in content.split("\n") if line.strip()]
+        return "\n\n".join(lines)
+
+    @classmethod
+    def _read_text_file(cls, file_path: str | os.PathLike[str]) -> str:
+        """Decode a text document incrementally with the legacy fallbacks."""
+        for encoding in ("utf-8", "gbk", "latin-1"):
+            chunks: list[str] = []
+            try:
+                with Path(file_path).open("r", encoding=encoding) as source:
+                    while True:
+                        chunk = source.read(cls.TEXT_READ_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+            except UnicodeDecodeError:
+                continue
+            return "".join(chunks)
+        raise UnicodeDecodeError("utf-8", b"", 0, 1, "Unable to decode document")
+
+    @classmethod
+    @contextmanager
+    def _temporary_markdown_file(
+        cls,
+        markdown_content: str,
+        doc_id: str,
+    ) -> Iterator[Path]:
+        """Write Markdown in bounded chunks and remove it on every exit path."""
+        temp_path: Path | None = None
         try:
-            file_path = await upload_file(object_name, file_data, file.content_type)
-        except Exception as e:
-            logger.error(f"MinIO upload failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"code": "INTERNAL_ERROR", "message": f"File upload failed: {e}"}}
-            )
-        
-        # Create document record
-        document = await self.doc_repo.create(
-            kb_id=kb_id,
-            name=safe_filename,
-            size=file_size,
-            source="upload",
-            file_path=file_path
-        )
-        
-        # Always index documents under the KB owner's ES namespace.
-        owner_es_index = self._get_owner_es_index(kb)
-        logger.info(f"Using ES index: {owner_es_index} for KB owner {kb.owner_id}")
-        
-        # Start background processing using FastAPI BackgroundTasks
-        logger.info(f"Starting background processing for document {document.id} ({safe_filename})")
-        background_tasks.add_task(
-            self._process_document_pipeline,
-            str(document.id),
-            owner_es_index,
-            file_data,
-            safe_filename
-        )
-        
-        return {
-            "id": str(document.id),
-            "name": document.name,
-            "status": document.status
-        }
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=f"lumen-document-{doc_id}-",
+                suffix=".md",
+                delete=False,
+            ) as output:
+                temp_path = Path(output.name)
+                for offset in range(0, len(markdown_content), cls.TEXT_READ_CHUNK_SIZE):
+                    output.write(
+                        markdown_content[offset : offset + cls.TEXT_READ_CHUNK_SIZE]
+                    )
+            yield temp_path
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     async def init_direct_upload(
         self,
@@ -309,7 +301,7 @@ class DocumentService:
         user_id: str,
         filename: str,
         file_size: int,
-        content_type: Optional[str] = None
+        content_type: Optional[str] = None,
     ) -> dict:
         """
         Initialize direct browser upload to MinIO.
@@ -319,64 +311,9 @@ class DocumentService:
 
         safe_filename = self._normalize_filename(filename)
         ext = self._get_file_extension(safe_filename)
-        supported_extensions = self.PDF_EXTENSIONS | self.TEXT_EXTENSIONS | self.WORD_EXTENSIONS
-        if ext not in supported_extensions:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "UNSUPPORTED_FORMAT", "message": f"Unsupported file format: {ext}. Supported formats: pdf, txt, md, doc, docx"}}
-            )
-
-        if file_size <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_REQUEST", "message": "Invalid file size"}}
-            )
-
-        if file_size > settings.MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "FILE_TOO_LARGE", "message": f"File too large. Max size is {settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB"}}
-            )
-
-        storage_owner_id = str(kb.owner_id)
-        object_name = self._build_object_name(storage_owner_id, kb_id, safe_filename)
-        upload_url = get_upload_url(object_name, expires_seconds=900)
-
-        document = await self.doc_repo.create(
-            kb_id=kb_id,
-            name=safe_filename,
-            size=file_size,
-            source="upload",
-            file_path=f"{settings.MINIO_BUCKET}/{object_name}"
+        supported_extensions = (
+            self.PDF_EXTENSIONS | self.TEXT_EXTENSIONS | self.WORD_EXTENSIONS
         )
-
-        return {
-            "id": str(document.id),
-            "name": document.name,
-            "status": document.status,
-            "uploadUrl": upload_url
-        }
-
-    async def register_existing_object_upload(
-        self,
-        kb_id: str,
-        user_id: str,
-        filename: str,
-        file_size: int,
-        object_path: str,
-        source: str = "chat_upload",
-    ) -> Document:
-        """
-        Register an already uploaded MinIO object as a KB document record.
-
-        This is used by chat/workspace uploads that should also enter the KB
-        processing pipeline without re-uploading the original file.
-        """
-        await self._verify_kb_write_access(kb_id, user_id)
-
-        safe_filename = self._normalize_filename(filename)
-        ext = self._get_file_extension(safe_filename)
-        supported_extensions = self.PDF_EXTENSIONS | self.TEXT_EXTENSIONS | self.WORD_EXTENSIONS
         if ext not in supported_extensions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -388,33 +325,43 @@ class DocumentService:
                 },
             )
 
-        normalized_object_path = object_path.replace(f"{settings.MINIO_BUCKET}/", "", 1).lstrip("/")
-        if not normalized_object_path:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_REQUEST", "message": "object_path is required"}},
-            )
-
-        if not await object_exists(normalized_object_path):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "UPLOAD_NOT_FINISHED", "message": "File not uploaded yet"}},
-            )
-
         if file_size <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_REQUEST", "message": "Invalid file size"}},
+                detail={
+                    "error": {"code": "INVALID_REQUEST", "message": "Invalid file size"}
+                },
             )
+
+        if file_size > settings.MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": {
+                        "code": "FILE_TOO_LARGE",
+                        "message": f"File too large. Max size is {settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB",
+                    }
+                },
+            )
+
+        storage_owner_id = str(kb.owner_id)
+        object_name = self._build_object_name(storage_owner_id, kb_id, safe_filename)
+        upload_url = get_upload_url(object_name, expires_seconds=900)
 
         document = await self.doc_repo.create(
             kb_id=kb_id,
             name=safe_filename,
             size=file_size,
-            source=source,
-            file_path=f"{settings.MINIO_BUCKET}/{normalized_object_path}",
+            source="upload",
+            file_path=f"{settings.MINIO_BUCKET}/{object_name}",
         )
-        return document
+
+        return {
+            "id": str(document.id),
+            "name": document.name,
+            "status": document.status,
+            "uploadUrl": upload_url,
+        }
 
     async def create_markdown_document_from_content(
         self,
@@ -448,15 +395,12 @@ class DocumentService:
             file_path=file_path,
         )
 
-        owner_es_index = self._get_owner_es_index(kb)
-        asyncio.create_task(
-            self._process_document_pipeline(
-                str(document.id),
-                owner_es_index,
-                file_data,
-                safe_filename,
-            )
+        await self.doc_repo.update_status(
+            document,
+            Document.STATUS_QUEUED,
+            error_message=None,
         )
+        await self._enqueue_persisted_document(str(document.id))
         return document
 
     async def complete_direct_upload(
@@ -464,88 +408,319 @@ class DocumentService:
         kb_id: str,
         user_id: str,
         doc_id: str,
-        background_tasks
     ) -> dict:
         """
         Complete direct upload and start background processing.
         """
-        kb = await self._verify_kb_write_access(kb_id, user_id)
+        await self._verify_kb_write_access(kb_id, user_id)
         doc = await self.doc_repo.get_by_id(doc_id, kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
+
+        if doc.status == Document.STATUS_QUEUED:
+            await self._enqueue_persisted_document(str(doc.id))
+            return {
+                "id": str(doc.id),
+                "name": doc.name,
+                "status": Document.STATUS_PROCESSING,
+            }
+
+        if doc.status != Document.STATUS_UPLOADING:
+            return {
+                "id": str(doc.id),
+                "name": doc.name,
+                "status": Document.public_status(doc.status),
+            }
 
         if not doc.file_path:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_STATE", "message": "Document file path is missing"}}
+                detail={
+                    "error": {
+                        "code": "INVALID_STATE",
+                        "message": "Document file path is missing",
+                    }
+                },
             )
 
         object_name = doc.file_path.replace(f"{settings.MINIO_BUCKET}/", "")
-        if not await object_exists(object_name):
+        object_metadata = await get_object_metadata(object_name)
+        if object_metadata is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "UPLOAD_NOT_FINISHED", "message": "File not uploaded yet"}}
+                detail={
+                    "error": {
+                        "code": "UPLOAD_NOT_FINISHED",
+                        "message": "File not uploaded yet",
+                    }
+                },
+            )
+        if object_metadata.size != doc.size:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": {
+                        "code": "UPLOAD_SIZE_MISMATCH",
+                        "message": "Uploaded file size does not match the initialized upload",
+                    }
+                },
+            )
+        if object_metadata.size <= 0 or object_metadata.size > settings.MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": {
+                        "code": "INVALID_UPLOAD_SIZE",
+                        "message": "Uploaded file size is outside the allowed range",
+                    }
+                },
             )
 
-        owner_es_index = self._get_owner_es_index(kb)
-        await self.doc_repo.update_status(doc, Document.STATUS_UPLOADING, error_message=None)
-
-        logger.info(f"Starting background processing for direct-upload document {doc.id} ({doc.name})")
-        background_tasks.add_task(
-            self._process_document_pipeline_from_minio,
-            str(doc.id),
-            owner_es_index,
-            object_name,
-            doc.name
+        await self.doc_repo.update_status(
+            doc,
+            Document.STATUS_QUEUED,
+            error_message=None,
         )
+        await self._enqueue_persisted_document(str(doc.id))
+        logger.info("document_processing stage=queued document_id=%s", doc.id)
 
         return {
             "id": str(doc.id),
             "name": doc.name,
-            "status": doc.status
+            "status": Document.STATUS_PROCESSING,
         }
 
-    async def _process_document_pipeline_from_minio(
-        self,
-        doc_id: str,
-        es_index_name: str,
-        object_name: str,
-        filename: str
-    ):
-        """Background wrapper: download file from MinIO first, then run pipeline."""
-        try:
-            file_data = await download_file(object_name)
-            if not file_data:
-                raise Exception("Uploaded file is empty")
-            await self._process_document_pipeline(doc_id, es_index_name, file_data, filename)
-        except Exception as e:
-            logger.error(f"[Doc {doc_id}] Failed to load uploaded file from MinIO: {e}")
-            from config.database import AsyncSessionLocal
-            from modules.knowledge.repositories.document_repository import DocumentRepository
-            async with AsyncSessionLocal() as db:
-                doc_repo = DocumentRepository(db)
-                result = await db.execute(select(Document).where(Document.id == doc_id))
-                doc = result.scalar_one_or_none()
-                if doc:
-                    await doc_repo.update_status(
-                        doc,
-                        Document.STATUS_FAILED,
-                        error_message=f"Failed to load uploaded file: {e}"
+    async def process_queued_document(self, doc_id: str) -> str:
+        """Resolve and process a durable queue item from authoritative state.
+
+        The method is intentionally resumable at the two externally durable
+        polling stages. Other interrupted stages restart from the persisted
+        Markdown or original object after removing stale search data.
+        """
+        result = await self.db.execute(select(Document).where(Document.id == doc_id))
+        doc = result.scalar_one_or_none()
+        if doc is None:
+            return "missing"
+
+        kb = await self.kb_repo.get_by_id_any(str(doc.kb_id))
+        if kb is None:
+            await self.doc_repo.update_status(
+                doc,
+                Document.STATUS_FAILED,
+                error_message=DOCUMENT_ERROR_MESSAGES["knowledge_base"],
+            )
+            return Document.STATUS_FAILED
+
+        if doc.status == Document.STATUS_READY:
+            await self.kb_repo.sync_contents_count(doc.kb_id)
+            return Document.STATUS_READY
+
+        es_index_name = self._get_owner_es_index(kb)
+
+        # A RAG task already has its own durable queue, so resume polling it
+        # rather than submit a duplicate after this API worker restarts.
+        if doc.status == Document.STATUS_EMBEDDING and doc.parse_task_id:
+            success = await self._poll_parse_task(doc, doc.parse_task_id, self.doc_repo)
+            if success:
+                await self.kb_repo.sync_contents_count(doc.kb_id)
+            return await self._reload_document_status(doc_id)
+
+        # MinerU task identifiers are durable too. Resume conversion polling
+        # and persist the result before entering the chunking stage.
+        if (
+            doc.status == Document.STATUS_PROCESSING
+            and doc.mineru_task_id
+            and self._needs_mineru_conversion(doc.name)
+        ):
+            markdown_content = await self._poll_mineru_task(doc.mineru_task_id, doc_id)
+            md_object_name = f"kb/{kb.owner_id}/{doc.kb_id}/markdown/{doc_id}.md"
+            try:
+                with self._temporary_markdown_file(
+                    markdown_content, doc_id
+                ) as temp_path:
+                    markdown_path = await upload_file_from_path(
+                        md_object_name,
+                        temp_path,
+                        "text/markdown",
                     )
-    
+            except Exception as exc:
+                raise DocumentProcessingError(
+                    "storage",
+                    error_type=type(exc).__name__,
+                ) from None
+            await self.doc_repo.update_markdown_path(
+                doc,
+                markdown_path,
+                hashlib.sha256(markdown_content.encode("utf-8")).hexdigest(),
+            )
+            await self._delete_existing_document_index(doc_id, es_index_name)
+            await self._retry_chunking_only(
+                doc_id,
+                es_index_name,
+                markdown_content,
+                doc.name,
+            )
+            return await self._reload_document_status(doc_id)
+
+        await self.doc_repo.update_status(
+            doc,
+            Document.STATUS_PROCESSING,
+            error_message=None,
+        )
+
+        if doc.markdown_path:
+            try:
+                markdown_object_name = doc.markdown_path.replace(
+                    f"{settings.MINIO_BUCKET}/",
+                    "",
+                )
+                async with temporary_download(
+                    markdown_object_name,
+                    suffix=".md",
+                    max_bytes=settings.MAX_UPLOAD_SIZE,
+                ) as markdown_file_path:
+                    markdown_content = await asyncio.to_thread(
+                        self._read_text_file,
+                        markdown_file_path,
+                    )
+                if markdown_content:
+                    actual_sha256 = hashlib.sha256(
+                        markdown_content.encode("utf-8")
+                    ).hexdigest()
+                    expected_sha256 = (
+                        str(getattr(doc, "markdown_sha256", None) or "").strip().lower()
+                    )
+                    if expected_sha256 and actual_sha256 != expected_sha256:
+                        raise RuntimeError(
+                            "Persisted Markdown failed its SHA-256 integrity check"
+                        )
+                    if not expected_sha256:
+                        await self.doc_repo.update_markdown_path(
+                            doc,
+                            doc.markdown_path,
+                            actual_sha256,
+                        )
+                    await self._delete_existing_document_index(doc_id, es_index_name)
+                    await self._retry_chunking_only(
+                        doc_id,
+                        es_index_name,
+                        markdown_content,
+                        doc.name,
+                    )
+                    return await self._reload_document_status(doc_id)
+            except Exception as exc:
+                _log_document_failure(
+                    stage="persisted_markdown_reuse",
+                    document_id=doc_id,
+                    exc=exc,
+                    level=logging.WARNING,
+                )
+
+        if not doc.file_path:
+            await self.doc_repo.update_status(
+                doc,
+                Document.STATUS_FAILED,
+                error_message=DOCUMENT_ERROR_MESSAGES["source"],
+            )
+            return Document.STATUS_FAILED
+
+        await self._delete_existing_document_index(doc_id, es_index_name)
+        object_name = doc.file_path.replace(f"{settings.MINIO_BUCKET}/", "")
+        try:
+            async with temporary_download(
+                object_name,
+                suffix=self._get_file_extension(doc.name),
+                max_bytes=settings.MAX_UPLOAD_SIZE,
+            ) as file_path:
+                if file_path.stat().st_size == 0:
+                    raise DocumentProcessingError(
+                        "empty",
+                        error_type="EmptyDocument",
+                    )
+                await self._process_document_pipeline(
+                    doc_id,
+                    es_index_name,
+                    file_path,
+                    doc.name,
+                )
+        except DocumentProcessingError:
+            raise
+        except Exception as exc:
+            raise DocumentProcessingError(
+                "source",
+                error_type=type(exc).__name__,
+            ) from None
+        return await self._reload_document_status(doc_id)
+
+    async def _reload_document_status(self, doc_id: str) -> str:
+        result = await self.db.execute(
+            select(Document)
+            .where(Document.id == doc_id)
+            .execution_options(populate_existing=True)
+        )
+        doc = result.scalar_one_or_none()
+        return doc.status if doc is not None else "missing"
+
+    @staticmethod
+    async def _delete_existing_document_index(doc_id: str, es_index_name: str) -> None:
+        try:
+            await DocumentProcessService.delete_document_from_es(doc_id, es_index_name)
+        except Exception as exc:
+            _log_document_failure(
+                stage="search_cleanup",
+                document_id=doc_id,
+                exc=exc,
+                level=logging.WARNING,
+            )
+
+    async def _settle_rag_task_for_deletion(self, task_id: str) -> bool:
+        """Cancel an active RAG task and wait briefly for a write-safe terminal state."""
+        task_status = await DocumentProcessService.get_task_status(task_id)
+        normalized_status = str(task_status.get("status") or "").lower()
+        if normalized_status in self.RAG_TERMINAL_TASK_STATUSES:
+            return True
+
+        cancellation = await DocumentProcessService.cancel_task(task_id)
+        cancellation_state = str(cancellation.get("state") or "").lower()
+        cancelled_task_status = str(
+            (cancellation.get("task") or {}).get("status") or ""
+        ).lower()
+        if (
+            cancellation_state == "cancelled"
+            or cancelled_task_status in self.RAG_TERMINAL_TASK_STATUSES
+        ):
+            return True
+        if cancellation_state != "cancellation_requested":
+            return False
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(
+            float(settings.KNOWLEDGE_DOCUMENT_RAG_CANCEL_WAIT_SECONDS),
+            0.0,
+        )
+        while loop.time() < deadline:
+            await asyncio.sleep(min(0.5, max(deadline - loop.time(), 0.0)))
+            task_status = await DocumentProcessService.get_task_status(task_id)
+            normalized_status = str(task_status.get("status") or "").lower()
+            if normalized_status in self.RAG_TERMINAL_TASK_STATUSES:
+                return True
+        return False
+
     async def _process_document_pipeline(
         self,
         doc_id: str,
         es_index_name: str,
-        file_data: bytes,
-        filename: str
+        file_path: str | os.PathLike[str],
+        filename: str,
     ):
         """
         Background task to process document through complete pipeline.
-        
+
         Pipeline:
         1. Convert with Mineru (if PDF)
         2. Parse document (chunk + embed + store)
@@ -553,178 +728,229 @@ class DocumentService:
         """
         # Import here to avoid circular dependency
         from config.database import AsyncSessionLocal
-        from modules.knowledge.repositories.document_repository import DocumentRepository
+        from modules.knowledge.repositories.document_repository import (
+            DocumentRepository,
+        )
         from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
-        
+
         # Create new DB session for background task
         async with AsyncSessionLocal() as db:
             doc_repo = DocumentRepository(db)
             kb_repo = KnowledgeBaseRepository(db)
-            
+
             # Get document
-            result = await db.execute(
-                select(Document).where(Document.id == doc_id)
-            )
+            result = await db.execute(select(Document).where(Document.id == doc_id))
             doc = result.scalar_one_or_none()
             if not doc:
-                logger.error(f"Document {doc_id} not found in background task")
+                logger.error(
+                    "document_processing stage=load document_id=%s task_id=none error_type=DocumentNotFound",
+                    _opaque_log_id(doc_id),
+                )
                 return
-            
-            logger.info(f"[Doc {doc_id}] Background task started for {filename}")
-        
+
+            logger.info(
+                "document_processing stage=pipeline_start document_id=%s",
+                _opaque_log_id(doc_id),
+            )
+
             try:
                 markdown_content = None
                 ext = self._get_file_extension(filename)
-                
+
                 # Step 1: Extract content based on file type
                 if self._needs_mineru_conversion(filename):
                     # PDF files: use MinerU for conversion
-                    logger.info(f"[Doc {doc_id}] PDF detected, calling Mineru for conversion")
+                    logger.info(
+                        "document_processing stage=conversion_submit document_id=%s",
+                        _opaque_log_id(doc_id),
+                    )
                     await doc_repo.update_status(doc, Document.STATUS_PROCESSING)
-                
+
                     try:
-                        logger.info(f"[Doc {doc_id}] Calling MinerU official API...")
-                        mineru_result = await MineruService.convert_document(file_data, filename)
+                        mineru_result = await MineruService.convert_document_from_path(
+                            file_path,
+                            filename,
+                        )
                         batch_id = mineru_result["batch_id"]
-                        logger.info(f"[Doc {doc_id}] MinerU task created, batch_id: {batch_id}")
-
                         await doc_repo.update_status(
-                            doc,
-                            Document.STATUS_PROCESSING,
-                            mineru_task_id=batch_id
+                            doc, Document.STATUS_PROCESSING, mineru_task_id=batch_id
                         )
 
-                        # Poll MinerU status
-                        logger.info(f"[Doc {doc_id}] Polling MinerU task status...")
-                        markdown_content = await self._poll_mineru_task(batch_id, doc_id)
-                        logger.info(f"[Doc {doc_id}] MinerU conversion completed, got {len(markdown_content)} chars")
-                        
-                    except Exception as e:
-                        logger.error(f"[Doc {doc_id}] Mineru conversion failed: {e}")
+                        markdown_content = await self._poll_mineru_task(
+                            batch_id, doc_id
+                        )
+                        logger.info(
+                            "document_processing stage=conversion_complete document_id=%s task_id=%s",
+                            _opaque_log_id(doc_id),
+                            _opaque_log_id(batch_id),
+                        )
+
+                    except Exception as exc:
+                        _log_document_failure(
+                            stage="conversion",
+                            document_id=doc_id,
+                            task_id=locals().get("batch_id"),
+                            exc=exc,
+                        )
                         await doc_repo.update_status(
                             doc,
                             Document.STATUS_FAILED,
-                            error_message=f"Conversion failed: {e}"
+                            error_message=DOCUMENT_ERROR_MESSAGES["conversion"],
                         )
                         return
-                
-                elif ext == '.docx':
-                    logger.info(f"[Doc {doc_id}] DOCX detected, extracting content with python-docx")
+
+                elif ext == ".docx":
+                    logger.info(
+                        "document_processing stage=extraction document_id=%s",
+                        _opaque_log_id(doc_id),
+                    )
                     await doc_repo.update_status(doc, Document.STATUS_PROCESSING)
                     try:
-                        markdown_content = self._extract_docx_content(file_data)
-                        logger.info(f"[Doc {doc_id}] DOCX content extracted, got {len(markdown_content)} chars")
-                    except Exception as e:
-                        logger.error(f"[Doc {doc_id}] DOCX extraction failed: {e}")
+                        markdown_content = await asyncio.to_thread(
+                            self._extract_docx_content_from_path,
+                            file_path,
+                        )
+                    except Exception as exc:
+                        _log_document_failure(
+                            stage="extraction",
+                            document_id=doc_id,
+                            exc=exc,
+                        )
                         await doc_repo.update_status(
                             doc,
                             Document.STATUS_FAILED,
-                            error_message=f"DOCX extraction failed: {e}"
+                            error_message=DOCUMENT_ERROR_MESSAGES["extraction"],
                         )
                         return
-                
-                elif ext == '.doc':
+
+                elif ext == ".doc":
                     # DOC files: use Apache Tika to extract content
-                    logger.info(f"[Doc {doc_id}] DOC detected, extracting content with Tika")
+                    logger.info(
+                        "document_processing stage=extraction document_id=%s",
+                        _opaque_log_id(doc_id),
+                    )
                     await doc_repo.update_status(doc, Document.STATUS_PROCESSING)
                     try:
-                        markdown_content = self._extract_doc_content(file_data)
+                        markdown_content = await asyncio.to_thread(
+                            self._extract_doc_content_from_path,
+                            file_path,
+                        )
                         if not markdown_content:
                             raise Exception("Tika returned empty content")
-                        logger.info(f"[Doc {doc_id}] DOC content extracted, got {len(markdown_content)} chars")
-                    except Exception as e:
-                        logger.error(f"[Doc {doc_id}] DOC extraction failed: {e}")
+                    except Exception as exc:
+                        _log_document_failure(
+                            stage="extraction",
+                            document_id=doc_id,
+                            exc=exc,
+                        )
                         await doc_repo.update_status(
                             doc,
                             Document.STATUS_FAILED,
-                            error_message=f"DOC extraction failed: {e}"
+                            error_message=DOCUMENT_ERROR_MESSAGES["extraction"],
                         )
                         return
-                
+
                 else:
                     # Text files (.txt, .md, .markdown): read directly
-                    logger.info(f"[Doc {doc_id}] Text file detected, reading directly")
+                    logger.info(
+                        "document_processing stage=extraction document_id=%s",
+                        _opaque_log_id(doc_id),
+                    )
                     try:
-                        markdown_content = file_data.decode('utf-8')
-                    except UnicodeDecodeError:
-                        # Try other encodings
-                        try:
-                            markdown_content = file_data.decode('gbk')
-                        except UnicodeDecodeError:
-                            markdown_content = file_data.decode('latin-1')
-                    logger.info(f"[Doc {doc_id}] Text content read, got {len(markdown_content)} chars")
-                
+                        markdown_content = await asyncio.to_thread(
+                            self._read_text_file,
+                            file_path,
+                        )
+                    except Exception as exc:
+                        raise DocumentProcessingError(
+                            "extraction",
+                            error_type=type(exc).__name__,
+                        ) from None
+
                 # Save markdown content to MinIO (for agent use)
-                logger.info(f"[Doc {doc_id}] Saving content to MinIO...")
                 kb_id = str(doc.kb_id)
                 kb = await kb_repo.get_by_id_any(kb_id)
                 if kb is None:
-                    raise Exception(f"Knowledge base {kb_id} not found for doc {doc_id}")
+                    raise DocumentProcessingError(
+                        "knowledge_base",
+                        error_type="KnowledgeBaseNotFound",
+                    )
                 storage_owner_id = str(kb.owner_id)
                 md_object_name = f"kb/{storage_owner_id}/{kb_id}/markdown/{doc_id}.md"
-                
-                try:
-                    markdown_bytes = markdown_content.encode('utf-8')
-                    markdown_path = await upload_file(md_object_name, markdown_bytes, "text/markdown")
-                    await doc_repo.update_markdown_path(doc, markdown_path)
-                    logger.info(f"[Doc {doc_id}] Content saved to MinIO: {markdown_path}")
-                except Exception as e:
-                    logger.warning(f"[Doc {doc_id}] Failed to save content to MinIO: {e}")
-                    # Continue processing even if MinIO save fails
-                
+
                 # Step 2: Parse document (chunk + embed + store to ES)
                 await doc_repo.update_status(doc, Document.STATUS_CHUNKING)
-                
-                # Always send extracted text content to rag for chunking
-                # This ensures consistent processing and avoids issues with problematic files
-                temp_file_path = f"/tmp/{doc_id}.md"
-                with open(temp_file_path, 'w', encoding='utf-8') as f:
-                    f.write(markdown_content)
-                parse_filename = os.path.splitext(filename)[0] + '.md'
-                logger.info(f"[Doc {doc_id}] Saved content to {temp_file_path}, will use filename: {parse_filename}")
-                
-                try:
-                    logger.info(f"[Doc {doc_id}] Calling document processing service...")
+                parse_filename = os.path.splitext(filename)[0] + ".md"
+                with self._temporary_markdown_file(
+                    markdown_content, doc_id
+                ) as temp_file_path:
+                    try:
+                        markdown_path = await upload_file_from_path(
+                            md_object_name,
+                            temp_file_path,
+                            "text/markdown",
+                        )
+                        await doc_repo.update_markdown_path(
+                            doc,
+                            markdown_path,
+                            hashlib.sha256(
+                                markdown_content.encode("utf-8")
+                            ).hexdigest(),
+                        )
+                    except Exception as exc:
+                        raise DocumentProcessingError(
+                            "storage",
+                            error_type=type(exc).__name__,
+                        ) from None
+                    logger.info(
+                        "document_processing stage=index_submit document_id=%s",
+                        _opaque_log_id(doc_id),
+                    )
                     parse_result = await DocumentProcessService.parse_document(
-                        temp_file_path,
-                        str(doc_id),
-                        es_index_name,
-                        parse_filename
+                        str(temp_file_path), str(doc_id), es_index_name, parse_filename
                     )
-                    task_id = parse_result["task_id"]
-                    logger.info(f"[Doc {doc_id}] Parse task created: {task_id}")
-                    
-                    await doc_repo.update_status(
-                        doc,
-                        Document.STATUS_EMBEDDING,
-                        parse_task_id=task_id
+
+                task_id = parse_result["task_id"]
+                logger.info(
+                    "document_processing stage=index_accepted document_id=%s task_id=%s",
+                    _opaque_log_id(doc_id),
+                    _opaque_log_id(task_id),
+                )
+
+                await doc_repo.update_status(
+                    doc, Document.STATUS_EMBEDDING, parse_task_id=task_id
+                )
+
+                success = await self._poll_parse_task(doc, task_id, doc_repo)
+
+                if success:
+                    logger.info(
+                        "document_processing stage=complete document_id=%s task_id=%s",
+                        _opaque_log_id(doc_id),
+                        _opaque_log_id(task_id),
                     )
-                    
-                    # Poll parsing status
-                    logger.info(f"[Doc {doc_id}] Polling parse task status...")
-                    success = await self._poll_parse_task(doc, task_id, doc_repo)
-                    
-                    if success:
-                        logger.info(f"[Doc {doc_id}] Document processing completed successfully!")
-                        # Increment KB contents count only on success
-                        await kb_repo.increment_contents_count(doc.kb_id)
-                    else:
-                        logger.warning(f"[Doc {doc_id}] Document processing failed, not incrementing count")
-                    
-                finally:
-                    # Clean up temp file
-                    if os.path.exists(temp_file_path):
-                        os.remove(temp_file_path)
-                
-            except Exception as e:
-                logger.error(f"Document processing pipeline failed for {doc_id}: {e}")
+                    # Increment KB contents count only on success
+                    await kb_repo.sync_contents_count(doc.kb_id)
+
+            except Exception as exc:
+                _log_document_failure(
+                    stage=(
+                        exc.stage
+                        if isinstance(exc, DocumentProcessingError)
+                        else "processing"
+                    ),
+                    document_id=doc_id,
+                    exc=exc,
+                )
                 await doc_repo.update_status(
                     doc,
                     Document.STATUS_FAILED,
-                    error_message=str(e)
+                    error_message=public_document_error(exc),
                 )
-    
-    async def _poll_mineru_task(self, batch_id: str, doc_id: str = None, max_attempts: int = 180) -> str:
+
+    async def _poll_mineru_task(
+        self, batch_id: str, doc_id: str = None, max_attempts: int = 180
+    ) -> str:
         """
         Poll MinerU task until completion.
 
@@ -736,495 +962,599 @@ class DocumentService:
         Returns:
             Markdown content string
         """
-        log_prefix = f"[Doc {doc_id}]" if doc_id else "[MinerU]"
-        last_progress = None
-
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             await asyncio.sleep(5)  # Wait 5 seconds
 
             try:
                 task_status = await MineruService.get_task_status(batch_id)
-                status = task_status["status"]
-
-                # 记录进度
-                if status == "running":
-                    progress = task_status.get("progress", {})
-                    extracted = progress.get("extracted_pages", 0)
-                    total = progress.get("total_pages", 0)
-                    if (extracted, total) != last_progress:
-                        logger.info(f"{log_prefix} MinerU processing: {extracted}/{total} pages")
-                        last_progress = (extracted, total)
-                elif status == "pending":
-                    if attempt % 6 == 0:  # 每 30 秒记录一次
-                        logger.info(f"{log_prefix} MinerU task pending, waiting...")
-
+                status_value = task_status.get("status")
+                status = (
+                    status_value.strip().lower()
+                    if isinstance(status_value, str)
+                    else ""
+                )
                 if status == "completed":
-                    logger.info(f"{log_prefix} MinerU task completed, downloading content...")
                     return await MineruService.get_content(batch_id)
-                elif status == "failed":
-                    error_msg = task_status.get('message', 'Unknown error')
-                    raise Exception(f"MinerU task failed: {error_msg}")
+                if status in {"failed", "cancelled"}:
+                    failure = DocumentProcessingError(
+                        "conversion",
+                        error_type="RemoteTaskFailed",
+                    )
+                    _log_document_failure(
+                        stage="conversion",
+                        document_id=doc_id,
+                        task_id=batch_id,
+                        exc=failure,
+                    )
+                    raise failure
+                if status not in {"pending", "running"}:
+                    raise ValueError("invalid conversion task status")
 
-            except Exception as e:
-                if "failed" in str(e).lower():
-                    raise  # 重新抛出失败异常
-                logger.warning(f"{log_prefix} Error polling MinerU task {batch_id}: {e}")
+            except DocumentProcessingError:
+                raise
+            except Exception as exc:
+                _log_document_failure(
+                    stage="conversion_poll",
+                    document_id=doc_id,
+                    task_id=batch_id,
+                    exc=exc,
+                    level=logging.WARNING,
+                )
 
-        raise Exception("MinerU task timeout after 15 minutes")
-    
-    async def _poll_parse_task(self, doc: Document, task_id: str, doc_repo, max_attempts: int = 120) -> bool:
+        raise DocumentProcessingError(
+            "conversion",
+            error_type="TaskTimeout",
+        )
+
+    async def _poll_parse_task(
+        self, doc: Document, task_id: str, doc_repo, max_attempts: int = 120
+    ) -> bool:
         """
         Poll document parsing task until completion (timeout: 10 minutes).
-        
+
         Returns:
             True if processing succeeded, False if failed
         """
         for _ in range(max_attempts):
             await asyncio.sleep(5)  # Wait 5 seconds
-            
+
             try:
                 task_status = await DocumentProcessService.get_task_status(task_id)
-                status = task_status["status"]
-                
+                status_value = task_status.get("status")
+                status = (
+                    status_value.strip().lower()
+                    if isinstance(status_value, str)
+                    else ""
+                )
+
                 if status == "completed":
                     # Get chunk count from task data
                     chunk_count = task_status.get("data", {}).get("total_chunks", 0)
                     await doc_repo.update_status(
-                        doc,
-                        Document.STATUS_READY,
-                        chunk_count=chunk_count
+                        doc, Document.STATUS_READY, chunk_count=chunk_count
                     )
-                    logger.info(f"Document {doc.id} processing completed with {chunk_count} chunks")
+                    logger.info(
+                        "document_processing stage=index_complete document_id=%s task_id=%s",
+                        _opaque_log_id(doc.id),
+                        _opaque_log_id(task_id),
+                    )
                     return True
-                
-                elif status == "failed":
-                    error_msg = task_status.get("message", "Processing failed")
-                    logger.error(f"[Doc {doc.id}] Parse task {task_id} FAILED: {error_msg}")
+
+                if status == "failed":
+                    failure = DocumentProcessingError(
+                        "index_failed",
+                        error_type="RemoteTaskFailed",
+                    )
+                    _log_document_failure(
+                        stage="index_failed",
+                        document_id=doc.id,
+                        task_id=task_id,
+                        exc=failure,
+                    )
                     await doc_repo.update_status(
                         doc,
                         Document.STATUS_FAILED,
-                        error_message=error_msg
+                        error_message=DOCUMENT_ERROR_MESSAGES["index_failed"],
                     )
                     return False
-            
-            except Exception as e:
-                logger.warning(f"Error polling parse task {task_id}: {e}")
-        
-        await doc_repo.update_status(doc, Document.STATUS_FAILED, error_message="Processing timeout")
+                if status not in {
+                    "queued",
+                    "pending",
+                    "processing",
+                    "chunking",
+                    "embedding",
+                    "storing",
+                    "cancelled",
+                }:
+                    raise ValueError("invalid indexing task status")
+
+            except Exception as exc:
+                _log_document_failure(
+                    stage="index_status",
+                    document_id=doc.id,
+                    task_id=task_id,
+                    exc=exc,
+                    level=logging.WARNING,
+                )
+
+        await doc_repo.update_status(
+            doc,
+            Document.STATUS_FAILED,
+            error_message=DOCUMENT_ERROR_MESSAGES["index_timeout"],
+        )
         return False
-    
+
     async def list_documents(
-        self,
-        kb_id: str,
-        user_id: str,
-        page: int = 1,
-        page_size: int = 20
+        self, kb_id: str, user_id: str, page: int = 1, page_size: int = 20
     ) -> Tuple[List[dict], int]:
         """List documents in knowledge base (admin users can access any KB)."""
         # Verify access permission
         await self._verify_kb_access(kb_id, user_id)
-        
+
         documents, total = await self.doc_repo.list_documents(kb_id, page, page_size)
         return [doc.to_dict() for doc in documents], total
-    
+
+    async def list_materialized_document_ids(
+        self,
+        kb_id: str,
+        user_id: str,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> Tuple[List[str], int]:
+        """List accessible documents with a committed Runtime Markdown revision."""
+        await self._verify_kb_access(kb_id, user_id)
+        return await self.doc_repo.list_materialized_document_ids(
+            kb_id,
+            page,
+            page_size,
+        )
+
     async def get_document_status(self, doc_id: str, kb_id: str, user_id: str) -> dict:
         """Get document processing status (admin users can access any KB)."""
         # Verify access permission
         await self._verify_kb_access(kb_id, user_id)
-        
+
         doc = await self.doc_repo.get_by_id(doc_id, kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
-        
+
         return {
-            "status": doc.status,
-            "errorMessage": doc.error_message,
-            "chunkCount": doc.chunk_count
+            "status": Document.public_status(doc.status),
+            "errorMessage": sanitize_persisted_document_error(doc.error_message),
+            "chunkCount": doc.chunk_count,
         }
-    
+
     async def get_document_url(self, doc_id: str, kb_id: str, user_id: str) -> dict:
         """Get presigned URL for document file (admin users can access any KB)."""
         from utils.minio_client import get_file_url
-        
+
         # Verify access permission
         await self._verify_kb_access(kb_id, user_id)
-        
+
         doc = await self.doc_repo.get_by_id(doc_id, kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
-        
+
         if not doc.file_path:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document file not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document file not found"}
+                },
             )
-        
+
         # Extract object name from file_path
         object_name = doc.file_path.replace(f"{settings.MINIO_BUCKET}/", "")
-        
+
         # Generate presigned URL (valid for 1 hour)
         file_url = get_file_url(object_name, expires_seconds=3600)
-        
-        return {
-            "url": file_url,
-            "name": doc.name
-        }
-    
+
+        return {"url": file_url, "name": doc.name}
+
     async def get_document_markdown(self, doc_id: str, kb_id: str, user_id: str) -> str:
         """Get markdown content of a document (admin users can access any KB)."""
         from utils.minio_client import download_file
-        
+
         # Verify access permission
         await self._verify_kb_access(kb_id, user_id)
-        
+
         doc = await self.doc_repo.get_by_id(doc_id, kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
-        
+
         if not doc.markdown_path:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Markdown content not available"}}
+                detail={
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Markdown content not available",
+                    }
+                },
             )
-        
+
         # Extract object name from markdown_path
         object_name = doc.markdown_path.replace(f"{settings.MINIO_BUCKET}/", "")
-        
+
         try:
             # Download markdown from MinIO
             markdown_bytes = await download_file(object_name)
-            markdown_content = markdown_bytes.decode('utf-8')
+            markdown_content = markdown_bytes.decode("utf-8")
             return markdown_content
-        except Exception as e:
-            logger.error(f"Failed to get markdown content: {e}")
+        except Exception as exc:
+            _log_document_failure(
+                stage="markdown_download",
+                document_id=doc_id,
+                exc=exc,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": {"code": "INTERNAL_ERROR", "message": f"Failed to retrieve markdown content: {e}"}}
-            )
-    
+                detail={
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": "Failed to retrieve markdown content",
+                    }
+                },
+            ) from None
+
     async def get_documents_markdown_batch(
-        self,
-        doc_ids: List[str],
-        kb_id: str,
-        user_id: str
+        self, doc_ids: List[str], kb_id: str, user_id: str
     ) -> dict:
         """
         Batch get markdown content of multiple documents (for agent use).
-        
+
         Args:
             doc_ids: List of document IDs
             kb_id: Knowledge base ID
             user_id: User ID
-            
+
         Returns:
             {
                 "documents": {doc_id: markdown_content},
-                "document_names": {doc_id: doc_name},  # 🔑 新增：文档名称映射
-                "failed": [doc_id]  # IDs that failed to load
+                "document_names": {doc_id: doc_name},
+                "document_versions": {doc_id: materialization_revision},
+                "failed": [doc_id],
+                "failure_reasons": {doc_id: reason_code}
             }
         """
-        from utils.minio_client import download_file
-        
         # Verify access permission (admin users can access any KB)
         await self._verify_kb_access(kb_id, user_id)
-        
-        logger.info(f"Batch loading markdown for {len(doc_ids)} documents in KB {kb_id}")
-        
-        documents = {}
-        document_names = {}  # 🔑 新增：文档名称映射
-        failed = []
-        
-        # 并发加载所有文档
-        async def load_single_doc(doc_id: str):
+
+        requested_ids: list[str] = []
+        query_ids: list[uuid.UUID] = []
+        seen_ids: set[str] = set()
+        failure_reasons: dict[str, str] = {}
+        for raw_doc_id in doc_ids:
+            raw_value = str(raw_doc_id).strip()
             try:
-                doc = await self.doc_repo.get_by_id(doc_id, kb_id)
-                if not doc:
-                    logger.warning(f"Document {doc_id} not found")
-                    return doc_id, None, None, "not_found"
-                
-                doc_name = doc.name  # 🔑 获取文档原始名称
-                
-                if not doc.markdown_path:
-                    logger.warning(f"Document {doc_id} has no markdown")
-                    return doc_id, None, doc_name, "no_markdown"
-                
-                # Extract object name from markdown_path
-                object_name = doc.markdown_path.replace(f"{settings.MINIO_BUCKET}/", "")
-                
-                # Download markdown from MinIO
-                markdown_bytes = await download_file(object_name)
-                markdown_content = markdown_bytes.decode('utf-8')
-                
-                logger.info(f"Loaded markdown for doc {doc_id} ({len(markdown_content)} chars)")
-                return doc_id, markdown_content, doc_name, None
-                
-            except Exception as e:
-                logger.error(f"Failed to load markdown for doc {doc_id}: {e}")
-                return doc_id, None, None, str(e)
-        
-        # 并发执行所有加载任务
-        tasks = [load_single_doc(doc_id) for doc_id in doc_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 收集结果
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Task failed with exception: {result}")
+                parsed_id = uuid.UUID(raw_value)
+                normalized_id = str(parsed_id)
+            except (ValueError, AttributeError):
+                normalized_id = raw_value
+                parsed_id = None
+            if normalized_id in seen_ids:
                 continue
-            
-            doc_id, content, doc_name, error = result
-            
-            # 🔑 即使内容加载失败，也保存文档名称（如果有）
-            if doc_name:
-                document_names[doc_id] = doc_name
-            
-            if content:
-                documents[doc_id] = content
+            seen_ids.add(normalized_id)
+            requested_ids.append(normalized_id)
+            if parsed_id is not None:
+                query_ids.append(parsed_id)
             else:
-                failed.append(doc_id)
-        
-        logger.info(f"Batch load complete: {len(documents)} succeeded, {len(failed)} failed, {len(document_names)} names collected")
-        
+                failure_reasons[normalized_id] = "invalid_id"
+
+        if not requested_ids:
+            return {
+                "documents": {},
+                "document_names": {},
+                "document_versions": {},
+                "failed": [],
+                "failure_reasons": {},
+            }
+
+        snapshots: list[tuple[str, str, str, str, str | None]] = []
+        found_ids: set[str] = set()
+        if query_ids:
+            result = await self.db.execute(
+                select(
+                    Document.id,
+                    Document.name,
+                    Document.markdown_path,
+                    Document.materialization_revision,
+                    Document.markdown_sha256,
+                ).where(
+                    Document.kb_id == uuid.UUID(str(kb_id)),
+                    Document.id.in_(query_ids),
+                )
+            )
+            for row in result.all():
+                doc_id = str(row.id)
+                found_ids.add(doc_id)
+                markdown_path = str(row.markdown_path or "").strip()
+                if not markdown_path:
+                    failure_reasons[doc_id] = "missing_markdown"
+                    continue
+                revision = int(row.materialization_revision or 0)
+                if revision < 1:
+                    failure_reasons[doc_id] = "missing_version"
+                    continue
+                expected_sha256 = str(row.markdown_sha256 or "").strip().lower()
+                if (
+                    expected_sha256
+                    and re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+                ):
+                    failure_reasons[doc_id] = "invalid_hash"
+                    continue
+                snapshots.append(
+                    (
+                        doc_id,
+                        str(row.name),
+                        markdown_path,
+                        str(revision),
+                        expected_sha256 or None,
+                    )
+                )
+
+        for requested_id in requested_ids:
+            if requested_id not in failure_reasons and requested_id not in found_ids:
+                failure_reasons[requested_id] = "not_found"
+
+        logger.info(
+            "Batch loading %s materialized Markdown document(s) out of %s requested in KB %s",
+            len(snapshots),
+            len(requested_ids),
+            kb_id,
+        )
+
+        semaphore = asyncio.Semaphore(self.MARKDOWN_DOWNLOAD_CONCURRENCY)
+
+        async def load_single_doc(
+            snapshot: tuple[str, str, str, str, str | None],
+        ) -> tuple[str, str | None, str, str, str | None]:
+            doc_id, doc_name, markdown_path, version, expected_sha256 = snapshot
+            object_name = markdown_path.removeprefix(f"{settings.MINIO_BUCKET}/")
+            try:
+                async with semaphore:
+                    async with temporary_download(
+                        object_name,
+                        suffix=".md",
+                        max_bytes=settings.MAX_UPLOAD_SIZE,
+                    ) as temp_path:
+                        try:
+                            markdown_content = await asyncio.to_thread(
+                                self._read_text_file,
+                                temp_path,
+                            )
+                        except UnicodeError as exc:
+                            _log_document_failure(
+                                stage="markdown_decode",
+                                document_id=doc_id,
+                                exc=exc,
+                            )
+                            return doc_id, None, doc_name, version, "decode_error"
+                if not markdown_content.strip():
+                    return doc_id, None, doc_name, version, "empty_markdown"
+                actual_sha256 = hashlib.sha256(
+                    markdown_content.encode("utf-8")
+                ).hexdigest()
+                if expected_sha256 is not None and actual_sha256 != expected_sha256:
+                    logger.error(
+                        "document_processing stage=markdown_integrity document_id=%s task_id=none error_type=IntegrityMismatch",
+                        _opaque_log_id(doc_id),
+                    )
+                    return doc_id, None, doc_name, version, "integrity_mismatch"
+                logger.info(
+                    "Loaded markdown for doc %s (%s chars)",
+                    doc_id,
+                    len(markdown_content),
+                )
+                return doc_id, markdown_content, doc_name, version, None
+            except Exception as exc:
+                _log_document_failure(
+                    stage="markdown_download",
+                    document_id=doc_id,
+                    exc=exc,
+                )
+                return doc_id, None, doc_name, version, "storage_error"
+
+        results = await asyncio.gather(
+            *(load_single_doc(snapshot) for snapshot in snapshots)
+        )
+
+        documents: dict[str, str] = {}
+        document_names: dict[str, str] = {}
+        document_versions: dict[str, str] = {}
+        for doc_id, content, doc_name, version, failure_reason in results:
+            if content is None:
+                failure_reasons[doc_id] = failure_reason or "storage_error"
+                continue
+            documents[doc_id] = content
+            document_names[doc_id] = doc_name
+            document_versions[doc_id] = version
+            failure_reasons.pop(doc_id, None)
+
+        failed = [doc_id for doc_id in requested_ids if doc_id not in documents]
+        logger.info(
+            "Batch load complete: %s succeeded, %s failed",
+            len(documents),
+            len(failed),
+        )
+
         return {
             "documents": documents,
-            "document_names": document_names,  # 🔑 返回文档名称映射
-            "failed": failed
+            "document_names": document_names,
+            "document_versions": document_versions,
+            "failed": failed,
+            "failure_reasons": {doc_id: failure_reasons[doc_id] for doc_id in failed},
         }
-    
+
     async def retry_document(
         self,
         doc_id: str,
         kb_id: str,
         user_id: str,
-        background_tasks
     ) -> dict:
         """
         Retry processing a failed document.
         Only owner and admin users can retry documents.
-        
+
         Smart retry logic:
         - If markdown already exists (e.g., MinerU conversion succeeded but chunking failed),
           skip the conversion step and only retry chunking/embedding
         - Otherwise, re-run the full pipeline
-        
+
         Note: Before retry, we clean up any existing ES data to avoid duplicates.
         """
         # Verify KB write access (owner or admin only)
-        kb = await self._verify_kb_write_access(kb_id, user_id)
-        
+        await self._verify_kb_write_access(kb_id, user_id)
+
         doc = await self.doc_repo.get_by_id(doc_id, kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
-        
+
         # Only allow retry for failed documents
         if doc.status != Document.STATUS_FAILED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_STATUS", "message": f"Can only retry failed documents. Current status: {doc.status}"}}
+                detail={
+                    "error": {
+                        "code": "INVALID_STATUS",
+                        "message": f"Can only retry failed documents. Current status: {doc.status}",
+                    }
+                },
             )
-        
+
         # Check if original file exists
         if not doc.file_path:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "FILE_NOT_FOUND", "message": "Original file not found, please re-upload"}}
+                detail={
+                    "error": {
+                        "code": "FILE_NOT_FOUND",
+                        "message": "Original file not found, please re-upload",
+                    }
+                },
             )
-        
-        # Retry against the KB owner's ES index to avoid cross-tenant writes.
-        owner_es_index = self._get_owner_es_index(kb)
-        
-        # Reset document status immediately so UI updates
-        await self.doc_repo.update_status(doc, Document.STATUS_PROCESSING, error_message=None)
-        
-        logger.info(f"Retrying document {doc_id} ({doc.name}) with ES index: {owner_es_index}")
-        
-        # Start background task - all heavy I/O operations happen there
-        background_tasks.add_task(
-            self._retry_document_background,
-            str(doc.id),
-            str(doc.kb_id),
-            owner_es_index,
-            doc.file_path,
-            doc.markdown_path,
-            doc.name
+
+        # Persist the recoverable state before attempting the Redis write. A
+        # periodic reconciler will enqueue this record if Redis is unavailable.
+        await self.doc_repo.update_status(
+            doc,
+            Document.STATUS_QUEUED,
+            error_message=None,
         )
-        
+        await self._enqueue_persisted_document(str(doc.id))
+        logger.info("document_processing stage=retry_queued document_id=%s", doc_id)
+
         return {
             "id": str(doc.id),
             "name": doc.name,
-            "status": Document.STATUS_PROCESSING
+            "status": Document.STATUS_PROCESSING,
         }
-    
-    async def _retry_document_background(
-        self,
-        doc_id: str,
-        kb_id: str,
-        es_index_name: str,
-        file_path: str,
-        markdown_path: Optional[str],
-        filename: str
-    ):
-        """
-        Background task for retry - handles all heavy I/O operations.
-        
-        This method:
-        1. Cleans up existing ES data
-        2. Checks if markdown exists (skip conversion if yes)
-        3. Downloads necessary files
-        4. Calls appropriate processing pipeline
-        """
-        from config.database import AsyncSessionLocal
-        from modules.knowledge.repositories.document_repository import DocumentRepository
-        from utils.minio_client import download_file
-        
-        async with AsyncSessionLocal() as db:
-            doc_repo = DocumentRepository(db)
-            
-            result = await db.execute(
-                select(Document).where(Document.id == doc_id)
-            )
-            doc = result.scalar_one_or_none()
-            if not doc:
-                logger.error(f"[Retry] Document {doc_id} not found in background task")
-                return
-            
-            try:
-                # Step 1: Clean up existing ES data
-                try:
-                    await DocumentProcessService.delete_document_from_es(doc_id, es_index_name)
-                    logger.info(f"[Retry] Cleaned up existing ES data for document {doc_id}")
-                except Exception as e:
-                    logger.warning(f"[Retry] Failed to clean up ES data for {doc_id}: {e}")
-                
-                # Step 2: Check if markdown exists
-                has_markdown = False
-                markdown_content = None
-                if markdown_path:
-                    try:
-                        md_object_name = markdown_path.replace(f"{settings.MINIO_BUCKET}/", "")
-                        markdown_bytes = await download_file(md_object_name)
-                        markdown_content = markdown_bytes.decode('utf-8')
-                        has_markdown = bool(markdown_content)
-                        logger.info(f"[Retry] Document {doc_id} has existing markdown ({len(markdown_content)} chars)")
-                    except Exception as e:
-                        logger.warning(f"[Retry] Failed to load markdown for {doc_id}: {e}, will re-convert")
-                
-                # Step 3: Process based on what we have
-                if has_markdown:
-                    # Skip conversion, only retry chunking
-                    await self._retry_chunking_only(doc_id, es_index_name, markdown_content, filename)
-                else:
-                    # Download original file and run full pipeline
-                    try:
-                        object_name = file_path.replace(f"{settings.MINIO_BUCKET}/", "")
-                        file_data = await download_file(object_name)
-                        logger.info(f"[Retry] Downloaded original file for {doc_id}")
-                        await self._process_document_pipeline(doc_id, es_index_name, file_data, filename)
-                    except Exception as e:
-                        logger.error(f"[Retry] Failed to download original file for {doc_id}: {e}")
-                        await doc_repo.update_status(
-                            doc,
-                            Document.STATUS_FAILED,
-                            error_message=f"Failed to download original file: {e}"
-                        )
-                        
-            except Exception as e:
-                logger.error(f"[Retry] Background task failed for {doc_id}: {e}")
-                await doc_repo.update_status(
-                    doc,
-                    Document.STATUS_FAILED,
-                    error_message=str(e)
-                )
-    
+
     async def _retry_chunking_only(
-        self,
-        doc_id: str,
-        es_index_name: str,
-        markdown_content: str,
-        filename: str
+        self, doc_id: str, es_index_name: str, markdown_content: str, filename: str
     ):
         """
         Retry only the chunking/embedding step when markdown already exists.
         This is much faster than re-running MinerU conversion.
         """
         from config.database import AsyncSessionLocal
-        from modules.knowledge.repositories.document_repository import DocumentRepository
+        from modules.knowledge.repositories.document_repository import (
+            DocumentRepository,
+        )
         from modules.knowledge.repositories.kb_repository import KnowledgeBaseRepository
-        
+
         async with AsyncSessionLocal() as db:
             doc_repo = DocumentRepository(db)
             kb_repo = KnowledgeBaseRepository(db)
-            
-            result = await db.execute(
-                select(Document).where(Document.id == doc_id)
-            )
+
+            result = await db.execute(select(Document).where(Document.id == doc_id))
             doc = result.scalar_one_or_none()
             if not doc:
-                logger.error(f"Document {doc_id} not found in retry task")
+                logger.error(
+                    "document_processing stage=retry_load document_id=%s task_id=none error_type=DocumentNotFound",
+                    _opaque_log_id(doc_id),
+                )
                 return
-            
-            logger.info(f"[Retry] Starting chunking-only retry for {doc_id} ({filename})")
-            
+
+            logger.info(
+                "document_processing stage=index_retry document_id=%s",
+                _opaque_log_id(doc_id),
+            )
+
             try:
                 # Go directly to chunking step
                 await doc_repo.update_status(doc, Document.STATUS_CHUNKING)
-                
-                # Save markdown to temp file for processing
-                temp_file_path = f"/tmp/{doc_id}.md"
-                with open(temp_file_path, 'w', encoding='utf-8') as f:
-                    f.write(markdown_content)
-                parse_filename = os.path.splitext(filename)[0] + '.md'
-                
-                try:
-                    logger.info(f"[Retry] Calling document processing service for {doc_id}...")
+
+                parse_filename = os.path.splitext(filename)[0] + ".md"
+                with self._temporary_markdown_file(
+                    markdown_content, doc_id
+                ) as temp_file_path:
                     parse_result = await DocumentProcessService.parse_document(
-                        temp_file_path,
-                        str(doc_id),
-                        es_index_name,
-                        parse_filename
+                        str(temp_file_path), str(doc_id), es_index_name, parse_filename
                     )
-                    task_id = parse_result["task_id"]
-                    logger.info(f"[Retry] Parse task created: {task_id}")
-                    
-                    await doc_repo.update_status(
-                        doc,
-                        Document.STATUS_EMBEDDING,
-                        parse_task_id=task_id
+
+                task_id = parse_result["task_id"]
+                logger.info(
+                    "document_processing stage=index_accepted document_id=%s task_id=%s",
+                    _opaque_log_id(doc_id),
+                    _opaque_log_id(task_id),
+                )
+
+                await doc_repo.update_status(
+                    doc, Document.STATUS_EMBEDDING, parse_task_id=task_id
+                )
+
+                # Poll parsing status
+                success = await self._poll_parse_task(doc, task_id, doc_repo)
+
+                if success:
+                    logger.info(
+                        "document_processing stage=complete document_id=%s task_id=%s",
+                        _opaque_log_id(doc_id),
+                        _opaque_log_id(task_id),
                     )
-                    
-                    # Poll parsing status
-                    success = await self._poll_parse_task(doc, task_id, doc_repo)
-                    
-                    if success:
-                        logger.info(f"[Retry] Document {doc_id} processing completed successfully!")
-                        await kb_repo.increment_contents_count(doc.kb_id)
-                    else:
-                        logger.warning(f"[Retry] Document {doc_id} processing failed")
-                    
-                finally:
-                    if os.path.exists(temp_file_path):
-                        os.remove(temp_file_path)
-                        
-            except Exception as e:
-                logger.error(f"[Retry] Chunking retry failed for {doc_id}: {e}")
+                    await kb_repo.sync_contents_count(doc.kb_id)
+
+            except Exception as exc:
+                stage = (
+                    exc.stage
+                    if isinstance(exc, DocumentProcessingError)
+                    else "index_submit"
+                )
+                _log_document_failure(
+                    stage=stage,
+                    document_id=doc_id,
+                    exc=exc,
+                )
                 await doc_repo.update_status(
                     doc,
                     Document.STATUS_FAILED,
-                    error_message=str(e)
+                    error_message=public_document_error(
+                        exc,
+                        default_stage="index_submit",
+                    ),
                 )
-    
+
     async def delete_document(self, doc_id: str, kb_id: str, user_id: str):
         """
         Delete document from KB, MinIO, and ES.
@@ -1232,62 +1562,141 @@ class DocumentService:
         """
         # Verify KB write access (owner or admin only)
         kb = await self._verify_kb_write_access(kb_id, user_id)
-        
+
         doc = await self.doc_repo.get_by_id(doc_id, kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
-        
+
+        if doc.status in {
+            Document.STATUS_QUEUED,
+            Document.STATUS_PROCESSING,
+            Document.STATUS_CHUNKING,
+            Document.STATUS_EMBEDDING,
+        }:
+            try:
+                cancellation_settled = await cancel_document_task(str(doc.id))
+            except Exception as exc:
+                _log_document_failure(
+                    stage="queue_cancel",
+                    document_id=doc.id,
+                    exc=exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": {
+                            "code": "QUEUE_UNAVAILABLE",
+                            "message": "Document processing could not be stopped; retry deletion shortly",
+                        }
+                    },
+                ) from None
+            if not cancellation_settled:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": {
+                            "code": "PROCESSING_CANCELLATION_PENDING",
+                            "message": "Document processing is still stopping; retry deletion shortly",
+                        }
+                    },
+                )
+            await self.db.refresh(doc)
+
+        if doc.status == Document.STATUS_EMBEDDING and doc.parse_task_id:
+            try:
+                rag_task_settled = await self._settle_rag_task_for_deletion(
+                    doc.parse_task_id,
+                )
+            except Exception as exc:
+                _log_document_failure(
+                    stage="cancellation",
+                    document_id=doc.id,
+                    task_id=doc.parse_task_id,
+                    exc=exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": {
+                            "code": "RAG_UNAVAILABLE",
+                            "message": "Document processing cancellation could not be confirmed",
+                        }
+                    },
+                ) from None
+            if not rag_task_settled:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": {
+                            "code": "RAG_CANCELLATION_PENDING",
+                            "message": "Document processing is still stopping; retry deletion shortly",
+                        }
+                    },
+                )
+
         # Delete from the KB owner's ES index to match the original write location.
         owner_es_index = self._get_owner_es_index(kb)
-        
-        # Delete from ES (using user-level index)
-        if doc.status == Document.STATUS_READY:
-            try:
-                await DocumentProcessService.delete_document_from_es(str(doc.id), owner_es_index)
-            except Exception as e:
-                logger.warning(f"Failed to delete from ES: {e}")
-        
+
+        # Active jobs may already have written partial chunks, so cleanup is
+        # required regardless of the last database status.
+        try:
+            await DocumentProcessService.delete_document_from_es(
+                str(doc.id), owner_es_index
+            )
+        except Exception as exc:
+            _log_document_failure(
+                stage="search_delete",
+                document_id=doc.id,
+                exc=exc,
+                level=logging.WARNING,
+            )
+
         # Delete from MinIO (original file)
         if doc.file_path:
             try:
                 object_name = doc.file_path.replace(f"{settings.MINIO_BUCKET}/", "")
                 await delete_file(object_name)
-            except Exception as e:
-                logger.warning(f"Failed to delete from MinIO: {e}")
-        
+            except Exception as exc:
+                _log_document_failure(
+                    stage="source_delete",
+                    document_id=doc.id,
+                    exc=exc,
+                    level=logging.WARNING,
+                )
+
         # Delete markdown from MinIO
         if doc.markdown_path:
             try:
-                md_object_name = doc.markdown_path.replace(f"{settings.MINIO_BUCKET}/", "")
+                md_object_name = doc.markdown_path.replace(
+                    f"{settings.MINIO_BUCKET}/", ""
+                )
                 await delete_file(md_object_name)
-            except Exception as e:
-                logger.warning(f"Failed to delete markdown from MinIO: {e}")
-        
+            except Exception as exc:
+                _log_document_failure(
+                    stage="markdown_delete",
+                    document_id=doc.id,
+                    exc=exc,
+                    level=logging.WARNING,
+                )
+
         # Delete from DB
         await self.doc_repo.delete(doc)
-        
-        # Decrement KB contents count (only for successfully processed documents)
-        # 只有成功处理的文档才会在处理完成时增加计数，所以删除时也只减少成功的文档
-        if doc.status == Document.STATUS_READY:
-            await self.kb_repo.increment_contents_count(kb_id, -1)
-            logger.info(f"Deleted document: {doc_id} (decremented contents count)")
-        else:
-            logger.info(f"Deleted document: {doc_id} (status: {doc.status}, no count change)")
-    
+
+        await self.kb_repo.sync_contents_count(kb_id)
+        logger.info("Deleted document %s and synchronized contents count", doc_id)
+
     async def move_document(
-        self,
-        doc_id: str,
-        source_kb_id: str,
-        target_kb_id: str,
-        user_id: str
+        self, doc_id: str, source_kb_id: str, target_kb_id: str, user_id: str
     ) -> dict:
         """
         Move document from one knowledge base to another.
         Only owner can move documents between their own knowledge bases.
-        
+
         Note: Since ES index is user-level (not KB-level), no ES migration needed.
         MinIO file paths also don't need to change as they're stored by user_id.
         """
@@ -1299,44 +1708,65 @@ class DocumentService:
         if str(source_kb.owner_id) != user_id or str(target_kb.owner_id) != user_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": {"code": "FORBIDDEN", "message": "Only the owner can move documents between their own knowledge bases"}},
+                detail={
+                    "error": {
+                        "code": "FORBIDDEN",
+                        "message": "Only the owner can move documents between their own knowledge bases",
+                    }
+                },
             )
         if source_kb.owner_id != target_kb.owner_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_REQUEST", "message": "Documents can only be moved between knowledge bases owned by the same user"}},
+                detail={
+                    "error": {
+                        "code": "INVALID_REQUEST",
+                        "message": "Documents can only be moved between knowledge bases owned by the same user",
+                    }
+                },
             )
-        
+
         # Get document
         doc = await self.doc_repo.get_by_id(doc_id, source_kb_id)
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "NOT_FOUND", "message": "Document not found"}}
+                detail={
+                    "error": {"code": "NOT_FOUND", "message": "Document not found"}
+                },
             )
-        
+
         # Cannot move to the same KB
         if source_kb_id == target_kb_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "INVALID_REQUEST", "message": "Source and target knowledge base are the same"}}
+                detail={
+                    "error": {
+                        "code": "INVALID_REQUEST",
+                        "message": "Source and target knowledge base are the same",
+                    }
+                },
             )
-        
+
         # Move document (update kb_id)
         await self.doc_repo.update_kb_id(doc, target_kb_id)
-        
+
         # Update contents count for both KBs (only for ready documents)
         if doc.status == Document.STATUS_READY:
             await self.kb_repo.increment_contents_count(source_kb_id, -1)
             await self.kb_repo.increment_contents_count(target_kb_id, 1)
-            logger.info(f"Moved document {doc_id} from KB {source_kb_id} to KB {target_kb_id}")
+            logger.info(
+                f"Moved document {doc_id} from KB {source_kb_id} to KB {target_kb_id}"
+            )
         else:
-            logger.info(f"Moved document {doc_id} (status: {doc.status}, no count change)")
-        
+            logger.info(
+                f"Moved document {doc_id} (status: {doc.status}, no count change)"
+            )
+
         return {
             "id": str(doc.id),
             "name": doc.name,
             "sourceKbId": source_kb_id,
             "targetKbId": target_kb_id,
-            "status": doc.status
+            "status": doc.status,
         }

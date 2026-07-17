@@ -69,8 +69,8 @@ def _search_images(
         results = ddgs.images(query, **kwargs)
         return list(results) if results else []
 
-    except Exception as e:
-        logger.error(f"Failed to search images: {e}")
+    except Exception as exc:
+        logger.error("Failed to search images (%s)", type(exc).__name__)
         return []
 
 
